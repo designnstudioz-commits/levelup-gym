@@ -1,0 +1,1280 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Member Registration — Level Up Fitness Club</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;0,700;0,800;1,700&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --orange: #F06418;
+    --orange-dark: #C04E10;
+    --orange-light: #FEF0E8;
+    --orange-mid: #FDDCC8;
+    --dark: #111111;
+    --dark-2: #1E1E1E;
+    --dark-3: #2C2C2C;
+    --gray-1: #F7F7F5;
+    --gray-2: #EFEFEC;
+    --gray-3: #D4D4CC;
+    --gray-4: #9A9A92;
+    --gray-5: #6B6B64;
+    --text: #1A1A16;
+    --text-2: #4A4A44;
+    --text-3: #7A7A72;
+    --white: #FFFFFF;
+    --border: #E4E4DE;
+    --border-focus: #F06418;
+    --radius: 10px;
+    --radius-sm: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.06);
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Barlow', sans-serif;
+    background: var(--gray-1);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: var(--dark);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 60px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .header-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .header-icon {
+    width: 36px;
+    height: 36px;
+    background: var(--orange);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .header-icon svg { width: 20px; height: 20px; fill: white; }
+  .header-name {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 20px;
+    font-weight: 800;
+    color: white;
+    letter-spacing: 0.02em;
+  }
+  .header-name span { color: var(--orange); }
+  .header-badge {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-4);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border: 1px solid var(--dark-3);
+    padding: 4px 10px;
+    border-radius: 20px;
+  }
+
+  /* ── Layout ── */
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 32px 20px 60px;
+  }
+
+  /* ── Progress ── */
+  .progress-wrap {
+    margin-bottom: 28px;
+  }
+  .progress-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-bottom: 16px;
+  }
+  .step-item {
+    display: flex;
+    align-items: center;
+    flex: 1;
+  }
+  .step-circle {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+    transition: all 0.25s;
+    border: 2px solid var(--border);
+    background: white;
+    color: var(--gray-4);
+    position: relative;
+    z-index: 1;
+  }
+  .step-circle.done { background: var(--orange); border-color: var(--orange); color: white; }
+  .step-circle.active { background: var(--dark); border-color: var(--dark); color: white; }
+  .step-line {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    margin: 0 -1px;
+    transition: background 0.25s;
+  }
+  .step-line.done { background: var(--orange); }
+  .step-labels {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 2px;
+  }
+  .step-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--gray-4);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    text-align: center;
+    flex: 1;
+    transition: color 0.25s;
+  }
+  .step-label.active { color: var(--dark); }
+  .step-label.done { color: var(--orange); }
+
+  /* ── Section card ── */
+  .form-card {
+    background: white;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    overflow: hidden;
+    margin-bottom: 16px;
+    animation: fadeUp 0.3s ease both;
+  }
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .card-header {
+    padding: 18px 24px 16px;
+    border-bottom: 1px solid var(--gray-2);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .card-header-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--orange-light);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 17px;
+  }
+  .card-header-text h3 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .card-header-text p {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 1px;
+  }
+  .card-body {
+    padding: 20px 24px;
+  }
+
+  /* ── Form fields ── */
+  .field-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .field-grid.three { grid-template-columns: 1fr 1fr 1fr; }
+  .field-full { grid-column: 1 / -1; }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .field label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-2);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .field label .req {
+    color: var(--orange);
+    margin-left: 2px;
+  }
+  .field input,
+  .field select,
+  .field textarea {
+    height: 42px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    color: var(--text);
+    background: white;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    outline: none;
+    width: 100%;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus {
+    border-color: var(--orange);
+    box-shadow: 0 0 0 3px var(--orange-mid);
+  }
+  .field input::placeholder { color: var(--gray-3); }
+  .field input.error { border-color: #DC2626; }
+  .field textarea {
+    height: auto;
+    padding: 10px 12px;
+    resize: none;
+    line-height: 1.5;
+  }
+  .field .hint {
+    font-size: 11px;
+    color: var(--gray-4);
+    margin-top: 2px;
+  }
+  .field .err-msg {
+    font-size: 11px;
+    color: #DC2626;
+    font-weight: 500;
+    display: none;
+  }
+  .field.has-error .err-msg { display: block; }
+  .field.has-error input,
+  .field.has-error select { border-color: #DC2626; }
+
+  /* Select arrow */
+  .select-wrap { position: relative; }
+  .select-wrap::after {
+    content: '';
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid var(--gray-4);
+    pointer-events: none;
+  }
+  .select-wrap select { padding-right: 28px; }
+
+  /* Radio/checkbox group */
+  .radio-group {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .radio-btn {
+    position: relative;
+  }
+  .radio-btn input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .radio-btn label {
+    display: flex;
+    align-items: center;
+    height: 38px;
+    padding: 0 14px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: nowrap;
+  }
+  .radio-btn input:checked + label {
+    border-color: var(--orange);
+    background: var(--orange-light);
+    color: var(--orange-dark);
+  }
+  .radio-btn label:hover { border-color: var(--orange); }
+
+  /* Checkbox group for services */
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 8px;
+  }
+  .check-item {
+    position: relative;
+  }
+  .check-item input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .check-item label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .check-item input:checked + label {
+    border-color: var(--orange);
+    background: var(--orange-light);
+    color: var(--orange-dark);
+  }
+  .check-item label::before {
+    content: '';
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    border: 1.5px solid var(--gray-3);
+    background: white;
+    flex-shrink: 0;
+    transition: all 0.15s;
+  }
+  .check-item input:checked + label::before {
+    background: var(--orange);
+    border-color: var(--orange);
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 12 12' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M2 6l3 3 5-5' stroke='white' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-size: 12px;
+    background-repeat: no-repeat;
+    background-position: center;
+  }
+
+  /* Official section */
+  .official-card {
+    background: var(--dark);
+    border-radius: 14px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    border: 1px solid var(--dark-3);
+  }
+  .official-header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--dark-3);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .official-header .tag {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    background: var(--orange);
+    color: white;
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+  .official-header h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: white;
+  }
+  .official-header p { font-size: 12px; color: var(--gray-4); margin-top: 1px; }
+  .official-body { padding: 20px 24px; }
+  .official-body .field label { color: var(--gray-4); }
+  .official-body .field input,
+  .official-body .field select {
+    background: var(--dark-2);
+    border-color: var(--dark-3);
+    color: white;
+  }
+  .official-body .field input::placeholder { color: var(--dark-3); }
+  .official-body .field input:focus,
+  .official-body .field select:focus {
+    border-color: var(--orange);
+    box-shadow: 0 0 0 3px rgba(240,100,24,0.2);
+  }
+  .official-body .select-wrap::after { border-top-color: var(--gray-4); }
+  .official-body .radio-btn label {
+    border-color: var(--dark-3);
+    background: var(--dark-2);
+    color: var(--gray-4);
+  }
+  .official-body .radio-btn input:checked + label {
+    border-color: var(--orange);
+    background: rgba(240,100,24,0.15);
+    color: var(--orange);
+  }
+
+  /* Section divider */
+  .section-divider {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 16px;
+  }
+  .section-divider span {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--gray-4);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .section-divider::before,
+  .section-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--gray-2);
+  }
+
+  /* Nav buttons */
+  .form-nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+    padding-top: 16px;
+  }
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 46px;
+    padding: 0 22px;
+    border-radius: var(--radius-sm);
+    font-family: 'Barlow', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .btn-primary {
+    background: var(--orange);
+    color: white;
+  }
+  .btn-primary:hover { background: var(--orange-dark); }
+  .btn-primary:active { transform: scale(0.98); }
+  .btn-secondary {
+    background: var(--gray-2);
+    color: var(--text-2);
+  }
+  .btn-secondary:hover { background: var(--gray-3); }
+  .btn-ghost {
+    background: transparent;
+    color: var(--gray-4);
+    padding: 0 8px;
+  }
+  .btn-ghost:hover { color: var(--text); }
+  .btn svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+  /* Dotted step indicator */
+  .step-dots {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .step-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--gray-3);
+    transition: all 0.2s;
+  }
+  .step-dot.active {
+    background: var(--orange);
+    width: 20px;
+    border-radius: 4px;
+  }
+
+  /* Step panels */
+  .step-panel { display: none; }
+  .step-panel.active { display: block; }
+
+  /* Success screen */
+  .success-screen {
+    text-align: center;
+    padding: 48px 24px;
+    animation: fadeUp 0.4s ease both;
+  }
+  .success-icon {
+    width: 72px;
+    height: 72px;
+    background: var(--orange);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 24px;
+  }
+  .success-icon svg { width: 36px; height: 36px; fill: white; }
+  .success-screen h2 {
+    font-family: 'Barlow Condensed', sans-serif;
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    margin-bottom: 10px;
+  }
+  .success-screen p { font-size: 15px; color: var(--text-3); max-width: 380px; margin: 0 auto 24px; line-height: 1.6; }
+  .success-ref {
+    display: inline-block;
+    background: var(--orange-light);
+    border: 1px solid var(--orange-mid);
+    border-radius: 8px;
+    padding: 14px 24px;
+    font-size: 13px;
+    color: var(--text-2);
+    margin-bottom: 32px;
+  }
+  .success-ref strong { font-size: 20px; font-weight: 800; color: var(--orange); display: block; margin-top: 4px; }
+
+  /* Terms */
+  .terms-box {
+    background: var(--gray-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    font-size: 12px;
+    color: var(--text-3);
+    line-height: 1.6;
+    max-height: 140px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+  }
+  .terms-box ul { padding-left: 16px; }
+  .terms-box li { margin-bottom: 4px; }
+  .terms-agree {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .terms-agree input { margin-top: 2px; accent-color: var(--orange); width: 16px; height: 16px; flex-shrink: 0; cursor: pointer; }
+
+  /* Photo upload */
+  .photo-upload {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .photo-preview {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    background: var(--gray-2);
+    border: 2px dashed var(--gray-3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    position: relative;
+  }
+  .photo-preview:hover { border-color: var(--orange); }
+  .photo-preview svg { width: 24px; height: 24px; color: var(--gray-3); }
+  .photo-preview img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .photo-preview input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .photo-info { font-size: 12px; color: var(--text-3); line-height: 1.6; }
+  .photo-info strong { display: block; font-size: 13px; color: var(--text-2); margin-bottom: 3px; }
+  .photo-btn { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--orange); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+
+  /* Mobile */
+  @media (max-width: 580px) {
+    .field-grid { grid-template-columns: 1fr; }
+    .field-grid.three { grid-template-columns: 1fr 1fr; }
+    .card-body { padding: 16px; }
+    .card-header { padding: 14px 16px; }
+    .official-body { padding: 16px; }
+    .official-header { padding: 14px 16px; }
+    .page { padding: 20px 12px 60px; }
+    .header { padding: 0 16px; }
+    .header-badge { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-brand">
+    <div class="header-icon">
+      <svg viewBox="0 0 24 24"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    </div>
+    <div class="header-name">LEVEL<span>UP</span> FITNESS</div>
+  </div>
+  <div class="header-badge">Member Registration</div>
+</header>
+
+<main class="page">
+
+  <!-- Progress -->
+  <div class="progress-wrap">
+    <div class="progress-steps" id="progress-circles">
+      <div class="step-item">
+        <div class="step-circle active" id="sc1">1</div>
+        <div class="step-line" id="sl1"></div>
+      </div>
+      <div class="step-item">
+        <div class="step-circle" id="sc2">2</div>
+        <div class="step-line" id="sl2"></div>
+      </div>
+      <div class="step-item">
+        <div class="step-circle" id="sc3">3</div>
+        <div class="step-line" id="sl3"></div>
+      </div>
+      <div class="step-item" style="flex:0">
+        <div class="step-circle" id="sc4">4</div>
+      </div>
+    </div>
+    <div class="step-labels">
+      <div class="step-label active" id="sl-1">Personal</div>
+      <div class="step-label" id="sl-2">Health</div>
+      <div class="step-label" id="sl-3">Services</div>
+      <div class="step-label" id="sl-4">Confirm</div>
+    </div>
+  </div>
+
+  <!-- ── STEP 1: Personal Info ── -->
+  <div class="step-panel active" id="step1">
+
+    <div class="form-card">
+      <div class="card-header">
+        <div class="card-header-icon">👤</div>
+        <div class="card-header-text">
+          <h3>Personal information</h3>
+          <p>Basic details about the new member</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <!-- Photo -->
+        <div class="field field-full" style="margin-bottom:18px">
+          <label>Photo</label>
+          <div class="photo-upload">
+            <div class="photo-preview" id="photo-preview" onclick="document.getElementById('photo-input').click()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"/></svg>
+              <img id="photo-img" alt="preview">
+              <input type="file" id="photo-input" accept="image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer">
+            </div>
+            <div class="photo-info">
+              <strong>Member photo</strong>
+              Optional but recommended for membership card.<br>
+              <span class="photo-btn">Upload photo</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label>Full name <span class="req">*</span></label>
+            <input type="text" id="full_name" placeholder="Muhammad Ali" autocomplete="name">
+            <span class="err-msg">Full name is required</span>
+          </div>
+          <div class="field">
+            <label>Father / husband name</label>
+            <input type="text" id="secondary_name" placeholder="Optional">
+          </div>
+          <div class="field">
+            <label>Date of birth <span class="req">*</span></label>
+            <input type="date" id="dob">
+            <span class="err-msg">Date of birth is required</span>
+          </div>
+          <div class="field">
+            <label>Age</label>
+            <input type="number" id="age" placeholder="Auto-calculated" readonly style="background:var(--gray-1);color:var(--gray-4)">
+          </div>
+          <div class="field">
+            <label>Gender <span class="req">*</span></label>
+            <div class="radio-group" style="margin-top:2px">
+              <div class="radio-btn"><input type="radio" name="gender" id="g-male" value="Male"><label for="g-male">Male</label></div>
+              <div class="radio-btn"><input type="radio" name="gender" id="g-female" value="Female"><label for="g-female">Female</label></div>
+            </div>
+            <span class="err-msg">Please select gender</span>
+          </div>
+          <div class="field">
+            <label>Marital status</label>
+            <div class="radio-group" style="margin-top:2px">
+              <div class="radio-btn"><input type="radio" name="marital" id="m-single" value="Single"><label for="m-single">Single</label></div>
+              <div class="radio-btn"><input type="radio" name="marital" id="m-married" value="Married"><label for="m-married">Married</label></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider"><span>Contact</span></div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label>Phone <span class="req">*</span></label>
+            <input type="tel" id="phone" placeholder="0300-1234567">
+            <span class="err-msg">Phone number is required</span>
+          </div>
+          <div class="field">
+            <label>WhatsApp number</label>
+            <input type="tel" id="whatsapp" placeholder="Same as phone?">
+            <div class="hint">Leave blank if same as phone</div>
+          </div>
+          <div class="field">
+            <label>Email</label>
+            <input type="email" id="email" placeholder="optional@email.com">
+          </div>
+          <div class="field">
+            <label>CNIC</label>
+            <input type="text" id="cnic" placeholder="35202-1234567-1" maxlength="15">
+            <div class="hint">Format: XXXXX-XXXXXXX-X</div>
+          </div>
+          <div class="field field-full">
+            <label>Address</label>
+            <input type="text" id="address" placeholder="House No, Street, Area, City">
+          </div>
+        </div>
+
+        <div class="section-divider"><span>Referral</span></div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label>How did you hear about us?</label>
+            <div class="select-wrap">
+              <select id="referral">
+                <option value="">Select source</option>
+                <option>Social media</option>
+                <option>Friend or family referral</option>
+                <option>Walk-in / signboard</option>
+                <option>Google search</option>
+                <option>Other</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Referred by (name)</label>
+            <input type="text" id="referred_by" placeholder="Friend's name if referred">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-nav">
+      <div></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="step-dots">
+          <div class="step-dot active"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+        </div>
+        <button class="btn btn-primary" onclick="goStep(2)">
+          Continue
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 2: Health & Physical ── -->
+  <div class="step-panel" id="step2">
+
+    <div class="form-card">
+      <div class="card-header">
+        <div class="card-header-icon">💪</div>
+        <div class="card-header-text">
+          <h3>Physical & health info</h3>
+          <p>Used for fitness tracking and safety</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="field-grid three">
+          <div class="field">
+            <label>Height</label>
+            <input type="text" id="height" placeholder="5.9 ft">
+          </div>
+          <div class="field">
+            <label>Weight</label>
+            <input type="text" id="weight" placeholder="75 kg">
+          </div>
+          <div class="field">
+            <label>Blood group</label>
+            <div class="select-wrap">
+              <select id="blood_group">
+                <option value="">Select</option>
+                <option>A+</option><option>A-</option>
+                <option>B+</option><option>B-</option>
+                <option>AB+</option><option>AB-</option>
+                <option>O+</option><option>O-</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-divider"><span>Medical information</span></div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label>Vaccination status</label>
+            <div class="radio-group" style="margin-top:2px">
+              <div class="radio-btn"><input type="radio" name="vaccinated" id="v-yes" value="Vaccinated"><label for="v-yes">✓ Vaccinated</label></div>
+              <div class="radio-btn"><input type="radio" name="vaccinated" id="v-no" value="Not vaccinated"><label for="v-no">Not vaccinated</label></div>
+            </div>
+          </div>
+          <div class="field">
+            <label>Any injuries or physical limitations?</label>
+            <div class="radio-group" style="margin-top:2px">
+              <div class="radio-btn"><input type="radio" name="injuries" id="i-no" value="None" checked><label for="i-no">None</label></div>
+              <div class="radio-btn"><input type="radio" name="injuries" id="i-yes" value="Yes" onclick="document.getElementById('injury-field').style.display='block'"><label for="i-yes">Yes</label></div>
+            </div>
+          </div>
+          <div class="field field-full" id="injury-field" style="display:none">
+            <label>Describe injuries / limitations</label>
+            <textarea id="injuries_detail" rows="2" placeholder="e.g. Right knee surgery, back pain..."></textarea>
+          </div>
+          <div class="field field-full">
+            <label>Current medications or medical conditions</label>
+            <textarea id="medical_notes" rows="2" placeholder="Any ongoing medications, chronic conditions, allergies..."></textarea>
+            <div class="hint">This is kept confidential and used only for trainer guidance.</div>
+          </div>
+        </div>
+
+        <div class="section-divider"><span>Emergency contact</span></div>
+
+        <div class="field-grid">
+          <div class="field">
+            <label>Emergency contact name <span class="req">*</span></label>
+            <input type="text" id="emergency_name" placeholder="Full name">
+            <span class="err-msg">Emergency contact is required</span>
+          </div>
+          <div class="field">
+            <label>Relationship</label>
+            <div class="select-wrap">
+              <select id="emergency_relation">
+                <option value="">Select</option>
+                <option>Father</option><option>Mother</option><option>Spouse</option>
+                <option>Brother</option><option>Sister</option><option>Friend</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Emergency phone <span class="req">*</span></label>
+            <input type="tel" id="emergency_phone" placeholder="0300-1234567">
+            <span class="err-msg">Emergency phone is required</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-nav">
+      <button class="btn btn-secondary" onclick="goStep(1)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Back
+      </button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="step-dots">
+          <div class="step-dot"></div>
+          <div class="step-dot active"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+        </div>
+        <button class="btn btn-primary" onclick="goStep(3)">
+          Continue
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 3: Services ── -->
+  <div class="step-panel" id="step3">
+
+    <div class="form-card">
+      <div class="card-header">
+        <div class="card-header-icon">🏋️</div>
+        <div class="card-header-text">
+          <h3>Services interested in</h3>
+          <p>Select all that apply — staff will assign the final package</p>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="checkbox-grid">
+          <div class="check-item"><input type="checkbox" id="s1" value="Gym"><label for="s1">Gym</label></div>
+          <div class="check-item"><input type="checkbox" id="s2" value="Cardio"><label for="s2">Cardio</label></div>
+          <div class="check-item"><input type="checkbox" id="s3" value="Personal Training"><label for="s3">Personal training</label></div>
+          <div class="check-item"><input type="checkbox" id="s4" value="CrossFit"><label for="s4">CrossFit</label></div>
+          <div class="check-item"><input type="checkbox" id="s5" value="MMA"><label for="s5">MMA</label></div>
+          <div class="check-item"><input type="checkbox" id="s6" value="Table Tennis"><label for="s6">Table tennis</label></div>
+          <div class="check-item"><input type="checkbox" id="s7" value="Zumba"><label for="s7">Zumba</label></div>
+          <div class="check-item"><input type="checkbox" id="s8" value="Hybrid Workout"><label for="s8">Hybrid workout</label></div>
+          <div class="check-item"><input type="checkbox" id="s9" value="METCON"><label for="s9">METCON</label></div>
+          <div class="check-item"><input type="checkbox" id="s10" value="Nutritionist"><label for="s10">Nutritionist</label></div>
+          <div class="check-item"><input type="checkbox" id="s11" value="Paid Locker"><label for="s11">Paid locker</label></div>
+          <div class="check-item"><input type="checkbox" id="s12" value="Shower Facility"><label for="s12">Shower facility</label></div>
+        </div>
+
+        <div class="section-divider"><span>Additional notes</span></div>
+
+        <div class="field">
+          <label>Goals or anything else you'd like us to know</label>
+          <textarea id="notes" rows="3" placeholder="e.g. Want to lose 10kg, training for a competition, beginner..."></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Official section (staff fills this) -->
+    <div class="official-card">
+      <div class="official-header">
+        <div>
+          <div class="tag">Staff only</div>
+        </div>
+        <div>
+          <h3>Official membership details</h3>
+          <p>Filled by receptionist or admin — not the member</p>
+        </div>
+      </div>
+      <div class="official-body">
+        <div class="field-grid">
+          <div class="field">
+            <label>Package <span class="req">*</span></label>
+            <div class="select-wrap">
+              <select id="package">
+                <option value="">Assign package</option>
+                <option>Gym — Rs 7,500/month</option>
+                <option>Premium — Rs 15,000/month</option>
+                <option>Gym with Cardio — Rs 8,500/month</option>
+                <option>Hybrid Workout — Rs 10,000/month</option>
+                <option>MMA — Rs 7,500/month</option>
+                <option>CrossFit — Rs 7,500/month</option>
+                <option>Table Tennis — Rs 3,500/month</option>
+                <option>Custom</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Trainer assigned</label>
+            <div class="select-wrap">
+              <select id="trainer">
+                <option value="">No trainer</option>
+                <option>Ahmed Khan</option>
+                <option>Bilal Raza</option>
+                <option>Usman Tariq</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Joining date <span class="req">*</span></label>
+            <input type="date" id="joining_date">
+          </div>
+          <div class="field">
+            <label>Membership expiry</label>
+            <input type="date" id="expiry_date">
+            <div class="hint" style="color:var(--gray-4)">Auto: 1 month from joining</div>
+          </div>
+          <div class="field">
+            <label>Admission fee</label>
+            <input type="number" id="admission_fee" placeholder="15000">
+          </div>
+          <div class="field">
+            <label>Monthly fee</label>
+            <input type="number" id="monthly_fee" placeholder="7500">
+          </div>
+          <div class="field">
+            <label>Payment method</label>
+            <div class="radio-group" style="margin-top:2px">
+              <div class="radio-btn"><input type="radio" name="payment" id="p-cash" value="Cash"><label for="p-cash">Cash</label></div>
+              <div class="radio-btn"><input type="radio" name="payment" id="p-bank" value="Bank"><label for="p-bank">Bank</label></div>
+              <div class="radio-btn"><input type="radio" name="payment" id="p-card" value="Card"><label for="p-card">Card</label></div>
+            </div>
+          </div>
+          <div class="field">
+            <label>Handled by</label>
+            <div class="select-wrap">
+              <select id="staff_name">
+                <option value="">Select staff</option>
+                <option>Fizza Salman</option>
+                <option>Khalid Saeed</option>
+                <option>Manager</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-nav">
+      <button class="btn btn-secondary" onclick="goStep(2)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Back
+      </button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="step-dots">
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot active"></div>
+          <div class="step-dot"></div>
+        </div>
+        <button class="btn btn-primary" onclick="goStep(4)">
+          Review & submit
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── STEP 4: Review & Confirm ── -->
+  <div class="step-panel" id="step4">
+
+    <div class="form-card" id="review-card">
+      <div class="card-header">
+        <div class="card-header-icon">✅</div>
+        <div class="card-header-text">
+          <h3>Review & confirm</h3>
+          <p>Check all details before submitting</p>
+        </div>
+      </div>
+      <div class="card-body" id="review-body">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+
+    <div class="form-card">
+      <div class="card-body">
+        <div class="terms-box">
+          <strong style="display:block;margin-bottom:6px;font-size:13px;color:var(--text-2)">Level Up Fitness Club — Membership terms</strong>
+          <ul>
+            <li>Membership fees are non-refundable once paid.</li>
+            <li>Membership is non-transferable except to immediate family with management approval.</li>
+            <li>The gym is not responsible for loss of personal items.</li>
+            <li>Members must follow gym rules and etiquette at all times.</li>
+            <li>Treadmill usage is limited to 15 minutes during peak hours.</li>
+            <li>Diet plans require CEO approval and are subject to trainer availability.</li>
+            <li>Management reserves the right to cancel membership for misconduct.</li>
+            <li>Photo and biometric data is stored securely and used only for access control.</li>
+          </ul>
+        </div>
+        <label class="terms-agree">
+          <input type="checkbox" id="terms_agree">
+          I have read and agree to the Level Up Fitness Club membership terms and conditions.
+        </label>
+      </div>
+    </div>
+
+    <div class="form-nav">
+      <button class="btn btn-secondary" onclick="goStep(3)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        Back
+      </button>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="step-dots">
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot"></div>
+          <div class="step-dot active"></div>
+        </div>
+        <button class="btn btn-primary" onclick="submitForm()" id="submit-btn">
+          Submit registration
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── SUCCESS ── -->
+  <div class="step-panel" id="step-success">
+    <div class="form-card">
+      <div class="success-screen">
+        <div class="success-icon">
+          <svg viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        </div>
+        <h2>Registration submitted!</h2>
+        <p>The member application has been sent to the dashboard for approval. Staff will review and assign a membership number.</p>
+        <div class="success-ref">
+          Application reference<br>
+          <strong id="ref-number">LUF-2026-0042</strong>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick="resetForm()">Register another member</button>
+          <button class="btn btn-secondary" onclick="window.print()">Print this page</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+let currentStep = 1;
+
+function goStep(n) {
+  if(n > currentStep && !validateStep(currentStep)) return;
+  document.querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById('step' + (n <= 4 ? n : 'success')).classList.add('active');
+  currentStep = n;
+  updateProgress(n);
+  if(n === 4) buildReview();
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function validateStep(step) {
+  let ok = true;
+  if(step === 1) {
+    const fn = document.getElementById('full_name');
+    const ph = document.getElementById('phone');
+    const gn = document.querySelector('input[name="gender"]:checked');
+    [fn, ph].forEach(f => {
+      const p = f.closest('.field');
+      if(!f.value.trim()){ p.classList.add('has-error'); ok=false; } else p.classList.remove('has-error');
+    });
+    if(!gn){
+      document.querySelector('[for="g-male"]').closest('.field').classList.add('has-error');
+      ok = false;
+    } else {
+      document.querySelector('[for="g-male"]').closest('.field').classList.remove('has-error');
+    }
+  }
+  if(step === 2) {
+    const en = document.getElementById('emergency_name');
+    const ep = document.getElementById('emergency_phone');
+    [en, ep].forEach(f => {
+      const p = f.closest('.field');
+      if(!f.value.trim()){ p.classList.add('has-error'); ok=false; } else p.classList.remove('has-error');
+    });
+  }
+  return ok;
+}
+
+function updateProgress(step) {
+  for(let i=1; i<=4; i++){
+    const sc = document.getElementById('sc'+i);
+    const sl = document.getElementById('sl-'+i);
+    if(sc){
+      sc.className = 'step-circle' + (i < step ? ' done' : i === step ? ' active' : '');
+      if(i < step) sc.innerHTML = '✓'; else sc.textContent = i;
+    }
+    if(sl){
+      sl.className = 'step-label' + (i < step ? ' done' : i === step ? ' active' : '');
+    }
+    const sline = document.getElementById('sl'+i);
+    if(sline) sline.className = 'step-line' + (i < step ? ' done' : '');
+  }
+}
+
+function buildReview() {
+  const g = id => document.getElementById(id)?.value || '—';
+  const gn = () => document.querySelector('input[name="gender"]:checked')?.value || '—';
+  const gm = () => document.querySelector('input[name="marital"]:checked')?.value || '—';
+  const services = [...document.querySelectorAll('.check-item input:checked')].map(c=>c.value).join(', ') || '—';
+  const rows = [
+    ['Full name', g('full_name')], ['Phone', g('phone')], ['WhatsApp', g('whatsapp') || g('phone')],
+    ['Gender', gn()], ['Date of birth', g('dob')], ['Marital status', gm()],
+    ['CNIC', g('cnic')], ['Address', g('address')],
+    ['Height', g('height')], ['Weight', g('weight')], ['Blood group', g('blood_group')],
+    ['Emergency contact', g('emergency_name') + ' — ' + g('emergency_phone')],
+    ['Services interested', services],
+    ['Package', g('package')], ['Joining date', g('joining_date')], ['Monthly fee', g('monthly_fee') ? 'Rs ' + g('monthly_fee') : '—'],
+  ];
+  document.getElementById('review-body').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+      ${rows.map(([l,v])=>`
+        <div style="padding:9px 0;border-bottom:1px solid var(--gray-2)">
+          <div style="font-size:10px;font-weight:700;color:var(--gray-4);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">${l}</div>
+          <div style="font-size:13px;font-weight:600;color:var(--text)">${v}</div>
+        </div>`).join('')}
+    </div>`;
+}
+
+function submitForm() {
+  if(!document.getElementById('terms_agree').checked){
+    alert('Please agree to the membership terms to continue.');
+    return;
+  }
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = true;
+  btn.textContent = 'Submitting...';
+  setTimeout(()=>{
+    const ref = 'LUF-2026-' + String(Math.floor(1000+Math.random()*9000));
+    document.getElementById('ref-number').textContent = ref;
+    document.querySelectorAll('.step-panel').forEach(p=>p.classList.remove('active'));
+    document.getElementById('step-success').classList.add('active');
+    document.querySelector('.progress-wrap').style.display='none';
+    window.scrollTo({top:0,behavior:'smooth'});
+  }, 1200);
+}
+
+function resetForm() {
+  document.querySelector('.progress-wrap').style.display='block';
+  document.querySelectorAll('.step-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById('step1').classList.add('active');
+  document.querySelectorAll('input:not([type="radio"]):not([type="checkbox"])').forEach(i=>{ if(!i.readOnly) i.value=''; });
+  document.querySelectorAll('select').forEach(s=>s.selectedIndex=0);
+  document.querySelectorAll('textarea').forEach(t=>t.value='');
+  currentStep=1; updateProgress(1);
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+// Auto-calc age from DOB
+document.getElementById('dob').addEventListener('change', function(){
+  const b = new Date(this.value);
+  const age = Math.floor((new Date()-b)/31557600000);
+  if(age>0 && age<120) document.getElementById('age').value = age + ' years';
+});
+
+// Auto-set expiry 1 month from joining
+document.getElementById('joining_date').addEventListener('change', function(){
+  const d = new Date(this.value);
+  d.setMonth(d.getMonth()+1);
+  document.getElementById('expiry_date').value = d.toISOString().split('T')[0];
+});
+
+// Photo preview
+document.getElementById('photo-input').addEventListener('change', function(){
+  if(this.files[0]){
+    const img = document.getElementById('photo-img');
+    img.src = URL.createObjectURL(this.files[0]);
+    img.style.display='block';
+    this.closest('.photo-preview').querySelector('svg').style.display='none';
+  }
+});
+
+// Set today as default joining date
+const today = new Date().toISOString().split('T')[0];
+document.getElementById('joining_date').value = today;
+const exp = new Date(); exp.setMonth(exp.getMonth()+1);
+document.getElementById('expiry_date').value = exp.toISOString().split('T')[0];
+</script>
+</body>
+</html>
