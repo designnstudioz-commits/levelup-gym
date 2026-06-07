@@ -2,7 +2,8 @@
 
 import { useRef, useState } from "react";
 import { UseFormReturn } from "react-hook-form";
-import { Camera, User } from "lucide-react";
+import { Camera, Loader2, User } from "lucide-react";
+import { toast } from "sonner";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
@@ -23,6 +24,7 @@ const REFERRAL_OPTIONS = [
 export function Step1Personal({ form }: Step1Props) {
   const { register, formState: { errors }, setValue, watch } = form;
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   function handleDobChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -36,14 +38,36 @@ export function Step1Personal({ form }: Step1Props) {
     setValue("age", age > 0 ? age : undefined);
   }
 
-  function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Show local preview immediately
     const reader = new FileReader();
-    reader.onload = (ev) => {
-      setPhotoPreview(ev.target?.result as string);
-    };
+    reader.onload = (ev) => setPhotoPreview(ev.target?.result as string);
     reader.readAsDataURL(file);
+
+    // Upload to Supabase Storage
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload/photo", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        toast.error(json.error ?? "Photo upload failed");
+        setPhotoPreview(null);
+        setValue("photo_url", undefined);
+      } else {
+        setValue("photo_url", json.url);
+      }
+    } catch {
+      toast.error("Photo upload failed");
+      setPhotoPreview(null);
+      setValue("photo_url", undefined);
+    } finally {
+      setUploading(false);
+    }
   }
 
   const age = watch("age");
@@ -54,10 +78,16 @@ export function Step1Personal({ form }: Step1Props) {
       <div className="flex justify-center">
         <button
           type="button"
-          onClick={() => fileRef.current?.click()}
-          className="relative w-24 h-24 rounded-full border-2 border-dashed border-[#E4E4DE] hover:border-[#F06418] bg-[#FEF0E8] overflow-hidden transition-colors group"
+          onClick={() => !uploading && fileRef.current?.click()}
+          disabled={uploading}
+          className="relative w-24 h-24 rounded-full border-2 border-dashed border-[#E4E4DE] hover:border-[#F06418] bg-[#FEF0E8] overflow-hidden transition-colors group disabled:opacity-70"
         >
-          {photoPreview ? (
+          {uploading ? (
+            <div className="flex flex-col items-center justify-center h-full gap-1">
+              <Loader2 className="w-8 h-8 text-[#F06418] animate-spin" />
+              <span className="text-[10px] text-[#7A7A72]">Uploading…</span>
+            </div>
+          ) : photoPreview ? (
             <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
           ) : (
             <div className="flex flex-col items-center justify-center h-full gap-1">

@@ -78,6 +78,7 @@ export default function AttendancePage() {
   const [deviceForm, setDeviceForm]     = useState({ name: "", location: "", door_type: "Entrance", color: "#F06418", ip_address: "" });
   const [deviceSaving, setDeviceSaving] = useState(false);
   const realtimeRef = useRef<any>(null);
+  const devicePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function getDateBounds() {
     const today = new Date();
@@ -120,7 +121,7 @@ export default function AttendancePage() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  // Realtime subscription
+  // Realtime subscription — new punches trigger full refresh
   useEffect(() => {
     if (!liveMode) { realtimeRef.current?.unsubscribe(); return; }
     const supabase = createClient();
@@ -130,6 +131,18 @@ export default function AttendancePage() {
       .subscribe();
     return () => { realtimeRef.current?.unsubscribe(); };
   }, [liveMode, fetchData]);
+
+  // Poll devices every 30s to keep last_seen + online status current
+  const fetchDevices = useCallback(async () => {
+    const supabase = createClient();
+    const { data } = await supabase.from("devices").select("*").order("name");
+    if (data) setDevices(data as Device[]);
+  }, []);
+
+  useEffect(() => {
+    devicePollRef.current = setInterval(fetchDevices, 30_000);
+    return () => { if (devicePollRef.current) clearInterval(devicePollRef.current); };
+  }, [fetchDevices]);
 
   // Filtered records
   const filtered = records.filter((r) => {
@@ -148,7 +161,7 @@ export default function AttendancePage() {
   const deviceStats = devices.map((d) => ({
     device: d,
     count: records.filter((r) => r.device_id === d.serial_no).length,
-    online: d.last_seen ? (Date.now() - new Date(d.last_seen).getTime()) < 5 * 60 * 1000 : false,
+    online: d.last_seen ? (Date.now() - new Date(d.last_seen).getTime()) < 2 * 60 * 1000 : false,
   }));
 
   const uniqueMembers = new Set(records.filter((r) => r.member?.id).map((r) => r.member!.id)).size;
@@ -187,16 +200,45 @@ export default function AttendancePage() {
     fetchData();
   }
 
+  async function deleteDevice() {
+    if (!editDevice) return;
+    if (!confirm(`Remove device "${editDevice.name}" (${editDevice.serial_no})? It will re-appear if the machine reconnects.`)) return;
+    setDeviceSaving(true);
+    const supabase = createClient();
+    await supabase.from("devices").delete().eq("id", editDevice.id);
+    toast.success("Device removed");
+    setEditDevice(null);
+    setDeviceSaving(false);
+    fetchData();
+  }
+
   async function handleResolve() {
     if (!resolveModal || !resolveId.trim()) return;
     setResolvingSaving(true);
     const supabase = createClient();
-    const { data: member } = await supabase
-      .from("members").select("id, device_user_id")
-      .or(`membership_no.eq.${resolveId},id.eq.${resolveId}`)
-      .is("deleted_at", null).single();
 
-    if (!member) { toast.error("Member not found"); setResolvingSaving(false); return; }
+    // Try membership number first (exact match)
+    let { data: member } = await supabase
+      .from("members").select("id, device_user_id, full_name")
+      .eq("membership_no", resolveId.trim().toUpperCase())
+      .is("deleted_at", null).maybeSingle();
+
+    // Fall back to name search
+    if (!member) {
+      const { data: byName } = await supabase
+        .from("members").select("id, device_user_id, full_name")
+        .ilike("full_name", `%${resolveId.trim()}%`)
+        .is("deleted_at", null);
+      if (byName && byName.length === 1) {
+        member = byName[0];
+      } else if (byName && byName.length > 1) {
+        toast.error(`Found ${byName.length} matches — use the membership number (LUF-YYYY-NNNN) to be specific`);
+        setResolvingSaving(false);
+        return;
+      }
+    }
+
+    if (!member) { toast.error("Member not found — check the membership number or name"); setResolvingSaving(false); return; }
     if (!member.device_user_id) {
       await supabase.from("members").update({ device_user_id: resolveModal.raw_id, thumb_registered: true }).eq("id", member.id);
     }
@@ -248,10 +290,13 @@ export default function AttendancePage() {
               const isFiltered = deviceFilter === d.serial_no;
 
               return (
-                <button
+                <div
                   key={d.id}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setDeviceFilter(isFiltered ? "all" : d.serial_no)}
-                  className={`text-left rounded-xl border-2 p-4 transition-all ${isFiltered ? "border-[#F06418] bg-[#FEF0E8]" : "border-[#E4E4DE] bg-white hover:border-[#F06418]"}`}
+                  onKeyDown={(e) => e.key === "Enter" && setDeviceFilter(isFiltered ? "all" : d.serial_no)}
+                  className={`text-left rounded-xl border-2 p-4 transition-all cursor-pointer ${isFiltered ? "border-[#F06418] bg-[#FEF0E8]" : "border-[#E4E4DE] bg-white hover:border-[#F06418]"}`}
                 >
                   <div className="flex items-start justify-between mb-3">
                     <div className="flex items-center gap-2">
@@ -299,7 +344,7 @@ export default function AttendancePage() {
                       <Settings className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </button>
+                </div>
               );
             })
           )}
@@ -551,6 +596,12 @@ export default function AttendancePage() {
                 <Check className="w-4 h-4" /> Save Device
               </Button>
             </div>
+            <button
+              onClick={deleteDevice}
+              className="w-full mt-2 text-xs text-red-500 hover:text-red-700 hover:underline transition-colors"
+            >
+              Remove this device
+            </button>
           </div>
         )}
       </Modal>
@@ -568,7 +619,7 @@ export default function AttendancePage() {
                 </p>
               )}
             </div>
-            <Input label="Member Membership No" placeholder="LUF-2026-0001" required
+            <Input label="Membership No or Member Name" placeholder="LUF-2026-0001 or member name" required
               value={resolveId} onChange={(e) => setResolveId(e.target.value)} />
             <p className="text-xs text-[#7A7A72]">
               This permanently links Device ID <strong>{resolveModal.raw_id}</strong> to the member — all future punches from this ID will auto-identify.

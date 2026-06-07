@@ -921,11 +921,16 @@ function DeviceIdField({ memberId, deviceUserId, thumbRegistered, onSaved }: {
   async function save() {
     setSaving(true);
     const supabase = createClient();
-    await supabase.from("members").update({
+    const { error } = await supabase.from("members").update({
       device_user_id: value.trim() || null,
       thumb_registered: !!value.trim(),
     }).eq("id", memberId);
     setSaving(false);
+    if (error) {
+      console.error("Device ID save error:", error);
+      toast.error(`Save failed: ${error.message}`);
+      return;
+    }
     setEditing(false);
     onSaved();
     toast.success("Device ID saved");
