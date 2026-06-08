@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatPKR } from "@/lib/utils";
+import { formatPKR, formatCnic } from "@/lib/utils";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import type { StaffMember, StaffRole } from "@/types/database";
 
@@ -411,7 +411,7 @@ export default function StaffPage() {
               label="CNIC"
               placeholder="XXXXX-XXXXXXX-X"
               value={form.cnic}
-              onChange={(e) => setForm({ ...form, cnic: e.target.value })}
+              onChange={(e) => setForm({ ...form, cnic: formatCnic(e.target.value) })}
             />
             <Input
               label="Monthly Salary (Rs)"

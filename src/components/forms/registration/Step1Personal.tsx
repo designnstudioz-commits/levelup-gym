@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
+import { formatCnic } from "@/lib/utils";
 
 interface Step1Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -202,8 +203,9 @@ export function Step1Personal({ form }: Step1Props) {
           <Input
             label="CNIC"
             placeholder="XXXXX-XXXXXXX-X"
+            value={watch("cnic") ?? ""}
+            onChange={(e) => setValue("cnic", formatCnic(e.target.value), { shouldValidate: true })}
             error={errors.cnic?.message}
-            {...register("cnic")}
           />
           <div className="sm:col-span-2">
             <Input
