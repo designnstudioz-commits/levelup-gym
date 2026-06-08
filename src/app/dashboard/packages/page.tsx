@@ -47,11 +47,31 @@ const PACKAGE_COLORS = [
   { label: "Pink",   value: "#DB2777" },
 ];
 
-const DURATIONS = [
-  { label: "1 Month",          value: 1  },
-  { label: "3 Months",         value: 3  },
-  { label: "6 Months",         value: 6  },
-  { label: "12 Months (Annual)", value: 12 },
+const DURATION_PRESETS = [
+  { label: "1 Month",  value: 1  },
+  { label: "3 Months", value: 3  },
+  { label: "6 Months", value: 6  },
+  { label: "1 Year",   value: 12 },
+];
+
+const PRESET_PACKAGE_NAMES = [
+  "Gym",
+  "Gym with Cardio",
+  "Hybrid Workout",
+  "MMA",
+  "CrossFit",
+  "Table Tennis",
+  "Zumba",
+  "METCON",
+  "Personal Training",
+  "Cardio Only",
+  "Nutritionist",
+  "Premium",
+  "Ladies Package",
+  "Student Package",
+  "Couple Package",
+  "Family Package",
+  "Daily Pass",
 ];
 
 const emptyForm = {
@@ -64,13 +84,14 @@ const emptyForm = {
 };
 
 export default function PackagesPage() {
-  const [packages, setPackages]     = useState<PackageWithCount[]>([]);
-  const [loading, setLoading]       = useState(true);
-  const [viewMode, setViewMode]     = useState<ViewMode>("grid");
-  const [addModal, setAddModal]     = useState(false);
-  const [editTarget, setEditTarget] = useState<PackageWithCount | null>(null);
-  const [form, setForm]             = useState(emptyForm);
-  const [saving, setSaving]         = useState(false);
+  const [packages, setPackages]         = useState<PackageWithCount[]>([]);
+  const [loading, setLoading]           = useState(true);
+  const [viewMode, setViewMode]         = useState<ViewMode>("grid");
+  const [addModal, setAddModal]         = useState(false);
+  const [editTarget, setEditTarget]     = useState<PackageWithCount | null>(null);
+  const [form, setForm]                 = useState(emptyForm);
+  const [saving, setSaving]             = useState(false);
+  const [isCustomDuration, setIsCustomDuration] = useState(false);
 
   // Filters
   const [search, setSearch]               = useState("");
@@ -129,12 +150,20 @@ export default function PackagesPage() {
   }
 
   // ── Form helpers ────────────────────────────────────────────────
-  function openAdd() { setForm(emptyForm); setEditTarget(null); setAddModal(true); }
+  function openAdd() {
+    setForm(emptyForm);
+    setEditTarget(null);
+    setIsCustomDuration(false);
+    setAddModal(true);
+  }
 
   function openEdit(pkg: PackageWithCount) {
+    const months = pkg.duration_months ?? 1;
+    const isPreset = DURATION_PRESETS.some((d) => d.value === months);
+    setIsCustomDuration(!isPreset);
     setForm({
       name: pkg.name, type: pkg.type ?? "Individual",
-      duration_months: pkg.duration_months ?? 1,
+      duration_months: months,
       admission_fee: pkg.admission_fee?.toString() ?? "15000",
       monthly_fee: pkg.monthly_fee?.toString() ?? "",
       max_members: pkg.max_members?.toString() ?? "1",
@@ -353,16 +382,78 @@ export default function PackagesPage() {
           <div>
             <h4 className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Basic Information</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input label="Package Name" required placeholder="e.g. Gym + Cardio Pro" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+
+              {/* Package Name — combobox with presets + free text */}
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium text-[#1A1A16]">
+                  Package Name <span className="text-[#F06418]">*</span>
+                </label>
+                <input
+                  list="package-name-suggestions"
+                  placeholder="Select or type a name..."
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white text-[#1A1A16] placeholder-[#7A7A72] focus:outline-none focus:ring-2 focus:ring-[#F06418] focus:border-[#F06418]"
+                />
+                <datalist id="package-name-suggestions">
+                  {PRESET_PACKAGE_NAMES.map((n) => <option key={n} value={n} />)}
+                </datalist>
+                <p className="text-[11px] text-[#7A7A72]">Choose from list or type a custom name</p>
+              </div>
+
               <Select label="Package Type" required value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value as PackageType })}>
                 <option value="Individual">Individual</option>
                 <option value="Family">Family</option>
                 <option value="Couple">Couple</option>
                 <option value="Daily">Daily Pass</option>
               </Select>
-              <Select label="Duration" value={String(form.duration_months)} onChange={(e) => setForm({ ...form, duration_months: Number(e.target.value) })}>
-                {DURATIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
-              </Select>
+
+              {/* Duration — preset buttons + custom */}
+              <div className="flex flex-col gap-1.5">
+                <label className="text-sm font-medium text-[#1A1A16]">Duration</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {DURATION_PRESETS.map((d) => (
+                    <button
+                      key={d.value}
+                      type="button"
+                      onClick={() => { setIsCustomDuration(false); setForm({ ...form, duration_months: d.value }); }}
+                      className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                        !isCustomDuration && form.duration_months === d.value
+                          ? "bg-[#F06418] border-[#F06418] text-white"
+                          : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomDuration(true)}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                      isCustomDuration
+                        ? "bg-[#F06418] border-[#F06418] text-white"
+                        : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+                    }`}
+                  >
+                    Custom
+                  </button>
+                </div>
+                {isCustomDuration && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      placeholder="e.g. 2"
+                      value={form.duration_months === 1 ? "" : form.duration_months}
+                      onChange={(e) => setForm({ ...form, duration_months: Number(e.target.value) || 1 })}
+                      className="w-20 px-3 py-1.5 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                    />
+                    <span className="text-sm text-[#4A4A44]">months</span>
+                  </div>
+                )}
+              </div>
+
               <Input label="Max Members" type="number" hint="For family/couple" value={form.max_members} onChange={(e) => setForm({ ...form, max_members: e.target.value })} />
             </div>
           </div>
