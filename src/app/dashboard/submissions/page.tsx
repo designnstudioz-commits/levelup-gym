@@ -11,6 +11,8 @@ import {
   Filter,
   RefreshCw,
   User,
+  Trash2,
+  Archive,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -27,6 +29,18 @@ type SubmissionWithPackage = Submission & {
 };
 
 type StatusFilter = "all" | "pending" | "approved" | "rejected";
+
+const REJECT_PRESETS = [
+  "Duplicate application",
+  "Incomplete information provided",
+  "Invalid / missing documents",
+  "Already an active member",
+  "Age requirement not met",
+  "Medical condition — not eligible",
+  "Payment not confirmed",
+  "Policy violation — previously blacklisted",
+  "Membership slot not available",
+];
 
 export default function SubmissionsPage() {
   const router = useRouter();
@@ -185,11 +199,27 @@ export default function SubmissionsPage() {
     }
   }
 
+  async function deleteFromArchive(sub: SubmissionWithPackage) {
+    if (!confirm(`Permanently remove "${sub.full_name}" from archive?`)) return;
+    const supabase = createClient();
+    await supabase.from("submissions").update({ deleted_at: new Date().toISOString() }).eq("id", sub.id);
+    toast.success("Removed from archive");
+    fetchSubmissions();
+  }
+
+  async function emptyArchive() {
+    if (!confirm("Permanently delete ALL rejected submissions from the archive? This cannot be undone.")) return;
+    const supabase = createClient();
+    await supabase.from("submissions").update({ deleted_at: new Date().toISOString() }).eq("status", "rejected").is("deleted_at", null);
+    toast.success("Archive emptied");
+    fetchSubmissions();
+  }
+
   const STATUS_TABS: { key: StatusFilter; label: string }[] = [
-    { key: "pending", label: "Pending" },
+    { key: "pending",  label: "Pending"  },
     { key: "approved", label: "Approved" },
-    { key: "rejected", label: "Rejected" },
-    { key: "all", label: "All" },
+    { key: "rejected", label: "Archive"  },
+    { key: "all",      label: "All"      },
   ];
 
   return (
@@ -231,11 +261,13 @@ export default function SubmissionsPage() {
             />
           </div>
 
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={fetchSubmissions}
-          >
+          {statusFilter === "rejected" && filtered.length > 0 && (
+            <Button variant="danger" size="sm" onClick={emptyArchive}>
+              <Trash2 className="w-4 h-4" /> Empty Archive
+            </Button>
+          )}
+
+          <Button variant="ghost" size="sm" onClick={fetchSubmissions}>
             <RefreshCw className="w-4 h-4" />
           </Button>
         </div>
@@ -338,6 +370,15 @@ export default function SubmissionsPage() {
                                 <XCircle className="w-4 h-4" />
                               </button>
                             </>
+                          )}
+                          {sub.status === "rejected" && (
+                            <button
+                              onClick={() => deleteFromArchive(sub)}
+                              className="p-1.5 rounded-lg text-[#7A7A72] hover:bg-red-50 hover:text-red-600 transition-colors"
+                              title="Remove from archive"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           )}
                         </div>
                       </td>
@@ -476,17 +517,39 @@ export default function SubmissionsPage() {
           <div className="p-5 space-y-4">
             <p className="text-sm text-[#4A4A44]">
               You are about to reject the registration from{" "}
-              <strong>{rejectModal.full_name}</strong>. Please provide a reason.
+              <strong>{rejectModal.full_name}</strong>. This will move it to the Archive.
             </p>
+
+            {/* Preset reasons */}
+            <div>
+              <p className="text-xs font-semibold text-[#7A7A72] uppercase tracking-wide mb-2">Quick select a reason</p>
+              <div className="flex flex-wrap gap-1.5">
+                {REJECT_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => setRejectReason(preset)}
+                    className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+                      rejectReason === preset
+                        ? "bg-red-600 border-red-600 text-white"
+                        : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-red-300 hover:text-red-600"
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div>
               <label className="text-sm font-medium text-[#1A1A16] block mb-1">
                 Rejection Reason <span className="text-[#F06418]">*</span>
               </label>
               <textarea
-                rows={3}
+                rows={2}
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="e.g. Incomplete information, duplicate application..."
+                placeholder="Or type a custom reason..."
                 className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418] resize-none"
               />
             </div>
@@ -500,7 +563,7 @@ export default function SubmissionsPage() {
                 loading={processing === rejectModal.id}
                 className="flex-1"
               >
-                Reject Submission
+                <Archive className="w-4 h-4" /> Move to Archive
               </Button>
             </div>
           </div>
