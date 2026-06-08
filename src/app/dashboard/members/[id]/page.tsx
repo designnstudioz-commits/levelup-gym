@@ -17,7 +17,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
 import { addMonths, format } from "date-fns";
@@ -50,10 +50,83 @@ export default function MemberDetailPage() {
   const [editPackage, setEditPackage] = useState(false);
   const [editTrainer, setEditTrainer] = useState(false);
   const [editServices, setEditServices] = useState(false);
+  const [editProfileModal, setEditProfileModal] = useState(false);
   const [feeModal, setFeeModal] = useState(false);
   const [renewModal, setRenewModal] = useState(false);
   const [freezeModal, setFreezeModal] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Profile edit form
+  const [profileForm, setProfileForm] = useState({
+    full_name: "", secondary_name: "", phone: "", whatsapp: "",
+    email: "", cnic: "", address: "", dob: "", gender: "",
+    marital_status: "", blood_group: "", height: "", weight: "",
+    medical_notes: "", emergency_name: "", emergency_phone: "",
+  });
+
+  function openEditProfile() {
+    if (!member) return;
+    setProfileForm({
+      full_name: member.full_name ?? "",
+      secondary_name: member.secondary_name ?? "",
+      phone: member.phone ?? "",
+      whatsapp: member.whatsapp ?? "",
+      email: member.email ?? "",
+      cnic: member.cnic ?? "",
+      address: member.address ?? "",
+      dob: member.dob ?? "",
+      gender: member.gender ?? "",
+      marital_status: member.marital_status ?? "",
+      blood_group: member.blood_group ?? "",
+      height: member.height ?? "",
+      weight: member.weight ?? "",
+      medical_notes: member.medical_notes ?? "",
+      emergency_name: member.emergency_name ?? "",
+      emergency_phone: member.emergency_phone ?? "",
+    });
+    setEditProfileModal(true);
+  }
+
+  async function saveProfile() {
+    if (!profileForm.full_name.trim() || !profileForm.phone.trim()) {
+      toast.error("Name and phone are required");
+      return;
+    }
+    setSaving(true);
+    const supabase = createClient();
+    const { error } = await supabase.from("members").update({
+      full_name:         profileForm.full_name.trim(),
+      secondary_name:    profileForm.secondary_name.trim() || null,
+      phone:             profileForm.phone.trim(),
+      whatsapp:          profileForm.whatsapp.trim() || null,
+      email:             profileForm.email.trim() || null,
+      cnic:              profileForm.cnic.trim() || null,
+      address:           profileForm.address.trim() || null,
+      dob:               profileForm.dob || null,
+      gender:            profileForm.gender || null,
+      marital_status:    profileForm.marital_status || null,
+      blood_group:       profileForm.blood_group || null,
+      height:            profileForm.height.trim() || null,
+      weight:            profileForm.weight.trim() || null,
+      medical_notes:     profileForm.medical_notes.trim() || null,
+      emergency_name:    profileForm.emergency_name.trim() || null,
+      emergency_phone:   profileForm.emergency_phone.trim() || null,
+      updated_at:        new Date().toISOString(),
+    }).eq("id", id);
+
+    if (error) { toast.error(error.message); setSaving(false); return; }
+
+    await supabase.from("activity_logs").insert({
+      action: "edited_member",
+      entity_type: "member",
+      entity_id: id,
+      description: `Updated profile for ${profileForm.full_name}`,
+    });
+    toast.success("Profile updated");
+    setEditProfileModal(false);
+    setSaving(false);
+    fetchMember();
+  }
 
   // Form states
   const [selectedPackage, setSelectedPackage] = useState("");
@@ -351,6 +424,9 @@ export default function MemberDetailPage() {
             <Link href="/dashboard/members">
               <Button variant="ghost" size="sm"><ArrowLeft className="w-4 h-4" /> Members</Button>
             </Link>
+            <Button variant="secondary" size="sm" onClick={openEditProfile}>
+              <Edit3 className="w-4 h-4" /> Edit Profile
+            </Button>
             <Button size="sm" onClick={openFeeModal}>
               <CreditCard className="w-4 h-4" /> Collect Fee
             </Button>
@@ -730,6 +806,100 @@ export default function MemberDetailPage() {
           )}
         </Card>
       </div>
+
+      {/* Edit Profile Modal */}
+      <Modal open={editProfileModal} onClose={() => setEditProfileModal(false)} title="Edit Member Profile" size="lg">
+        <div className="space-y-5">
+          {/* Personal */}
+          <div>
+            <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Personal Information</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Full Name" required value={profileForm.full_name}
+                onChange={(e) => setProfileForm((f) => ({ ...f, full_name: e.target.value }))} />
+              <Input label="Secondary Name (S/o, D/o)" value={profileForm.secondary_name}
+                onChange={(e) => setProfileForm((f) => ({ ...f, secondary_name: e.target.value }))} />
+              <div>
+                <label className="block text-sm font-medium text-[#1A1A16] mb-1">Gender</label>
+                <select className="w-full px-3 py-2 text-sm border border-[#E4E4DE] rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                  value={profileForm.gender} onChange={(e) => setProfileForm((f) => ({ ...f, gender: e.target.value }))}>
+                  <option value="">Select</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[#1A1A16] mb-1">Marital Status</label>
+                <select className="w-full px-3 py-2 text-sm border border-[#E4E4DE] rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                  value={profileForm.marital_status} onChange={(e) => setProfileForm((f) => ({ ...f, marital_status: e.target.value }))}>
+                  <option value="">Select</option>
+                  <option value="Single">Single</option>
+                  <option value="Married">Married</option>
+                </select>
+              </div>
+              <Input label="Date of Birth" type="date" value={profileForm.dob}
+                onChange={(e) => setProfileForm((f) => ({ ...f, dob: e.target.value }))} />
+              <Input label="Blood Group" placeholder="e.g. B+" value={profileForm.blood_group}
+                onChange={(e) => setProfileForm((f) => ({ ...f, blood_group: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Contact */}
+          <div>
+            <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Contact</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <Input label="Phone" required type="tel" value={profileForm.phone}
+                onChange={(e) => setProfileForm((f) => ({ ...f, phone: e.target.value }))} />
+              <Input label="WhatsApp" type="tel" value={profileForm.whatsapp}
+                onChange={(e) => setProfileForm((f) => ({ ...f, whatsapp: e.target.value }))} />
+              <Input label="Email" type="email" value={profileForm.email}
+                onChange={(e) => setProfileForm((f) => ({ ...f, email: e.target.value }))} />
+              <Input label="CNIC" placeholder="XXXXX-XXXXXXX-X" value={profileForm.cnic}
+                onChange={(e) => setProfileForm((f) => ({ ...f, cnic: formatCnic(e.target.value) }))} />
+              <div className="sm:col-span-2">
+                <Input label="Home Address" value={profileForm.address}
+                  onChange={(e) => setProfileForm((f) => ({ ...f, address: e.target.value }))} />
+              </div>
+            </div>
+          </div>
+
+          {/* Physical */}
+          <div>
+            <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Physical</p>
+            <div className="grid grid-cols-2 gap-3">
+              <Input label="Height" placeholder="e.g. 5'10&quot;" value={profileForm.height}
+                onChange={(e) => setProfileForm((f) => ({ ...f, height: e.target.value }))} />
+              <Input label="Weight" placeholder="e.g. 75 kg" value={profileForm.weight}
+                onChange={(e) => setProfileForm((f) => ({ ...f, weight: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Emergency */}
+          <div>
+            <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Emergency Contact</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Input label="Name" value={profileForm.emergency_name}
+                onChange={(e) => setProfileForm((f) => ({ ...f, emergency_name: e.target.value }))} />
+              <Input label="Phone" type="tel" value={profileForm.emergency_phone}
+                onChange={(e) => setProfileForm((f) => ({ ...f, emergency_phone: e.target.value }))} />
+            </div>
+          </div>
+
+          {/* Medical */}
+          <div>
+            <label className="block text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-2">Medical Notes</label>
+            <textarea rows={2} placeholder="Injuries, conditions, allergies..."
+              className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white text-[#1A1A16] placeholder-[#7A7A72] focus:outline-none focus:ring-2 focus:ring-[#F06418] resize-none"
+              value={profileForm.medical_notes}
+              onChange={(e) => setProfileForm((f) => ({ ...f, medical_notes: e.target.value }))}
+            />
+          </div>
+
+          <div className="flex gap-3 pt-1">
+            <Button variant="secondary" className="flex-1" onClick={() => setEditProfileModal(false)}>Cancel</Button>
+            <Button className="flex-1" onClick={saveProfile} disabled={saving}>{saving ? "Saving..." : "Save Changes"}</Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Record Fee Modal */}
       <Modal open={feeModal} onClose={() => { setFeeModal(false); setDiscountType("none"); setDiscountValue(""); }} title="Record Fee Payment" size="md">
