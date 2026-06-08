@@ -525,34 +525,7 @@ export default function AttendancePage() {
           </Card>
         )}
 
-        {/* ── Setup guide ────────────────────────────────────────── */}
-        <Card>
-          <h3 className="text-sm font-semibold text-[#1A1A16] mb-4 flex items-center gap-2">
-            <DoorOpen className="w-4 h-4 text-[#F06418]" /> Multi-Device Setup (3 SpeedFace V5L machines)
-          </h3>
-          <div className="bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-4 py-3 mb-4">
-            <p className="text-sm font-semibold text-[#1A1A16] mb-1">All 3 machines use the EXACT same URL:</p>
-            <code className="text-sm text-[#F06418] break-all">https://your-domain.com/api/attendance/push</code>
-            <p className="text-xs text-[#7A7A72] mt-1.5">Each machine is automatically identified by its serial number (sn). No extra configuration needed per device.</p>
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {["Machine 1 — Main Door", "Machine 2 — Gym Floor", "Machine 3 — Cardio Room"].map((label, i) => (
-              <div key={i} className="bg-white border border-[#E4E4DE] rounded-lg p-3">
-                <p className="text-xs font-bold text-[#1A1A16] mb-2">{label}</p>
-                <ol className="space-y-1 text-xs text-[#4A4A44]">
-                  <li>1. Menu → COMM. → ADMS</li>
-                  <li>2. Server Address → your domain</li>
-                  <li>3. Port → 443 (HTTPS)</li>
-                  <li>4. Enable ADMS → Save</li>
-                  <li>5. First punch → appears here automatically</li>
-                </ol>
-              </div>
-            ))}
-          </div>
-          <p className="text-xs text-[#7A7A72] mt-3">
-            After each device connects, click its ⚙ icon above to give it a friendly name like "Main Entrance" and set its location.
-          </p>
-        </Card>
+
       </div>
 
       {/* ── Edit Device Modal ─────────────────────────────────────── */}
