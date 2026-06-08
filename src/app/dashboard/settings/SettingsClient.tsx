@@ -20,6 +20,9 @@ import {
   X,
   RefreshCw,
   ChevronDown,
+  Eye,
+  EyeOff,
+  Wand2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -111,6 +114,7 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
   // Add form
   const [addForm, setAddForm] = useState({ email: "", password: "", full_name: "", role: "receptionist" as SystemRole, staff_id: "" });
   const [addErrors, setAddErrors] = useState<Record<string, string>>({});
+  const [showPassword, setShowPassword] = useState(false);
 
   // Edit form
   const [editForm, setEditForm] = useState({ full_name: "", role: "receptionist" as SystemRole, status: "active" as "active" | "inactive" });
@@ -128,6 +132,36 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
   const LOG_PAGE = 50;
 
   const supabase = createClient();
+
+  function getPasswordStrength(pwd: string): { label: string; color: string; width: string; score: number } {
+    if (!pwd) return { label: "", color: "", width: "0%", score: 0 };
+    let score = 0;
+    if (pwd.length >= 8)  score++;
+    if (pwd.length >= 12) score++;
+    if (/[A-Z]/.test(pwd)) score++;
+    if (/[0-9]/.test(pwd)) score++;
+    if (/[^A-Za-z0-9]/.test(pwd)) score++;
+    if (score <= 1) return { label: "Weak",   color: "bg-red-500",    width: "25%",  score };
+    if (score <= 2) return { label: "Fair",   color: "bg-orange-400", width: "50%",  score };
+    if (score <= 3) return { label: "Good",   color: "bg-yellow-400", width: "70%",  score };
+    return              { label: "Strong", color: "bg-green-500",  width: "100%", score };
+  }
+
+  function generatePassword() {
+    const upper  = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+    const lower  = "abcdefghjkmnpqrstuvwxyz";
+    const digits = "23456789";
+    const special = "!@#$%&*";
+    const all = upper + lower + digits + special;
+    let pwd = upper[Math.floor(Math.random() * upper.length)]
+            + lower[Math.floor(Math.random() * lower.length)]
+            + digits[Math.floor(Math.random() * digits.length)]
+            + special[Math.floor(Math.random() * special.length)];
+    for (let i = 0; i < 8; i++) pwd += all[Math.floor(Math.random() * all.length)];
+    const shuffled = pwd.split("").sort(() => Math.random() - 0.5).join("");
+    setAddForm((f) => ({ ...f, password: shuffled }));
+    setShowPassword(true);
+  }
 
   const loadUsers = useCallback(async () => {
     setUsersLoading(true);
@@ -602,7 +636,7 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
       {/* ═══ ADD USER MODAL ═══ */}
       <Modal
         open={showAddModal}
-        onClose={() => { setShowAddModal(false); setAddErrors({}); }}
+        onClose={() => { setShowAddModal(false); setAddErrors({}); setShowPassword(false); }}
         title="Add System User"
       >
         <div className="space-y-4">
@@ -621,15 +655,61 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
             onChange={(e) => setAddForm((f) => ({ ...f, email: e.target.value }))}
             error={addErrors.email}
           />
-          <Input
-            label="Password"
-            type="password"
-            required
-            placeholder="Min 8 characters"
-            value={addForm.password}
-            onChange={(e) => setAddForm((f) => ({ ...f, password: e.target.value }))}
-            error={addErrors.password}
-          />
+          {/* Password field */}
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium text-[#1A1A16]">
+                Password <span className="text-[#F06418]">*</span>
+              </label>
+              <button
+                type="button"
+                onClick={generatePassword}
+                className="flex items-center gap-1 text-xs text-[#F06418] hover:text-[#C04E10] font-medium transition-colors"
+              >
+                <Wand2 className="w-3 h-3" /> Auto-generate
+              </button>
+            </div>
+            <div className="relative">
+              <input
+                type={showPassword ? "text" : "password"}
+                placeholder="Min 8 characters"
+                value={addForm.password}
+                onChange={(e) => setAddForm((f) => ({ ...f, password: e.target.value }))}
+                className={`w-full px-3 py-2 pr-10 text-sm rounded-lg border bg-white text-[#1A1A16] placeholder-[#7A7A72] focus:outline-none focus:ring-2 transition-colors ${
+                  addErrors.password
+                    ? "border-red-400 focus:ring-red-400"
+                    : "border-[#E4E4DE] focus:ring-[#F06418] focus:border-[#F06418]"
+                }`}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#7A7A72] hover:text-[#1A1A16] transition-colors"
+              >
+                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            {/* Strength meter */}
+            {addForm.password && (() => {
+              const strength = getPasswordStrength(addForm.password);
+              return (
+                <div className="space-y-1">
+                  <div className="h-1 w-full bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${strength.color}`}
+                      style={{ width: strength.width }}
+                    />
+                  </div>
+                  <p className={`text-xs font-medium ${
+                    strength.score <= 1 ? "text-red-500" :
+                    strength.score <= 2 ? "text-orange-400" :
+                    strength.score <= 3 ? "text-yellow-500" : "text-green-600"
+                  }`}>{strength.label} password</p>
+                </div>
+              );
+            })()}
+            {addErrors.password && <p className="text-xs text-red-600">{addErrors.password}</p>}
+          </div>
           <div>
             <label className="block text-sm font-medium text-[#1A1A16] mb-1">
               Role <span className="text-red-500">*</span>

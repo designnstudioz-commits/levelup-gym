@@ -64,7 +64,7 @@ export function Modal({ open, onClose, title, children, size = "md", className }
             </button>
           </div>
         )}
-        <div className="overflow-y-auto flex-1">{children}</div>
+        <div className="overflow-y-auto flex-1 p-5">{children}</div>
       </div>
     </div>
   );
