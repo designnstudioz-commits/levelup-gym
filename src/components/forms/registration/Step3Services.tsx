@@ -9,6 +9,7 @@ import type { Package, StaffMember, SystemUser } from "@/types/database";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { addMonths, format } from "date-fns";
+import { ChevronDown, ChevronUp, Info } from "lucide-react";
 
 interface Step3Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -17,18 +18,19 @@ interface Step3Props {
 }
 
 const SERVICES = [
-  { id: "Gym", label: "Gym", icon: "🏋️" },
-  { id: "Cardio", label: "Cardio", icon: "🚴" },
-  { id: "Personal Training", label: "Personal Training", icon: "👤" },
-  { id: "CrossFit", label: "CrossFit", icon: "⚡" },
-  { id: "MMA", label: "MMA", icon: "🥊" },
-  { id: "Table Tennis", label: "Table Tennis", icon: "🏓" },
-  { id: "Zumba", label: "Zumba", icon: "💃" },
-  { id: "Hybrid Workout", label: "Hybrid Workout", icon: "🔥" },
-  { id: "METCON", label: "METCON", icon: "⏱️" },
-  { id: "Nutritionist", label: "Nutritionist", icon: "🥗" },
-  { id: "Paid Locker", label: "Paid Locker", icon: "🔒" },
-  { id: "Shower Facility", label: "Shower", icon: "🚿" },
+  { id: "Gym",              label: "Gym",              icon: "🏋️" },
+  { id: "Cardio",           label: "Cardio",           icon: "🚴" },
+  { id: "Personal Training",label: "Personal Training",icon: "👤" },
+  { id: "CrossFit",         label: "CrossFit",         icon: "⚡" },
+  { id: "MMA",              label: "MMA",              icon: "🥊" },
+  { id: "Zumba",            label: "Zumba",            icon: "💃" },
+  { id: "Table Tennis",     label: "Table Tennis",     icon: "🏓" },
+  { id: "Hybrid Workout",   label: "Hybrid Workout",   icon: "🔥" },
+  { id: "METCON",           label: "METCON",           icon: "⏱️" },
+  { id: "Nutritionist",     label: "Nutritionist",     icon: "🥗" },
+  { id: "Physiotherapy",    label: "Physiotherapy",    icon: "🩺" },
+  { id: "Paid Locker",      label: "Paid Locker",      icon: "🔒" },
+  { id: "Shower Facility",  label: "Shower",           icon: "🚿" },
 ];
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
@@ -37,14 +39,21 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const { register, watch, setValue, formState: { errors } } = form;
   const [packages, setPackages] = useState<Package[]>([]);
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
+  const [nutritionists, setNutritionists] = useState<StaffMember[]>([]);
+  const [showPricing, setShowPricing] = useState(false);
 
   const selectedServices = watch("services_interested") ?? [];
   const joiningDate = watch("joining_date");
   const packageId = watch("package_id");
 
+  const wantsTraining    = selectedServices.includes("Personal Training");
+  const wantsNutritionist = selectedServices.includes("Nutritionist");
+  const wantsPhysio      = selectedServices.includes("Physiotherapy");
+
   useEffect(() => {
-    if (mode !== "staff") return;
     const supabase = createClient();
+
+    // Always load packages (used for pricing guide in public mode + staff selection)
     supabase
       .from("packages")
       .select("*")
@@ -52,6 +61,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
       .is("deleted_at", null)
       .then(({ data }) => setPackages(data ?? []));
 
+    // Load trainers (for preference in public mode + assignment in staff mode)
     supabase
       .from("staff_members")
       .select("*")
@@ -60,7 +70,15 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
       .is("deleted_at", null)
       .then(({ data }) => setTrainers(data ?? []));
 
-    if (currentUser) {
+    supabase
+      .from("staff_members")
+      .select("*")
+      .eq("role", "Nutritionist")
+      .eq("status", "active")
+      .is("deleted_at", null)
+      .then(({ data }) => setNutritionists(data ?? []));
+
+    if (mode === "staff" && currentUser) {
       setValue("handled_by", currentUser.id);
     }
   }, [mode, currentUser, setValue]);
@@ -107,7 +125,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                 type="button"
                 onClick={() => toggleService(service.id)}
                 className={cn(
-                  "flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all",
+                  "flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left",
                   selected
                     ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]"
                     : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:bg-[#FEF0E8]"
@@ -119,7 +137,89 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
             );
           })}
         </div>
+
+        {/* Admission fee note */}
+        <div className="mt-3 flex items-start gap-2 px-3 py-2.5 bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg">
+          <Info className="w-3.5 h-3.5 text-[#F06418] flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-[#7A7A72]">
+            A one-time <span className="font-semibold text-[#1A1A16]">Admission / Registration Fee of Rs 15,000</span> applies to all new memberships, in addition to the monthly package fee.
+          </p>
+        </div>
+
+        {/* Pricing guide — public mode */}
+        {mode === "public" && packages.length > 0 && (
+          <div className="mt-3 border border-[#E4E4DE] rounded-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setShowPricing((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-2.5 bg-[#F8F8F6] text-sm font-medium text-[#4A4A44] hover:bg-[#FEF0E8] transition-colors"
+            >
+              <span>View package pricing</span>
+              {showPricing ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+            {showPricing && (
+              <div className="divide-y divide-[#E4E4DE]">
+                {packages.map((pkg) => (
+                  <div key={pkg.id} className="flex items-center justify-between px-4 py-2.5">
+                    <span className="text-sm text-[#1A1A16]">{pkg.name}</span>
+                    <span className="text-sm font-semibold text-[#F06418]">
+                      Rs {pkg.monthly_fee.toLocaleString()}<span className="text-[#7A7A72] font-normal text-xs">/mo</span>
+                    </span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between px-4 py-2.5 bg-[#F8F8F6]">
+                  <span className="text-xs text-[#7A7A72]">+ One-time admission fee</span>
+                  <span className="text-sm font-semibold text-[#1A1A16]">Rs 15,000</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      {/* Trainer preference — public mode, shown when Personal Training selected */}
+      {mode === "public" && wantsTraining && trainers.length > 0 && (
+        <div className="bg-[#F8F8F6] border border-[#E4E4DE] rounded-xl p-4 space-y-3">
+          <h4 className="text-sm font-semibold text-[#1A1A16]">Personal Training — Trainer Preference</h4>
+          <p className="text-xs text-[#7A7A72]">Select a preferred trainer. Final assignment is confirmed by staff, and training charges will be discussed at enrollment.</p>
+          <Select
+            label="Preferred Trainer"
+            placeholder="No preference"
+            {...register("trainer_preference")}
+          >
+            {trainers.map((t) => (
+              <option key={t.id} value={t.id}>{t.full_name}</option>
+            ))}
+          </Select>
+        </div>
+      )}
+
+      {/* Nutritionist preference — public mode */}
+      {mode === "public" && wantsNutritionist && nutritionists.length > 0 && (
+        <div className="bg-[#F8F8F6] border border-[#E4E4DE] rounded-xl p-4 space-y-3">
+          <h4 className="text-sm font-semibold text-[#1A1A16]">Nutritionist — Preference</h4>
+          <p className="text-xs text-[#7A7A72]">Select a preferred nutritionist. Final assignment and fees are confirmed at enrollment.</p>
+          <Select
+            label="Preferred Nutritionist"
+            placeholder="No preference"
+            {...register("nutritionist_preference")}
+          >
+            {nutritionists.map((n) => (
+              <option key={n.id} value={n.id}>{n.full_name}</option>
+            ))}
+          </Select>
+        </div>
+      )}
+
+      {/* Physiotherapy note */}
+      {mode === "public" && wantsPhysio && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-blue-50 border border-blue-100 rounded-lg">
+          <Info className="w-3.5 h-3.5 text-blue-500 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-blue-700">
+            Our physiotherapy service is offered by appointment. Our team will contact you to schedule your first session after your membership is approved.
+          </p>
+        </div>
+      )}
 
       {/* Additional notes */}
       <div>
@@ -128,7 +228,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
         </label>
         <textarea
           rows={3}
-          placeholder="Any special requirements or goals..."
+          placeholder="Any special requirements or fitness goals..."
           className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white text-[#1A1A16] placeholder-[#7A7A72] focus:outline-none focus:ring-2 focus:ring-[#F06418] resize-none"
           {...register("notes")}
         />
@@ -151,12 +251,10 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                 {packages.map((pkg) => (
                   <option key={pkg.id} value={pkg.id}>
                     {pkg.name} — Rs {pkg.monthly_fee.toLocaleString()}/mo
-                    {(pkg as any).training_sessions > 0 ? ` · ${(pkg as any).training_sessions} PT sessions` : ""}
                   </option>
                 ))}
               </Select>
 
-              {/* Package preview card */}
               {packageId && (() => {
                 const pkg = packages.find((p) => p.id === packageId);
                 if (!pkg) return null;

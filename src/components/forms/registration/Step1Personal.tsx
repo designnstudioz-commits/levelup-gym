@@ -71,6 +71,7 @@ export function Step1Personal({ form }: Step1Props) {
   }
 
   const age = watch("age");
+  const today = new Date().toISOString().split("T")[0];
 
   return (
     <div className="space-y-6">
@@ -130,6 +131,9 @@ export function Step1Personal({ form }: Step1Props) {
           <Input
             label="Date of Birth"
             type="date"
+            min="1940-01-01"
+            max={today}
+            error={errors.dob?.message}
             {...register("dob", { onChange: handleDobChange })}
           />
         </div>
@@ -185,6 +189,7 @@ export function Step1Personal({ form }: Step1Props) {
             label="WhatsApp Number"
             type="tel"
             placeholder="Same as phone"
+            error={errors.whatsapp?.message}
             {...register("whatsapp")}
           />
           <Input
