@@ -17,10 +17,10 @@ import {
   MessageSquare,
   Settings,
   LogOut,
-  Dumbbell,
   UserPlus,
   UserCheck,
 } from "lucide-react";
+import type { SystemRole } from "@/types/database";
 
 interface NavItem {
   label: string;
@@ -33,14 +33,34 @@ interface NavItem {
 interface SidebarProps {
   pendingSubmissions?: number;
   userEmail?: string;
+  userName?: string;
   userRole?: string;
 }
 
-export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: SidebarProps) {
+const NAV_ROLES: Record<string, SystemRole[]> = {
+  "/dashboard":             ["owner", "manager", "receptionist", "viewer"],
+  "/dashboard/members":     ["owner", "manager", "receptionist", "viewer"],
+  "/dashboard/submissions": ["owner", "manager", "receptionist"],
+  "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],
+  "/dashboard/fees":        ["owner", "manager", "receptionist"],
+  "/dashboard/packages":    ["owner", "manager"],
+  "/dashboard/staff":       ["owner", "manager"],
+  "/dashboard/reports":     ["owner", "manager"],
+  "/dashboard/sms":         ["owner", "manager", "receptionist"],
+  "/dashboard/settings":    ["owner"],
+};
+
+function canAccess(href: string, role: string): boolean {
+  const allowed = NAV_ROLES[href];
+  if (!allowed) return true;
+  return allowed.includes(role as SystemRole);
+}
+
+export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
 
-  const navItems: NavItem[] = [
+  const allNavItems: NavItem[] = [
     {
       label: "Dashboard",
       href: "/dashboard",
@@ -51,8 +71,8 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
       href: "/dashboard/members",
       icon: Users,
       children: [
-        { label: "All Members", href: "/dashboard/members", icon: UserCheck },
-        { label: "Add Member", href: "/dashboard/register", icon: UserPlus },
+        { label: "All Members",   href: "/dashboard/members",       icon: UserCheck },
+        { label: "Add Member",    href: "/dashboard/register",      icon: UserPlus },
         { label: "Daily Members", href: "/dashboard/daily-members", icon: Users },
       ],
     },
@@ -82,7 +102,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
       href: "/dashboard/staff",
       icon: UserCog,
       children: [
-        { label: "All Staff", href: "/dashboard/staff", icon: UserCog },
+        { label: "All Staff", href: "/dashboard/staff",       icon: UserCog  },
         { label: "Add Staff", href: "/dashboard/staff?add=1", icon: UserPlus },
       ],
     },
@@ -103,6 +123,8 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
     },
   ];
 
+  const navItems = allNavItems.filter((item) => canAccess(item.href, userRole ?? "viewer"));
+
   async function handleLogout() {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -114,6 +136,9 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
     if (href === "/dashboard") return pathname === "/dashboard";
     return pathname.startsWith(href);
   }
+
+  const displayName = userName ?? userEmail ?? "Staff";
+  const avatarChar = (userName ?? userEmail ?? "S").charAt(0).toUpperCase();
 
   return (
     <aside className="w-60 bg-[#1A1A1A] flex flex-col h-full flex-shrink-0">
@@ -136,7 +161,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
 
           const childRoutes: Record<string, string[]> = {
             "/dashboard/members": ["/dashboard/members", "/dashboard/register", "/dashboard/daily-members"],
-            "/dashboard/staff": ["/dashboard/staff"],
+            "/dashboard/staff":   ["/dashboard/staff"],
           };
           const shouldExpand = item.children && Object.entries(childRoutes).some(
             ([base, routes]) => item.href === base && routes.some((r) => pathname.startsWith(r))
@@ -208,12 +233,10 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userRole }: Sidebar
       <div className="px-3 py-4 border-t border-white/10">
         <div className="flex items-center gap-2.5 px-3 py-2 mb-1">
           <div className="w-7 h-7 bg-[#F06418] rounded-full flex items-center justify-center flex-shrink-0">
-            <span className="text-white text-xs font-bold">
-              {userEmail?.charAt(0).toUpperCase() ?? "U"}
-            </span>
+            <span className="text-white text-xs font-bold">{avatarChar}</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white text-xs font-medium truncate">{userEmail ?? "Staff"}</p>
+            <p className="text-white text-xs font-medium truncate">{displayName}</p>
             <p className="text-white/40 text-[10px] capitalize">{userRole ?? "—"}</p>
           </div>
         </div>

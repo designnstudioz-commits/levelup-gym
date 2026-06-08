@@ -15,6 +15,7 @@ import {
   TrendingUp, ChevronRight,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -69,6 +70,8 @@ function groupByMonth(rows: { date: string; amount?: number; count?: number }[],
 
 // ── Main Page ────────────────────────────────────────────────────────
 export default function ReportsPage() {
+  useRoleGuard(["owner", "manager"]);
+
   const [reportType, setReportType] = useState<ReportType>("overview");
   const [period, setPeriod]         = useState<Period>("monthly");
   const [customFrom, setCustomFrom] = useState("");

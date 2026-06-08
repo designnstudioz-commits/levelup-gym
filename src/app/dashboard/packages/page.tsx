@@ -8,6 +8,7 @@ import {
   SlidersHorizontal, X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -84,6 +85,8 @@ const emptyForm = {
 };
 
 export default function PackagesPage() {
+  useRoleGuard(["owner", "manager"]);
+
   const [packages, setPackages]         = useState<PackageWithCount[]>([]);
   const [loading, setLoading]           = useState(true);
   const [viewMode, setViewMode]         = useState<ViewMode>("grid");

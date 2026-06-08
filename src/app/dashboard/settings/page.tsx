@@ -1,16 +1,41 @@
-import { Settings } from "lucide-react";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
-import { ComingSoon } from "@/components/ui/ComingSoon";
+import { SettingsClient } from "./SettingsClient";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/login");
+
+  const { data: systemUser } = await supabase
+    .from("system_users")
+    .select("id, role, full_name")
+    .eq("email", user.email!)
+    .eq("status", "active")
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (!systemUser || systemUser.role !== "owner") {
+    redirect("/dashboard");
+  }
+
+  const { data: staffMembers } = await supabase
+    .from("staff_members")
+    .select("id, full_name, role")
+    .eq("status", "active")
+    .is("deleted_at", null)
+    .order("full_name");
+
   return (
     <div className="flex flex-col flex-1">
-      <DashboardHeader title="Settings" subtitle="System configuration and user management" />
-      <ComingSoon
+      <DashboardHeader
         title="Settings"
-        icon={Settings}
-        description="Manage system users, roles, permissions, gym profile, and integration settings."
-        phase="Phase 2"
+        subtitle="User accounts, role permissions, and activity logs"
+      />
+      <SettingsClient
+        currentUserId={systemUser.id}
+        staffMembers={staffMembers ?? []}
       />
     </div>
   );

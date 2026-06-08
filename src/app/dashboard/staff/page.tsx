@@ -8,6 +8,7 @@ import {
   Phone, Mail, ArrowRight, X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -51,6 +52,8 @@ const defaultForm = {
 };
 
 export default function StaffPage() {
+  useRoleGuard(["owner", "manager"]);
+
   const router = useRouter();
   const searchParams = useSearchParams();
   const [staff, setStaff] = useState<StaffWithCount[]>([]);
