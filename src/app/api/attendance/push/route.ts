@@ -33,10 +33,11 @@ export async function GET(req: NextRequest) {
     console.error("[ADMS Heartbeat DB Error]", e);
   }
 
-  return new NextResponse("OK", {
-    status: 200,
-    headers: { "Content-Type": "text/plain" },
-  });
+  // Tell the device to push all attendance logs and user info
+  return new NextResponse(
+    "GET ATTLOG STAMP=9999999999\nGET OPERLOG STAMP=9999999999\n",
+    { status: 200, headers: { "Content-Type": "text/plain" } }
+  );
 }
 
 // ZKTeco ADMS attendance push
