@@ -28,6 +28,7 @@ export default function MembersPage() {
   const [members, setMembers]   = useState<MemberWithJoins[]>([]);
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
+  const [paidThisMonth, setPaidThisMonth] = useState<Set<string>>(new Set());
 
   // Filters
   const [search, setSearch]             = useState("");
@@ -35,10 +36,15 @@ export default function MembersPage() {
   const [genderFilter, setGenderFilter] = useState<"all" | "Male" | "Female">("all");
   const [sortKey, setSortKey]           = useState<SortKey>("newest");
   const [expiringOnly, setExpiringOnly] = useState(false);
+  const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+
     let query = supabase
       .from("members")
       .select("*, packages(name, monthly_fee, color), trainer:staff_members!members_trainer_id_fkey(full_name)")
@@ -47,8 +53,18 @@ export default function MembersPage() {
     if (statusFilter !== "all") query = query.eq("status", statusFilter);
     if (genderFilter !== "all") query = query.eq("gender", genderFilter);
 
-    const { data, error } = await query;
+    const [{ data, error }, { data: feeData }] = await Promise.all([
+      query,
+      supabase
+        .from("fee_payments")
+        .select("member_id")
+        .is("deleted_at", null)
+        .gte("payment_date", monthStart)
+        .lte("payment_date", monthEnd),
+    ]);
+
     if (!error) setMembers(data ?? []);
+    setPaidThisMonth(new Set((feeData ?? []).map((f: any) => f.member_id)));
     setLoading(false);
   }, [statusFilter, genderFilter]);
 
@@ -60,6 +76,8 @@ export default function MembersPage() {
         const days = daysUntilExpiry(m.expiry_date);
         if (days === null || days > 30 || days < 0) return false;
       }
+      if (feeFilter === "paid"    && !paidThisMonth.has(m.id)) return false;
+      if (feeFilter === "pending" &&  paidThisMonth.has(m.id)) return false;
       if (!search) return true;
       const q = search.toLowerCase();
       return (
@@ -78,8 +96,8 @@ export default function MembersPage() {
       return 0;
     });
 
-  const hasActiveFilters = genderFilter !== "all" || expiringOnly || !!search;
-  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); }
+  const hasActiveFilters = genderFilter !== "all" || expiringOnly || !!search || feeFilter !== "all";
+  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setFeeFilter("all"); }
 
   const STATUS_TABS: { key: StatusFilter; label: string }[] = [
     { key: "active", label: "Active" },
@@ -150,6 +168,23 @@ export default function MembersPage() {
               Expiring in 30 days
             </label>
 
+            {/* Fee status filter */}
+            <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
+              {([["all", "All Fees"], ["paid", "Paid"], ["pending", "Pending"]] as const).map(([key, label]) => (
+                <button key={key} onClick={() => setFeeFilter(key)}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    feeFilter === key
+                      ? key === "paid" ? "bg-green-600 text-white"
+                        : key === "pending" ? "bg-red-500 text-white"
+                        : "bg-[#1A1A1A] text-white"
+                      : "text-[#4A4A44] hover:bg-white"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
             {hasActiveFilters && (
               <button onClick={clearFilters} className="text-xs text-red-600 hover:underline flex items-center gap-1">
                 <X className="w-3 h-3" /> Clear filters
@@ -175,11 +210,11 @@ export default function MembersPage() {
             <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
           </div>
         ) : viewMode === "list" ? (
-          <MembersTable members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} />
+          <MembersTable members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} paidThisMonth={paidThisMonth} />
         ) : viewMode === "grid" ? (
-          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} />
+          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} paidThisMonth={paidThisMonth} />
         ) : (
-          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} />
+          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} paidThisMonth={paidThisMonth} />
         )}
       </div>
     </div>
@@ -187,7 +222,7 @@ export default function MembersPage() {
 }
 
 // ── List (Table) View ────────────────────────────────────────────────
-function MembersTable({ members, onNavigate }: { members: MemberWithJoins[]; onNavigate: (id: string) => void }) {
+function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; paidThisMonth: Set<string> }) {
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
       <div className="overflow-x-auto">
@@ -200,6 +235,7 @@ function MembersTable({ members, onNavigate }: { members: MemberWithJoins[]; onN
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Trainer</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Expiry</th>
+              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Fee</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Status</th>
               <th className="px-5 py-3" />
             </tr>
@@ -208,6 +244,7 @@ function MembersTable({ members, onNavigate }: { members: MemberWithJoins[]; onN
             {members.map((m) => {
               const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
               const pkgColor = (m as any).packages?.color ?? "#F06418";
+              const feePaid = paidThisMonth.has(m.id);
               return (
                 <tr key={m.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onNavigate(m.id)}>
                   <td className="px-5 py-3">
@@ -235,6 +272,12 @@ function MembersTable({ members, onNavigate }: { members: MemberWithJoins[]; onN
                   <td className="px-4 py-3 text-sm text-[#4A4A44]">{(m as any).trainer?.full_name ?? <span className="text-[#7A7A72]">—</span>}</td>
                   <td className="px-4 py-3 text-sm text-[#4A4A44]">{m.phone}</td>
                   <td className="px-4 py-3 text-sm text-[#4A4A44]">{m.expiry_date ? formatDate(m.expiry_date) : "—"}</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${feePaid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${feePaid ? "bg-green-500" : "bg-red-500"}`} />
+                      {feePaid ? "Paid" : "Pending"}
+                    </span>
+                  </td>
                   <td className="px-4 py-3"><Badge variant={variant}>{label}</Badge></td>
                   <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                     <Link href={`/dashboard/members/${m.id}`}>
@@ -254,7 +297,7 @@ function MembersTable({ members, onNavigate }: { members: MemberWithJoins[]; onN
 }
 
 // ── Grid / Compact View ─────────────────────────────────────────────
-function MembersGrid({ members, onNavigate, compact }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean }) {
+function MembersGrid({ members, onNavigate, compact, paidThisMonth }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; paidThisMonth: Set<string> }) {
   const cols = compact
     ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
     : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
@@ -265,6 +308,7 @@ function MembersGrid({ members, onNavigate, compact }: { members: MemberWithJoin
         const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
         const days = daysUntilExpiry(m.expiry_date);
         const pkgColor = (m as any).packages?.color ?? "#F06418";
+        const feePaid = paidThisMonth.has(m.id);
 
         return (
           <button key={m.id} onClick={() => onNavigate(m.id)}
@@ -307,8 +351,14 @@ function MembersGrid({ members, onNavigate, compact }: { members: MemberWithJoin
                 </>
               )}
 
-              <div className="flex items-center justify-between">
-                <Badge variant={variant}>{label}</Badge>
+              <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                <div className="flex items-center gap-1.5">
+                  <Badge variant={variant}>{label}</Badge>
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${feePaid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                    <span className={`w-1.5 h-1.5 rounded-full ${feePaid ? "bg-green-500" : "bg-red-500"}`} />
+                    {feePaid ? "Paid" : "Pending"}
+                  </span>
+                </div>
                 {!compact && <ArrowRight className="w-3.5 h-3.5 text-[#7A7A72] group-hover:text-[#F06418] transition-colors" />}
               </div>
             </div>

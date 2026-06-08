@@ -2,7 +2,8 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate, formatPKR } from "@/lib/utils";
-import { Printer, ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
+import { PrintButton } from "./PrintButton";
 
 export default async function ReceiptPage({ params }: { params: { id: string } }) {
   const supabase = await createClient();
@@ -65,12 +66,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
             <Link href="/dashboard/fees" className="flex items-center gap-1.5 text-sm text-[#4A4A44] hover:text-[#F06418] transition-colors">
               <ArrowLeft className="w-4 h-4" /> Back to Fees
             </Link>
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-2 px-4 py-2 bg-[#F06418] text-white rounded-lg text-sm font-semibold hover:bg-[#C04E10] transition-colors"
-            >
-              <Printer className="w-4 h-4" /> Print Receipt
-            </button>
+            <PrintButton />
           </div>
 
           {/* Receipt card */}
@@ -185,12 +181,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
 
           {/* Second print button at bottom */}
           <div className="no-print mt-4 text-center">
-            <button
-              onClick={() => window.print()}
-              className="text-sm text-[#7A7A72] hover:text-[#F06418] transition-colors underline"
-            >
-              Print or Save as PDF
-            </button>
+            <PrintButton variant="link" />
           </div>
         </div>
       </div>

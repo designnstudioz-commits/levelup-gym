@@ -80,6 +80,7 @@ export default function FeesPage() {
   const [discountType, setDiscountType]       = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue]     = useState("");
   const [collectSaving, setCollectSaving]     = useState(false);
+  const [alreadyPaidWarning, setAlreadyPaidWarning] = useState(false);
 
   // ── Discount computed ───────────────────────────────────────────
   const originalAmount = Number(feeAmount) || 0;
@@ -147,7 +148,7 @@ export default function FeesPage() {
     );
   }, [memberSearch, members]);
 
-  function selectMember(m: MemberWithPackage) {
+  async function selectMember(m: MemberWithPackage) {
     setSelectedMember(m);
     setMemberSearch("");
     setMemberResults([]);
@@ -155,6 +156,18 @@ export default function FeesPage() {
     setFeeType("membership");
     setDiscountType("none");
     setDiscountValue("");
+    // Check if already paid membership this month
+    const now = new Date();
+    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+    const supabase = createClient();
+    const { count } = await supabase
+      .from("fee_payments")
+      .select("*", { count: "exact", head: true })
+      .eq("member_id", m.id)
+      .eq("payment_type", "membership")
+      .gte("payment_date", monthStart)
+      .is("deleted_at", null);
+    setAlreadyPaidWarning((count ?? 0) > 0);
   }
 
   // ── Quick Collect submit ─────────────────────────────────────────
@@ -274,7 +287,7 @@ export default function FeesPage() {
       </div>
 
       {/* ── Quick Collect Modal ──────────────────────────────────── */}
-      <Modal open={collectModal} onClose={() => { setCollectModal(false); setSelectedMember(null); setMemberSearch(""); }} title="Collect Fee Payment" size="md">
+      <Modal open={collectModal} onClose={() => { setCollectModal(false); setSelectedMember(null); setMemberSearch(""); setAlreadyPaidWarning(false); }} title="Collect Fee Payment" size="md">
         <div className="p-5 space-y-4">
 
           {/* Member search */}
@@ -330,10 +343,21 @@ export default function FeesPage() {
                 </button>
               </div>
 
+              {/* Already paid this month warning */}
+              {alreadyPaidWarning && feeType === "membership" && (
+                <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 mb-1">
+                  <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
+                  <div>
+                    <p className="text-xs font-semibold text-amber-800">Already paid this month</p>
+                    <p className="text-xs text-amber-700 mt-0.5">This member has a membership payment recorded for the current month. You can still proceed if this is a correction or advance payment.</p>
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3 mb-4">
                 <Input label="Amount (Rs)" type="number" required
                   value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} />
-                <Select label="Payment Type" value={feeType} onChange={(e) => setFeeType(e.target.value)}>
+                <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); if (e.target.value !== "membership") setAlreadyPaidWarning(false); }}>
                   <option value="membership">Monthly Membership</option>
                   <option value="admission">Admission Fee</option>
                   <option value="trainer">Trainer Fee</option>
@@ -458,11 +482,9 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       <span className="text-sm font-bold text-green-700">{formatPKR(p.amount)}</span>
-                      {p.receipt_no && (
-                        <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                          <Receipt className="w-3.5 h-3.5 text-[#7A7A72] hover:text-[#F06418] transition-colors" />
-                        </Link>
-                      )}
+                      <Link href={`/dashboard/fees/receipt/${p.id}`}>
+                        <Receipt className="w-3.5 h-3.5 text-[#7A7A72] hover:text-[#F06418] transition-colors" />
+                      </Link>
                     </div>
                   </div>
                 );
@@ -628,13 +650,11 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                     <td className="px-4 py-3 text-sm text-[#4A4A44]">{formatDate(p.payment_date)}</td>
                     <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[160px] truncate">{p.note ?? "—"}</td>
                     <td className="px-5 py-3">
-                      {p.receipt_no && (
-                        <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                          <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
-                            <Receipt className="w-4 h-4" />
-                          </button>
-                        </Link>
-                      )}
+                      <Link href={`/dashboard/fees/receipt/${p.id}`}>
+                        <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
+                          <Receipt className="w-4 h-4" />
+                        </button>
+                      </Link>
                     </td>
                   </tr>
                 );

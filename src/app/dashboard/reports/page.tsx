@@ -95,11 +95,11 @@ export default function ReportsPage() {
       { data: expenses },
       { data: dailyMembers },
     ] = await Promise.all([
-      supabase.from("fee_payments").select("id, amount, payment_type, payment_method, payment_date, member_id").is("deleted_at", null).gte("payment_date", from).lte("payment_date", to),
+      supabase.from("fee_payments").select("id, amount, payment_type, payment_method, payment_date, member_id, commission_staff_id, commission_rate, commission_amount").is("deleted_at", null).gte("payment_date", from).lte("payment_date", to),
       supabase.from("members").select("id, full_name, membership_no, gender, status, joining_date, expiry_date, package_id, monthly_fee, packages(name, color), trainer_id").is("deleted_at", null),
       supabase.from("attendances").select("id, punch_time, punch_type, member_id, device_id").gte("punch_time", `${from}T00:00:00+05:00`).lte("punch_time", `${to}T23:59:59+05:00`),
       supabase.from("submissions").select("id, status, referral_source, created_at, reviewed_at, gender").is("deleted_at", null).gte("created_at", `${from}T00:00:00`).lte("created_at", `${to}T23:59:59`),
-      supabase.from("staff_members").select("id, full_name, role, salary").eq("role", "Trainer").eq("status", "active").is("deleted_at", null),
+      supabase.from("staff_members").select("id, full_name, role, salary").in("role", ["Trainer", "Nutritionist", "Other"]).eq("status", "active").is("deleted_at", null),
       supabase.from("expenses").select("id, amount, expense_date, expense_head").is("deleted_at", null).gte("expense_date", from).lte("expense_date", to),
       supabase.from("daily_members").select("id, fee_paid, visit_date, gender, converted_to_member_id").is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
     ]);
@@ -872,22 +872,45 @@ function SubmissionsReport({ data }: { data: any }) {
 function TrainersReport({ data }: { data: any }) {
   const { trainers = [], members = [], payments = [], trainerMemberCounts = {} } = data;
 
-  const trainerData = trainers.map((t: any) => ({
+  const trainerOnly = trainers.filter((t: any) => t.role === "Trainer");
+
+  const trainerData = trainerOnly.map((t: any) => ({
+    id: t.id,
     name: t.full_name,
+    role: t.role,
     members: trainerMemberCounts[t.id] || 0,
     salary: t.salary ?? 0,
     fees: payments.filter((p: any) => {
       const m = members.find((mem: any) => mem.id === p.member_id);
       return m?.trainer_id === t.id && p.payment_type === "trainer";
     }).reduce((s: number, p: any) => s + (p.amount ?? 0), 0),
+    commission: payments.filter((p: any) => p.commission_staff_id === t.id)
+      .reduce((s: number, p: any) => s + (p.commission_amount ?? 0), 0),
   })).sort((a: any, b: any) => b.members - a.members);
+
+  // Commission summary for all staff with any commission in the period
+  const commissionByStaff: Record<string, { name: string; role: string; total: number; count: number }> = {};
+  for (const p of payments) {
+    if (!p.commission_staff_id || !p.commission_amount) continue;
+    const staff = trainers.find((t: any) => t.id === p.commission_staff_id);
+    const staffName = staff?.full_name ?? "Unknown";
+    const staffRole = staff?.role ?? "—";
+    if (!commissionByStaff[p.commission_staff_id]) {
+      commissionByStaff[p.commission_staff_id] = { name: staffName, role: staffRole, total: 0, count: 0 };
+    }
+    commissionByStaff[p.commission_staff_id].total += p.commission_amount ?? 0;
+    commissionByStaff[p.commission_staff_id].count += 1;
+  }
+  const commissionRows = Object.values(commissionByStaff).sort((a, b) => b.total - a.total);
+  const totalCommission = commissionRows.reduce((s, r) => s + r.total, 0);
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 report-section">
-        <KpiCard label="Total Trainers" value={trainers.length} />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 report-section">
+        <KpiCard label="Total Trainers" value={trainerOnly.length} />
         <KpiCard label="Members in Training" value={Object.values(trainerMemberCounts as Record<string, number>).reduce((s, v) => s + v, 0)} color="#2563EB" />
-        <KpiCard label="Avg Members / Trainer" value={trainers.length > 0 ? Math.round((Object.values(trainerMemberCounts as Record<string, number>).reduce((s, v) => s + v, 0)) / trainers.length) : 0} color="#7C3AED" />
+        <KpiCard label="Avg Members / Trainer" value={trainerOnly.length > 0 ? Math.round((Object.values(trainerMemberCounts as Record<string, number>).reduce((s, v) => s + v, 0)) / trainerOnly.length) : 0} color="#7C3AED" />
+        <KpiCard label="Total Commissions" value={formatPKR(totalCommission)} color="#059669" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
@@ -908,7 +931,7 @@ function TrainersReport({ data }: { data: any }) {
       <ChartCard title="Trainer Summary">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-[#E4E4DE]">
-            {["Trainer", "Members", "Training Fees Collected", "Monthly Salary"].map((h) => (
+            {["Trainer", "Members", "Training Fees Collected", "Commission Earned", "Monthly Salary"].map((h) => (
               <th key={h} className="text-left text-xs font-semibold text-[#7A7A72] pb-2 pr-4">{h}</th>
             ))}
           </tr></thead>
@@ -918,12 +941,41 @@ function TrainersReport({ data }: { data: any }) {
                 <td className="py-2 pr-4 font-medium text-[#1A1A16]">{t.name}</td>
                 <td className="py-2 pr-4"><span className="font-bold text-[#F06418]">{t.members}</span></td>
                 <td className="py-2 pr-4 font-medium text-green-700">{formatPKR(t.fees)}</td>
+                <td className="py-2 pr-4 font-medium text-blue-700">{t.commission > 0 ? formatPKR(t.commission) : "—"}</td>
                 <td className="py-2 pr-4 text-[#4A4A44]">{formatPKR(t.salary)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </ChartCard>
+
+      {commissionRows.length > 0 && (
+        <ChartCard title="Commission Breakdown by Staff">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-[#E4E4DE]">
+              {["Staff Member", "Role", "Payments", "Total Commission"].map((h) => (
+                <th key={h} className="text-left text-xs font-semibold text-[#7A7A72] pb-2 pr-4">{h}</th>
+              ))}
+            </tr></thead>
+            <tbody className="divide-y divide-[#F0F0EE]">
+              {commissionRows.map((r) => (
+                <tr key={r.name}>
+                  <td className="py-2 pr-4 font-medium text-[#1A1A16]">{r.name}</td>
+                  <td className="py-2 pr-4">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] font-medium">{r.role}</span>
+                  </td>
+                  <td className="py-2 pr-4 text-[#4A4A44]">{r.count}</td>
+                  <td className="py-2 pr-4 font-bold text-blue-700">{formatPKR(r.total)}</td>
+                </tr>
+              ))}
+              <tr className="border-t-2 border-[#E4E4DE]">
+                <td colSpan={3} className="py-2 pr-4 font-bold text-[#1A1A16]">Total</td>
+                <td className="py-2 font-bold text-blue-700">{formatPKR(totalCommission)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </ChartCard>
+      )}
     </div>
   );
 }

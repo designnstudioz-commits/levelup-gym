@@ -7,7 +7,7 @@ import {
   User, Phone, Mail, MapPin, Calendar, CreditCard, Dumbbell,
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
-  Percent, Minus, Fingerprint,
+  Percent, Minus, Fingerprint, Printer, Share2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -17,7 +17,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, generateReceiptNo } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
 import { addMonths, format } from "date-fns";
@@ -54,6 +54,13 @@ export default function MemberDetailPage() {
   const [feeModal, setFeeModal] = useState(false);
   const [renewModal, setRenewModal] = useState(false);
   const [freezeModal, setFreezeModal] = useState(false);
+  const [receiptModal, setReceiptModal] = useState(false);
+  const [receiptData, setReceiptData] = useState<{
+    memberName: string; memberNo: string; packageName: string;
+    amount: number; originalAmount: number; discountAmount: number;
+    type: string; method: string; date: string; note: string | null;
+    receiptNo: string;
+  } | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Profile edit form
@@ -140,8 +147,12 @@ export default function MemberDetailPage() {
   const [feeNote, setFeeNote] = useState("");
   const [discountType, setDiscountType] = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue] = useState("");
+  const [commissionStaffId, setCommissionStaffId] = useState("");
+  const [commissionRate, setCommissionRate] = useState("");
+  const [allStaff, setAllStaff] = useState<StaffMember[]>([]);
+  const [alreadyPaidWarning, setAlreadyPaidWarning] = useState(false);
 
-  function openFeeModal() {
+  async function openFeeModal() {
     // Pre-fill with package monthly fee (prefer package record, fall back to member field)
     const prefill = (member as any)?.packages?.monthly_fee ?? member?.monthly_fee;
     setFeeAmount(prefill ? String(prefill) : "");
@@ -150,6 +161,22 @@ export default function MemberDetailPage() {
     setFeeNote("");
     setDiscountType("none");
     setDiscountValue("");
+    setCommissionStaffId(member?.trainer_id ?? "");
+    setCommissionRate("");
+    // Check if already paid membership this month
+    if (id) {
+      const supabase = createClient();
+      const now = new Date();
+      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+      const { count } = await supabase
+        .from("fee_payments")
+        .select("*", { count: "exact", head: true })
+        .eq("member_id", id)
+        .eq("payment_type", "membership")
+        .gte("payment_date", monthStart)
+        .is("deleted_at", null);
+      setAlreadyPaidWarning((count ?? 0) > 0);
+    }
     setFeeModal(true);
   }
   const [freezeUntil, setFreezeUntil] = useState("");
@@ -157,7 +184,7 @@ export default function MemberDetailPage() {
 
   const fetchMember = useCallback(async () => {
     const supabase = createClient();
-    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }] = await Promise.all([
+    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }] = await Promise.all([
       supabase
         .from("members")
         .select("*, packages(*), trainer:staff_members!members_trainer_id_fkey(*)")
@@ -166,6 +193,7 @@ export default function MemberDetailPage() {
       supabase.from("packages").select("*").eq("status", "active").is("deleted_at", null),
       supabase.from("staff_members").select("*").eq("role", "Trainer").eq("status", "active").is("deleted_at", null),
       supabase.from("fee_payments").select("*").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).limit(10),
+      supabase.from("staff_members").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active").is("deleted_at", null),
     ]);
 
     if (memberData) {
@@ -178,6 +206,7 @@ export default function MemberDetailPage() {
     setPackages(pkgs ?? []);
     setTrainers(trnrs ?? []);
     setPayments(pays ?? []);
+    setAllStaff((allStaffData as StaffMember[]) ?? []);
     setLoading(false);
   }, [id]);
 
@@ -276,6 +305,13 @@ export default function MemberDetailPage() {
       ? Math.round((discountAmount / originalAmount) * 100)
       : 0;
 
+  // Commission computed values (must be after finalAmount)
+  const COMMISSION_TYPES = ["trainer", "nutritionist", "physiotherapy"];
+  const showCommission = COMMISSION_TYPES.includes(feeType);
+  const commissionAmount = showCommission && commissionRate
+    ? Math.round(finalAmount * (Number(commissionRate) / 100))
+    : 0;
+
   async function recordFee() {
     if (!feeAmount || originalAmount <= 0) {
       toast.error("Enter a valid amount");
@@ -289,6 +325,7 @@ export default function MemberDetailPage() {
         ? `Discount: ${formatPKR(discountAmount)} (${discountPercent}% off original ${formatPKR(originalAmount)})`
         : null;
     const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
+    const receiptNo = await generateReceiptNo();
 
     await supabase.from("fee_payments").insert({
       member_id: id,
@@ -296,7 +333,11 @@ export default function MemberDetailPage() {
       payment_type: feeType as any,
       payment_method: feeMethod as any,
       payment_date: new Date().toISOString().split("T")[0],
+      receipt_no: receiptNo,
       note: fullNote,
+      commission_staff_id: showCommission && commissionStaffId ? commissionStaffId : null,
+      commission_rate: showCommission && commissionRate ? Number(commissionRate) : null,
+      commission_amount: showCommission && commissionAmount > 0 ? commissionAmount : null,
     });
     await supabase.from("activity_logs").insert({
       action: "paid_fee",
@@ -305,7 +346,22 @@ export default function MemberDetailPage() {
       description: `${member?.full_name} paid ${formatPKR(finalAmount)} (${feeType})${discountAmount > 0 ? ` — discount ${formatPKR(discountAmount)}` : ""}`,
       metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, type: feeType, method: feeMethod },
     });
-    toast.success(`Fee of ${formatPKR(finalAmount)} recorded${discountAmount > 0 ? ` (${formatPKR(discountAmount)} discount applied)` : ""}`);
+    // Build receipt data and open receipt modal
+    setReceiptData({
+      memberName:     member?.full_name ?? "",
+      memberNo:       member?.membership_no ?? "",
+      packageName:    (member as any)?.packages?.name ?? "—",
+      amount:         finalAmount,
+      originalAmount,
+      discountAmount,
+      type:           feeType,
+      method:         feeMethod,
+      date:           new Date().toLocaleDateString("en-PK", { day: "2-digit", month: "short", year: "numeric" }),
+      note:           feeNote || null,
+      receiptNo,
+    });
+
+    toast.success(`Fee of ${formatPKR(finalAmount)} recorded`);
     setFeeModal(false);
     setFeeAmount("");
     setFeeNote("");
@@ -313,6 +369,7 @@ export default function MemberDetailPage() {
     setDiscountValue("");
     setSaving(false);
     fetchMember();
+    setReceiptModal(true);
   }
 
   async function renewMembership() {
@@ -917,6 +974,17 @@ export default function MemberDetailPage() {
             </div>
           </div>
 
+          {/* Already paid this month warning */}
+          {alreadyPaidWarning && feeType === "membership" && (
+            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5">
+              <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
+              <div>
+                <p className="text-xs font-semibold text-amber-800">Already paid this month</p>
+                <p className="text-xs text-amber-700 mt-0.5">This member has a membership payment recorded for the current month. You can still proceed for corrections or advance payments.</p>
+              </div>
+            </div>
+          )}
+
           {/* Fee amount + type */}
           <div className="grid grid-cols-2 gap-3">
             <Input
@@ -927,10 +995,12 @@ export default function MemberDetailPage() {
               onChange={(e) => setFeeAmount(e.target.value)}
               required
             />
-            <Select label="Payment Type" value={feeType} onChange={(e) => setFeeType(e.target.value)}>
+            <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); setCommissionRate(""); if (e.target.value !== "membership") setAlreadyPaidWarning(false); }}>
               <option value="membership">Monthly Membership</option>
               <option value="admission">Admission Fee</option>
               <option value="trainer">Trainer Fee</option>
+              <option value="nutritionist">Nutritionist Fee</option>
+              <option value="physiotherapy">Physiotherapy Fee</option>
               <option value="other">Other</option>
             </Select>
           </div>
@@ -1009,6 +1079,52 @@ export default function MemberDetailPage() {
             )}
           </div>
 
+          {/* Commission section — shown for trainer / nutritionist / physiotherapy */}
+          {showCommission && (
+            <div className="bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3 space-y-3">
+              <p className="text-xs font-semibold text-[#C04E10] uppercase tracking-wide">
+                Commission
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <Select
+                    label="Staff Member"
+                    value={commissionStaffId}
+                    onChange={(e) => setCommissionStaffId(e.target.value)}
+                  >
+                    <option value="">— Select staff —</option>
+                    {allStaff
+                      .filter((s) => {
+                        if (feeType === "trainer") return s.role === "Trainer";
+                        if (feeType === "nutritionist") return s.role === "Nutritionist";
+                        return true; // physiotherapy → show all
+                      })
+                      .map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.full_name} ({s.role})
+                        </option>
+                      ))}
+                  </Select>
+                </div>
+                <Input
+                  label="Commission Rate %"
+                  type="number"
+                  placeholder="e.g. 10"
+                  min={0}
+                  max={100}
+                  value={commissionRate}
+                  onChange={(e) => setCommissionRate(e.target.value)}
+                />
+                {Number(commissionRate) > 0 && (
+                  <div className="mt-6 bg-white border border-[#FDDCC8] rounded-lg px-3 py-2 text-center">
+                    <p className="text-xs text-[#7A7A72]">Commission</p>
+                    <p className="text-sm font-bold text-[#F06418]">{formatPKR(commissionAmount)}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Payment method + note */}
           <div className="grid grid-cols-2 gap-3">
             <Select label="Payment Method" value={feeMethod} onChange={(e) => setFeeMethod(e.target.value)}>
@@ -1073,6 +1189,139 @@ export default function MemberDetailPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Receipt Modal */}
+      {receiptData && (
+        <Modal open={receiptModal} onClose={() => setReceiptModal(false)} title="Payment Receipt" size="sm">
+          <div className="p-5">
+            {/* Printable receipt */}
+            <div id="luf-receipt" className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden text-[#1A1A16]">
+              {/* Header */}
+              <div className="bg-[#111111] px-5 py-4 text-center">
+                <p className="text-[#F06418] text-xs font-semibold tracking-widest uppercase mb-0.5">Level Up Fitness Club</p>
+                <p className="text-white text-[10px] opacity-70">3rd Floor, High Street Mall, Paragon City, Lahore</p>
+                <p className="text-white text-[10px] opacity-70">03000202902</p>
+              </div>
+
+              {/* Receipt meta */}
+              <div className="px-5 py-3 border-b border-[#E4E4DE] bg-[#F8F8F6] flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] text-[#7A7A72] uppercase tracking-wide">Receipt No</p>
+                  <p className="text-sm font-bold font-mono text-[#F06418]">{receiptData.receiptNo}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-[#7A7A72] uppercase tracking-wide">Date</p>
+                  <p className="text-sm font-semibold">{receiptData.date}</p>
+                </div>
+              </div>
+
+              {/* Member info */}
+              <div className="px-5 py-3 border-b border-[#E4E4DE] space-y-1">
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#7A7A72]">Member</span>
+                  <span className="font-semibold">{receiptData.memberName}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#7A7A72]">Member No</span>
+                  <span className="font-mono font-semibold text-[#F06418]">{receiptData.memberNo}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#7A7A72]">Package</span>
+                  <span className="font-medium">{receiptData.packageName}</span>
+                </div>
+              </div>
+
+              {/* Payment info */}
+              <div className="px-5 py-3 border-b border-[#E4E4DE] space-y-1">
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#7A7A72]">Payment Type</span>
+                  <span className="capitalize font-medium">{receiptData.type}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-[#7A7A72]">Payment Method</span>
+                  <span className="font-medium">{receiptData.method}</span>
+                </div>
+                {receiptData.discountAmount > 0 && (
+                  <>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#7A7A72]">Original Amount</span>
+                      <span className="line-through text-[#7A7A72]">{formatPKR(receiptData.originalAmount)}</span>
+                    </div>
+                    <div className="flex justify-between text-sm">
+                      <span className="text-[#F06418]">Discount</span>
+                      <span className="text-[#F06418]">− {formatPKR(receiptData.discountAmount)}</span>
+                    </div>
+                  </>
+                )}
+                {receiptData.note && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[#7A7A72]">Note</span>
+                    <span className="text-[#4A4A44] text-right max-w-[55%]">{receiptData.note}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Amount */}
+              <div className="px-5 py-4 flex justify-between items-center">
+                <span className="text-sm font-semibold text-[#4A4A44]">Amount Paid</span>
+                <span className="text-2xl font-bold text-[#1A1A16]" style={{ fontFamily: "var(--font-barlow-condensed)" }}>
+                  {formatPKR(receiptData.amount)}
+                </span>
+              </div>
+
+              {/* Footer */}
+              <div className="bg-[#FEF0E8] px-5 py-3 text-center border-t border-[#FDDCC8]">
+                <p className="text-xs text-[#C04E10] font-medium">Thank you for choosing Level Up Fitness Club!</p>
+              </div>
+            </div>
+
+            {/* Action buttons */}
+            <div className="flex gap-3 mt-4">
+              <Button variant="secondary" onClick={() => setReceiptModal(false)} className="flex-1">
+                Close
+              </Button>
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  const el = document.getElementById("luf-receipt");
+                  if (!el) return;
+                  const w = window.open("", "_blank");
+                  if (!w) return;
+                  w.document.write(`<html><head><title>Receipt - ${receiptData.receiptNo}</title><style>
+                    body{margin:0;font-family:Arial,sans-serif;background:#fff;}
+                    @media print{body{margin:0;}}
+                  </style></head><body>${el.outerHTML}</body></html>`);
+                  w.document.close();
+                  w.focus();
+                  w.print();
+                }}
+              >
+                <Share2 className="w-4 h-4" /> Share / PDF
+              </Button>
+              <Button
+                className="flex-1"
+                onClick={() => {
+                  const el = document.getElementById("luf-receipt");
+                  if (!el) return;
+                  const w = window.open("", "_blank");
+                  if (!w) return;
+                  w.document.write(`<html><head><title>Receipt - ${receiptData.receiptNo}</title><style>
+                    *{box-sizing:border-box;} body{margin:20px;font-family:Arial,sans-serif;background:#fff;color:#1A1A16;}
+                    @page{size:80mm auto;margin:5mm;}
+                    @media print{body{margin:0;}}
+                  </style></head><body>${el.outerHTML}</body></html>`);
+                  w.document.close();
+                  w.focus();
+                  setTimeout(() => w.print(), 300);
+                }}
+              >
+                <Printer className="w-4 h-4" /> Print
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
