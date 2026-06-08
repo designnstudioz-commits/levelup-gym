@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { format, subDays, startOfMonth, startOfWeek, subMonths } from "date-fns";
+import { format, subDays, startOfMonth, endOfMonth, startOfWeek, subMonths } from "date-fns";
 import { toast } from "sonner";
 import {
   CreditCard, TrendingUp, AlertTriangle, CheckCircle,
@@ -19,14 +19,13 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
-import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 
 // ── Types ────────────────────────────────────────────────────────────
 type Tab = "overview" | "transactions" | "outstanding" | "analytics";
-type DateRange = "today" | "week" | "month" | "custom";
+type DateRange = "thisMonth" | "lastMonth" | "3months" | "alltime" | "custom";
 
 interface PaymentRow extends FeePayment {
   member?: { id: string; full_name: string; membership_no: string; photo_url: string | null } | null;
@@ -39,14 +38,20 @@ interface MemberWithPackage extends Member {
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
 const TYPE_LABELS: Record<string, string> = {
-  membership: "Monthly Membership", trainer: "Trainer Fee",
-  admission: "Admission Fee", other: "Other",
+  membership:    "Monthly Membership",
+  trainer:       "Trainer Fee",
+  admission:     "Admission Fee",
+  nutritionist:  "Nutritionist Fee",
+  physiotherapy: "Physiotherapy Fee",
+  other:         "Other",
 };
 const TYPE_COLORS: Record<string, string> = {
-  membership: "bg-[#FEF0E8] text-[#C04E10] border-[#FDDCC8]",
-  trainer: "bg-blue-50 text-blue-700 border-blue-200",
-  admission: "bg-purple-50 text-purple-700 border-purple-200",
-  other: "bg-gray-100 text-gray-600 border-gray-200",
+  membership:    "bg-[#FEF0E8] text-[#C04E10] border-[#FDDCC8]",
+  trainer:       "bg-blue-50 text-blue-700 border-blue-200",
+  admission:     "bg-purple-50 text-purple-700 border-purple-200",
+  nutritionist:  "bg-green-50 text-green-700 border-green-200",
+  physiotherapy: "bg-teal-50 text-teal-700 border-teal-200",
+  other:         "bg-gray-100 text-gray-600 border-gray-200",
 };
 
 // ── Main Page ────────────────────────────────────────────────────────
@@ -61,12 +66,12 @@ export default function FeesPage() {
   const [loading, setLoading]             = useState(true);
 
   // Transactions filters
-  const [txDateRange, setTxDateRange]         = useState<DateRange>("month");
-  const [txCustomDate, setTxCustomDate]       = useState("");
+  const [txDateRange, setTxDateRange]         = useState<DateRange>("thisMonth");
+  const [txCustomFrom, setTxCustomFrom]       = useState("");
+  const [txCustomTo, setTxCustomTo]           = useState("");
   const [txSearch, setTxSearch]               = useState("");
   const [txTypeFilter, setTxTypeFilter]       = useState("all");
   const [txMethodFilter, setTxMethodFilter]   = useState("all");
-  const [txViewMode, setTxViewMode]           = useState<ViewMode>("list");
 
   // Quick Collect
   const [collectModal, setCollectModal]       = useState(false);
@@ -94,10 +99,14 @@ export default function FeesPage() {
   // ── Date bounds ─────────────────────────────────────────────────
   function getTxBounds() {
     const today = new Date();
-    if (txDateRange === "today")  return { from: format(today, "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
-    if (txDateRange === "week")   return { from: format(startOfWeek(today, { weekStartsOn: 1 }), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
-    if (txDateRange === "month")  return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
-    if (txDateRange === "custom" && txCustomDate) return { from: txCustomDate, to: txCustomDate };
+    if (txDateRange === "thisMonth")  return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
+    if (txDateRange === "lastMonth") {
+      const last = subMonths(today, 1);
+      return { from: format(startOfMonth(last), "yyyy-MM-dd"), to: format(endOfMonth(last), "yyyy-MM-dd") };
+    }
+    if (txDateRange === "3months") return { from: format(startOfMonth(subMonths(today, 2)), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
+    if (txDateRange === "alltime")  return { from: "2020-01-01", to: format(today, "yyyy-MM-dd") };
+    if (txDateRange === "custom" && txCustomFrom && txCustomTo) return { from: txCustomFrom, to: txCustomTo };
     return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
   }
 
@@ -131,7 +140,7 @@ export default function FeesPage() {
     setMembers((mems ?? []) as unknown as MemberWithPackage[]);
     setRecentP30(rp ?? []);
     setLoading(false);
-  }, [txDateRange, txCustomDate]);
+  }, [txDateRange, txCustomFrom, txCustomTo]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -281,7 +290,7 @@ export default function FeesPage() {
 
         {/* ── Tab content ───────────────────────────────────────── */}
         {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} />}
-        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customDate={txCustomDate} setCustomDate={setTxCustomDate} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} viewMode={txViewMode} setViewMode={setTxViewMode} onRefresh={fetchAll} />}
+        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String((m as any).packages?.monthly_fee ?? m.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
         {tab === "analytics"   && <AnalyticsTab payments={payments} />}
       </div>
@@ -543,51 +552,80 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
 }
 
 // ── Tab 2: Transactions ──────────────────────────────────────────────
-function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRange, customDate, setCustomDate, search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, viewMode, setViewMode, onRefresh }: {
+function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo, search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, onRefresh }: {
   payments: PaymentRow[]; totalRevenue: number; loading: boolean;
   dateRange: DateRange; setDateRange: (v: DateRange) => void;
-  customDate: string; setCustomDate: (v: string) => void;
+  customFrom: string; setCustomFrom: (v: string) => void;
+  customTo: string; setCustomTo: (v: string) => void;
   search: string; setSearch: (v: string) => void;
   typeFilter: string; setTypeFilter: (v: string) => void;
   methodFilter: string; setMethodFilter: (v: string) => void;
-  viewMode: ViewMode; setViewMode: (v: ViewMode) => void;
   onRefresh: () => void;
 }) {
-  const DATE_LABELS: Record<DateRange, string> = { today: "Today", week: "This Week", month: "This Month", custom: "Custom" };
+  const DATE_LABELS: Record<DateRange, string> = {
+    thisMonth: "This Month", lastMonth: "Last Month",
+    "3months": "3 Months", alltime: "All Time", custom: "Custom Range",
+  };
+
+  // Totals by method for summary row
+  const byMethod = PAYMENT_METHODS.map((m) => ({
+    method: m,
+    total: payments.filter((p) => p.payment_method === m).reduce((s, p) => s + (p.amount ?? 0), 0),
+  })).filter((m) => m.total > 0);
+
+  const grandTotal = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
+
+  // Colours for method badges
+  const METHOD_BADGE: Record<string, string> = {
+    Cash: "bg-amber-50 text-amber-700 border-amber-200",
+    Bank: "bg-blue-50 text-blue-700 border-blue-200",
+    Card: "bg-purple-50 text-purple-700 border-purple-200",
+    EasyPaisa: "bg-green-50 text-green-700 border-green-200",
+    JazzCash: "bg-red-50 text-red-700 border-red-200",
+  };
 
   return (
     <div className="space-y-4">
-      {/* Filter bar */}
+      {/* ── Filter bar ── */}
       <div className="bg-white border border-[#E4E4DE] rounded-xl p-4 space-y-3">
+        {/* Row 1 — date range + search + refresh */}
         <div className="flex flex-wrap items-center gap-3">
-          <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
-            {(["today", "week", "month"] as DateRange[]).map((d) => (
+          <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5 flex-wrap">
+            {(["thisMonth", "lastMonth", "3months", "alltime", "custom"] as DateRange[]).map((d) => (
               <button key={d} onClick={() => setDateRange(d)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dateRange === d ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
               >{DATE_LABELS[d]}</button>
             ))}
-            <button onClick={() => setDateRange("custom")}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${dateRange === "custom" ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
-            >
-              <Calendar className="w-3 h-3" /> Custom
-            </button>
           </div>
-          {dateRange === "custom" && (
-            <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
-              className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
-          )}
-          <div className="flex-1 min-w-40 max-w-sm relative">
+          <div className="flex-1 min-w-48 max-w-sm relative">
             <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
-            <input type="text" placeholder="Search member..." value={search} onChange={(e) => setSearch(e.target.value)}
+            <input type="text" placeholder="Search by name or membership no..." value={search} onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
           </div>
-          <ViewToggle value={viewMode} onChange={setViewMode} options={["list", "compact"]} />
           <Button variant="ghost" size="sm" onClick={onRefresh}><RefreshCw className="w-4 h-4" /></Button>
         </div>
+
+        {/* Row 2 — custom range inputs (only when custom selected) */}
+        {dateRange === "custom" && (
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[#7A7A72] font-medium">From</label>
+              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
+                className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[#7A7A72] font-medium">To</label>
+              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
+                className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+            </div>
+          </div>
+        )}
+
+        {/* Row 3 — type + method filters + count */}
         <div className="flex flex-wrap items-center gap-2">
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
             className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
-            <option value="all">All Types</option>
+            <option value="all">All Payment Types</option>
             {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
           </select>
           <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)}
@@ -595,99 +633,132 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
             <option value="all">All Methods</option>
             {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <span className="ml-auto text-xs text-[#7A7A72]">{payments.length} records · {formatPKR(payments.reduce((s, p) => s + (p.amount ?? 0), 0))}</span>
+          <span className="text-xs text-[#7A7A72]">{payments.length} records</span>
+          <span className="ml-auto text-sm font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
         </div>
       </div>
+
+      {/* ── Summary chips ── */}
+      {byMethod.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {byMethod.map((m) => (
+            <div key={m.method} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${METHOD_BADGE[m.method] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+              <span>{m.method}:</span>
+              <span className="font-bold">{formatPKR(m.total)}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="py-12 text-center text-sm text-[#7A7A72]">Loading transactions...</div>
       ) : payments.length === 0 ? (
         <div className="py-12 text-center">
           <p className="text-sm font-medium text-[#4A4A44]">No transactions found</p>
-          <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
-        </div>
-      ) : viewMode === "list" ? (
-        <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
-              <tr>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member</th>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Amount</th>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Type</th>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Method</th>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Date</th>
-                <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Note</th>
-                <th className="px-5 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-[#E4E4DE]">
-              {payments.map((p) => {
-                const m = (p as any).member;
-                const hasDiscount = p.note?.includes("Discount:");
-                return (
-                  <tr key={p.id} className="hover:bg-[#F8F8F6] transition-colors">
-                    <td className="px-5 py-3">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
-                          {m?.full_name?.charAt(0) ?? "?"}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-[#1A1A16]">{m?.full_name ?? "—"}</p>
-                          <p className="text-xs text-[#7A7A72] font-mono">{m?.membership_no}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="text-sm font-bold text-green-700">{formatPKR(p.amount)}</span>
-                      {hasDiscount && <span className="ml-1.5 text-[10px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-semibold">Disc.</span>}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
-                        {TYPE_LABELS[p.payment_type ?? "other"]}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-[#4A4A44]">{p.payment_method ?? "—"}</td>
-                    <td className="px-4 py-3 text-sm text-[#4A4A44]">{formatDate(p.payment_date)}</td>
-                    <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[160px] truncate">{p.note ?? "—"}</td>
-                    <td className="px-5 py-3">
-                      <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                        <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
-                          <Receipt className="w-4 h-4" />
-                        </button>
-                      </Link>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <div className="px-5 py-3 border-t border-[#E4E4DE] flex items-center justify-between bg-[#F8F8F6]">
-            <span className="text-sm text-[#7A7A72]">{payments.length} transactions</span>
-            <span className="text-base font-bold text-[#1A1A16]">Total: {formatPKR(payments.reduce((s, p) => s + (p.amount ?? 0), 0))}</span>
-          </div>
+          <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters or date range</p>
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {payments.map((p) => {
-            const m = (p as any).member;
-            return (
-              <div key={p.id} className="bg-white border border-[#E4E4DE] rounded-xl p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
-                    {m?.full_name?.charAt(0) ?? "?"}
-                  </div>
-                  <p className="text-xs font-semibold text-[#1A1A16] truncate">{m?.full_name ?? "—"}</p>
-                </div>
-                <p className="text-base font-bold text-green-700 mb-1">{formatPKR(p.amount)}</p>
-                <div className="flex items-center justify-between">
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
-                    {p.payment_type ?? "other"}
-                  </span>
-                  <span className="text-[10px] text-[#7A7A72]">{formatDate(p.payment_date)}</span>
-                </div>
-              </div>
-            );
-          })}
+        <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
+                <tr>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3 whitespace-nowrap">Member</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Receipt No</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">For Month</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Payment Type</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Amount</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Method</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Paid On</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Note</th>
+                  <th className="px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E4E4DE]">
+                {payments.map((p) => {
+                  const mem = (p as any).member;
+                  const hasDiscount = p.note?.includes("Discount:");
+                  // Extract user note (after the discount part if present)
+                  const cleanNote = hasDiscount
+                    ? p.note?.split(" · ").slice(1).join(" · ") || null
+                    : p.note;
+                  // Format month covered: "Jun 2026"
+                  const monthLabel = p.month_covered
+                    ? format(new Date(p.month_covered + "T12:00:00"), "MMM yyyy")
+                    : null;
+                  return (
+                    <tr key={p.id} className="hover:bg-[#F8F8F6] transition-colors">
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
+                            {mem?.full_name?.charAt(0) ?? "?"}
+                          </div>
+                          <div>
+                            <p className="text-sm font-semibold text-[#1A1A16] whitespace-nowrap">{mem?.full_name ?? "—"}</p>
+                            <p className="text-[10px] text-[#7A7A72] font-mono">{mem?.membership_no ?? "—"}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="text-[11px] font-mono font-semibold text-[#F06418]">
+                          {p.receipt_no ?? <span className="text-[#7A7A72] font-normal">—</span>}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        {monthLabel ? (
+                          <span className="text-xs font-semibold text-[#1A1A16] bg-[#F8F8F6] border border-[#E4E4DE] px-2 py-0.5 rounded-md whitespace-nowrap">
+                            {monthLabel}
+                          </span>
+                        ) : (
+                          <span className="text-[#7A7A72] text-xs">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
+                          {TYPE_LABELS[p.payment_type ?? "other"] ?? p.payment_type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
+                          {hasDiscount && (
+                            <span className="text-[9px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-bold">DISC</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${METHOD_BADGE[p.payment_method ?? ""] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                          {p.payment_method ?? "—"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
+                      <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[140px] truncate">{cleanNote ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <Link href={`/dashboard/fees/receipt/${p.id}`}>
+                          <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
+                            <Receipt className="w-4 h-4" />
+                          </button>
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Footer totals */}
+          <div className="px-5 py-3 border-t border-[#E4E4DE] bg-[#F8F8F6] flex flex-wrap items-center justify-between gap-3">
+            <span className="text-sm text-[#7A7A72]">{payments.length} transaction{payments.length !== 1 ? "s" : ""}</span>
+            <div className="flex items-center gap-4 flex-wrap">
+              {byMethod.map((m) => (
+                <span key={m.method} className="text-xs text-[#7A7A72]">
+                  {m.method}: <span className="font-semibold text-[#1A1A16]">{formatPKR(m.total)}</span>
+                </span>
+              ))}
+              <span className="text-base font-bold text-[#1A1A16] border-l border-[#E4E4DE] pl-4">Total: {formatPKR(grandTotal)}</span>
+            </div>
+          </div>
         </div>
       )}
     </div>
