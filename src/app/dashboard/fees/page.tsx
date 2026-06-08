@@ -119,7 +119,7 @@ export default function FeesPage() {
 
     const [{ data: pays }, { data: mems }, { data: rp }] = await Promise.all([
       supabase.from("fee_payments")
-        .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url), packages:members!fee_payments_member_id_fkey(packages(name, color))")
+        .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url, packages(name, color))")
         .is("deleted_at", null)
         .gte("payment_date", from)
         .lte("payment_date", to)
