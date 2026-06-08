@@ -489,10 +489,12 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex items-center gap-3 flex-shrink-0">
                       <span className="text-sm font-bold text-green-700">{formatPKR(p.amount)}</span>
                       <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                        <Receipt className="w-3.5 h-3.5 text-[#7A7A72] hover:text-[#F06418] transition-colors" />
+                        <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
+                          <Receipt className="w-3 h-3" /> View Receipt
+                        </span>
                       </Link>
                     </div>
                   </div>
@@ -735,9 +737,9 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                       <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[140px] truncate">{cleanNote ?? "—"}</td>
                       <td className="px-4 py-3">
                         <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                          <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
-                            <Receipt className="w-4 h-4" />
-                          </button>
+                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
+                            <Receipt className="w-3.5 h-3.5" /> View Receipt
+                          </span>
                         </Link>
                       </td>
                     </tr>

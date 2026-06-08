@@ -5,7 +5,8 @@ import { formatDate, formatPKR } from "@/lib/utils";
 import { ArrowLeft } from "lucide-react";
 import { PrintButton } from "./PrintButton";
 
-export default async function ReceiptPage({ params }: { params: { id: string } }) {
+export default async function ReceiptPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   const supabase = await createClient();
 
   const { data: payment } = await supabase
@@ -18,7 +19,7 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
       ),
       collector:system_users!fee_payments_collected_by_fkey(full_name)
     `)
-    .eq("id", params.id)
+    .eq("id", id)
     .is("deleted_at", null)
     .single();
 
