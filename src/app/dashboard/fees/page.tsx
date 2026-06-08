@@ -8,7 +8,7 @@ import {
   CreditCard, TrendingUp, AlertTriangle, CheckCircle,
   Search, RefreshCw, X, Plus, Receipt, Tag,
   Minus, ChevronDown, Calendar, Users, Banknote,
-  ArrowRight, Clock,
+  ArrowRight, Clock, Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -564,6 +564,19 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
   methodFilter: string; setMethodFilter: (v: string) => void;
   onRefresh: () => void;
 }) {
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    if (!deleteId) return;
+    setDeleting(true);
+    const supabase = createClient();
+    await supabase.from("fee_payments").update({ deleted_at: new Date().toISOString() }).eq("id", deleteId);
+    setDeleting(false);
+    setDeleteId(null);
+    onRefresh();
+    toast.success("Payment entry removed.");
+  }
   const DATE_LABELS: Record<DateRange, string> = {
     thisMonth: "This Month", lastMonth: "Last Month",
     "3months": "3 Months", alltime: "All Time", custom: "Custom Range",
@@ -703,7 +716,7 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                       </td>
                       <td className="px-4 py-3">
                         <span className="text-[11px] font-mono font-semibold text-[#F06418]">
-                          {p.receipt_no ?? <span className="text-[#7A7A72] font-normal">—</span>}
+                          {p.receipt_no ?? `RCP-${p.id.slice(-8, -4).toUpperCase()}-${p.id.slice(-4).toUpperCase()}`}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -736,11 +749,17 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                       <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
                       <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[140px] truncate">{cleanNote ?? "—"}</td>
                       <td className="px-4 py-3">
-                        <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
-                            <Receipt className="w-3.5 h-3.5" /> View Receipt
-                          </span>
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <Link href={`/dashboard/fees/receipt/${p.id}`}>
+                            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
+                              <Receipt className="w-3.5 h-3.5" /> View Receipt
+                            </span>
+                          </Link>
+                          <button onClick={() => setDeleteId(p.id)}
+                            className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" title="Remove this entry">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -759,6 +778,33 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                 </span>
               ))}
               <span className="text-base font-bold text-[#1A1A16] border-l border-[#E4E4DE] pl-4">Total: {formatPKR(grandTotal)}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete confirm dialog ── */}
+      {deleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1A1A16]">Remove Payment Entry?</h3>
+                <p className="text-sm text-[#7A7A72]">This will soft-delete the record. It can be recovered from the database if needed.</p>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setDeleteId(null)} disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-[#E4E4DE] text-sm font-semibold text-[#4A4A44] hover:bg-[#F8F8F6] transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleDelete} disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition-colors disabled:opacity-60">
+                {deleting ? "Removing…" : "Yes, Remove"}
+              </button>
             </div>
           </div>
         </div>
