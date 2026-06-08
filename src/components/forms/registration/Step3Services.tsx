@@ -236,99 +236,74 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
       {/* Staff-only section */}
       {mode === "staff" && (
-        <div className="bg-[#1A1A1A] rounded-xl p-5 space-y-4">
-          <h3 className="text-sm font-semibold text-white uppercase tracking-wide">
-            Staff Section — Official Details
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2">
-              <Select
-                label="Package"
-                placeholder="Select package"
-                className="bg-[#2A2A2A] border-white/20 text-white"
-                {...register("package_id")}
-              >
-                {packages.map((pkg) => (
-                  <option key={pkg.id} value={pkg.id}>
-                    {pkg.name} — Rs {pkg.monthly_fee.toLocaleString()}/mo
-                  </option>
+        <div className="rounded-xl border border-[#E4E4DE] overflow-hidden">
+          {/* Header */}
+          <div className="bg-[#1A1A1A] px-5 py-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-[#F06418]" />
+            <h3 className="text-sm font-semibold text-white uppercase tracking-wide">
+              Staff Section — Official Details
+            </h3>
+          </div>
+
+          {/* Body */}
+          <div className="bg-white p-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2">
+                <Select
+                  label="Package"
+                  placeholder="Select package"
+                  {...register("package_id")}
+                >
+                  {packages.map((pkg) => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {pkg.name} — Rs {pkg.monthly_fee.toLocaleString()}/mo
+                    </option>
+                  ))}
+                </Select>
+
+                {packageId && (() => {
+                  const pkg = packages.find((p) => p.id === packageId);
+                  if (!pkg) return null;
+                  return (
+                    <div className="mt-2 bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-[#1A1A16]">{pkg.name}</span>
+                      <div className="text-right">
+                        <span className="text-sm font-bold text-[#F06418]">Rs {pkg.monthly_fee.toLocaleString()}</span>
+                        <span className="text-xs text-[#7A7A72]">/mo</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <Select label="Assign Trainer" placeholder="No trainer" {...register("trainer_id")}>
+                {trainers.map((t) => (
+                  <option key={t.id} value={t.id}>{t.full_name}</option>
                 ))}
               </Select>
 
-              {packageId && (() => {
-                const pkg = packages.find((p) => p.id === packageId);
-                if (!pkg) return null;
-                return (
-                  <div className="mt-2 bg-white/5 border border-white/10 rounded-lg p-3">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-sm font-semibold text-white">{pkg.name}</span>
-                      <span className="text-sm font-bold text-[#F06418]">Rs {pkg.monthly_fee.toLocaleString()}/mo</span>
-                    </div>
-                    {(pkg as any).services_included?.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {((pkg as any).services_included as string[]).map((s: string) => (
-                          <span key={s} className="text-[10px] px-1.5 py-0.5 bg-white/10 text-white/70 rounded">
-                            {s}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
+              <Select label="Payment Method" placeholder="Select method" {...register("payment_method")}>
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </Select>
+
+              <Input label="Joining Date" type="date" {...register("joining_date")} />
+              <Input label="Expiry Date" type="date" {...register("expiry_date")} />
+
+              <Input
+                label="Admission Fee (Rs)"
+                type="number"
+                placeholder="15000"
+                {...register("admission_fee", { valueAsNumber: true })}
+              />
+              <Input
+                label="Monthly Fee (Rs)"
+                type="number"
+                placeholder="7500"
+                {...register("monthly_fee", { valueAsNumber: true })}
+              />
             </div>
-
-            <Select
-              label="Assign Trainer"
-              placeholder="No trainer"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("trainer_id")}
-            >
-              {trainers.map((t) => (
-                <option key={t.id} value={t.id}>{t.full_name}</option>
-              ))}
-            </Select>
-
-            <Input
-              label="Joining Date"
-              type="date"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("joining_date")}
-            />
-
-            <Input
-              label="Expiry Date"
-              type="date"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("expiry_date")}
-            />
-
-            <Input
-              label="Admission Fee (Rs)"
-              type="number"
-              placeholder="15000"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("admission_fee", { valueAsNumber: true })}
-            />
-
-            <Input
-              label="Monthly Fee (Rs)"
-              type="number"
-              placeholder="7500"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("monthly_fee", { valueAsNumber: true })}
-            />
-
-            <Select
-              label="Payment Method"
-              placeholder="Select method"
-              className="bg-[#2A2A2A] border-white/20 text-white"
-              {...register("payment_method")}
-            >
-              {PAYMENT_METHODS.map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </Select>
           </div>
         </div>
       )}
