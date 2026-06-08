@@ -7,7 +7,7 @@ import {
   User, Phone, Mail, MapPin, Calendar, CreditCard, Dumbbell,
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
-  Percent, Minus, Fingerprint, Printer, Share2,
+  Percent, Minus, Fingerprint, Printer,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -34,6 +34,92 @@ const SERVICE_ICONS: Record<string, string> = {
   "Zumba": "💃", "Hybrid Workout": "🔥", "METCON": "⏱️",
   "Nutritionist": "🥗", "Paid Locker": "🔒", "Shower Facility": "🚿",
 };
+
+function buildReceiptHtml(r: {
+  memberName: string; memberNo: string; packageName: string;
+  amount: number; originalAmount: number; discountAmount: number;
+  type: string; method: string; date: string; note: string | null; receiptNo: string;
+}): string {
+  const typeLabel: Record<string, string> = {
+    membership: "Monthly Membership", admission: "Admission Fee",
+    trainer: "Trainer / Coaching Fee", nutritionist: "Nutritionist Fee",
+    physiotherapy: "Physiotherapy Fee", other: "Other",
+  };
+  const discountRow = r.discountAmount > 0 ? `
+    <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Original Amount</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;text-decoration:line-through;color:#7A7A72;">${new Intl.NumberFormat("en-PK").format(r.originalAmount)} Rs</td></tr>
+    <tr><td style="padding:4px 0;color:#F06418;font-size:13px;">Discount</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;color:#F06418;">− ${new Intl.NumberFormat("en-PK").format(r.discountAmount)} Rs</td></tr>` : "";
+  const noteRow = r.note ? `
+    <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Note</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;color:#4A4A44;">${r.note}</td></tr>` : "";
+  const pkgRow = r.packageName !== "—" ? `
+    <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Package</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.packageName}</td></tr>` : "";
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+  <title>Receipt ${r.receiptNo}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:Arial,Helvetica,sans-serif;background:#fff;color:#1A1A16;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    .wrap{max-width:400px;margin:0 auto;padding:0;}
+    .hdr{background:#111111!important;padding:20px;text-align:center;}
+    .hdr-name{color:#F06418!important;font-size:14px;font-weight:800;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;}
+    .hdr-sub{color:rgba(255,255,255,0.65)!important;font-size:10px;line-height:1.5;}
+    .meta{display:flex;justify-content:space-between;align-items:center;padding:12px 20px;background:#FAFAF8;border-bottom:2px dashed #E4E4DE;}
+    .rcp-label{font-size:9px;font-weight:700;color:#7A7A72;text-transform:uppercase;letter-spacing:0.5px;}
+    .rcp-no{font-size:17px;font-weight:800;color:#F06418!important;font-family:monospace;}
+    .date-val{font-size:12px;font-weight:600;text-align:right;}
+    .sec{padding:12px 20px;border-bottom:1px dashed #E4E4DE;}
+    .sec-title{font-size:9px;font-weight:700;color:#7A7A72;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;}
+    table{width:100%;border-collapse:collapse;}
+    .total-row td{padding-top:12px;border-top:2px solid #1A1A16;font-size:15px;font-weight:800;}
+    .ftr{background:#F06418!important;padding:14px 20px;text-align:center;}
+    .ftr-text{color:#fff!important;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;}
+    .ftr-id{color:rgba(255,255,255,0.65)!important;font-size:8px;font-family:monospace;margin-top:2px;}
+    @page{size:A5;margin:1cm;}
+    @media print{body{background:#fff!important;}.hdr{background:#111111!important;}.hdr-name{color:#F06418!important;}.hdr-sub{color:rgba(255,255,255,0.65)!important;}.rcp-no{color:#F06418!important;}.ftr{background:#F06418!important;}.ftr-text{color:#fff!important;}.ftr-id{color:rgba(255,255,255,0.65)!important;}}
+  </style></head><body>
+  <div class="wrap">
+    <div class="hdr">
+      <div class="hdr-name">Level Up Fitness Club</div>
+      <div class="hdr-sub">3rd Floor, High Street Mall, Paragon City, Lahore<br>03000202902</div>
+    </div>
+    <div class="meta">
+      <div><div class="rcp-label">Receipt No</div><div class="rcp-no">${r.receiptNo}</div></div>
+      <div><div class="rcp-label" style="text-align:right;">Date</div><div class="date-val">${r.date}</div></div>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Member Details</div>
+      <table>
+        <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Member Name</td>
+            <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.memberName}</td></tr>
+        <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Membership No</td>
+            <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:700;color:#F06418;font-family:monospace;">${r.memberNo}</td></tr>
+        ${pkgRow}
+      </table>
+    </div>
+    <div class="sec">
+      <div class="sec-title">Payment Details</div>
+      <table>
+        <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Type</td>
+            <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${typeLabel[r.type] ?? r.type}</td></tr>
+        <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Method</td>
+            <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.method}</td></tr>
+        ${noteRow}${discountRow}
+        <tr class="total-row">
+          <td>Total Paid</td>
+          <td style="text-align:right;">Rs ${new Intl.NumberFormat("en-PK").format(r.amount)}</td>
+        </tr>
+      </table>
+    </div>
+    <div class="ftr">
+      <div class="ftr-text">Thank you for choosing Level Up Fitness Club!</div>
+      <div class="ftr-id">${r.receiptNo}</div>
+    </div>
+  </div>
+</body></html>`;
+}
 
 export default function MemberDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -1281,42 +1367,19 @@ export default function MemberDetailPage() {
                 Close
               </Button>
               <Button
-                variant="secondary"
                 className="flex-1"
                 onClick={() => {
-                  const el = document.getElementById("luf-receipt");
-                  if (!el) return;
+                  if (!receiptData) return;
                   const w = window.open("", "_blank");
                   if (!w) return;
-                  w.document.write(`<html><head><title>Receipt - ${receiptData.receiptNo}</title><style>
-                    body{margin:0;font-family:Arial,sans-serif;background:#fff;}
-                    @media print{body{margin:0;}}
-                  </style></head><body>${el.outerHTML}</body></html>`);
+                  const html = buildReceiptHtml(receiptData);
+                  w.document.write(html);
                   w.document.close();
                   w.focus();
-                  w.print();
+                  setTimeout(() => w.print(), 400);
                 }}
               >
-                <Share2 className="w-4 h-4" /> Share / PDF
-              </Button>
-              <Button
-                className="flex-1"
-                onClick={() => {
-                  const el = document.getElementById("luf-receipt");
-                  if (!el) return;
-                  const w = window.open("", "_blank");
-                  if (!w) return;
-                  w.document.write(`<html><head><title>Receipt - ${receiptData.receiptNo}</title><style>
-                    *{box-sizing:border-box;} body{margin:20px;font-family:Arial,sans-serif;background:#fff;color:#1A1A16;}
-                    @page{size:80mm auto;margin:5mm;}
-                    @media print{body{margin:0;}}
-                  </style></head><body>${el.outerHTML}</body></html>`);
-                  w.document.close();
-                  w.focus();
-                  setTimeout(() => w.print(), 300);
-                }}
-              >
-                <Printer className="w-4 h-4" /> Print
+                <Printer className="w-4 h-4" /> Print / PDF
               </Button>
             </div>
           </div>

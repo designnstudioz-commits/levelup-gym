@@ -28,161 +28,377 @@ export default async function ReceiptPage({ params }: { params: { id: string } }
   const pkg = member?.packages;
   const collector = (payment as any).collector;
 
-  // Parse discount from note field if present
   const discountMatch = payment.note?.match(/Discount: (Rs [\d,]+) \((\d+)% off original (Rs [\d,]+)\)/);
-  const discountAmount = discountMatch ? discountMatch[1] : null;
-  const discountPct = discountMatch ? discountMatch[2] : null;
-  const originalAmount = discountMatch ? discountMatch[3] : null;
+  const discountAmt   = discountMatch ? discountMatch[1] : null;
+  const discountPct   = discountMatch ? discountMatch[2] : null;
+  const originalAmt   = discountMatch ? discountMatch[3] : null;
 
   const typeLabels: Record<string, string> = {
-    membership: "Monthly Membership",
-    admission: "Admission Fee",
-    trainer: "Trainer / Coaching Fee",
-    other: "Other",
+    membership:     "Monthly Membership",
+    admission:      "Admission Fee",
+    trainer:        "Trainer / Coaching Fee",
+    nutritionist:   "Nutritionist Fee",
+    physiotherapy:  "Physiotherapy Fee",
+    other:          "Other",
   };
+
+  const receiptNo = payment.receipt_no ?? `RCP-${payment.id.slice(-6).toUpperCase()}`;
+  const noteText  = payment.note && !discountMatch ? payment.note : null;
 
   return (
     <>
-      {/* Print-only styles */}
       <style>{`
+        * { box-sizing: border-box; }
+
+        body {
+          margin: 0;
+          background: #F8F8F6;
+          font-family: Arial, Helvetica, sans-serif;
+          color: #1A1A16;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+
+        .screen-wrap {
+          min-height: 100vh;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          padding: 32px 16px 64px;
+        }
+
+        .actions-bar {
+          width: 100%;
+          max-width: 420px;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 20px;
+        }
+
+        .back-link {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 14px;
+          color: #4A4A44;
+          text-decoration: none;
+        }
+        .back-link:hover { color: #F06418; }
+
+        /* ── Receipt card ── */
+        .receipt {
+          width: 100%;
+          max-width: 420px;
+          background: #fff;
+          border: 1px solid #E4E4DE;
+          border-radius: 16px;
+          overflow: hidden;
+        }
+
+        /* Header */
+        .receipt-header {
+          background: #111111 !important;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+          padding: 24px 24px 20px;
+          text-align: center;
+        }
+        .receipt-header img {
+          height: 52px;
+          width: auto;
+          object-fit: contain;
+          margin: 0 auto 8px;
+          display: block;
+        }
+        .gym-name {
+          color: #F06418 !important;
+          font-size: 15px;
+          font-weight: 800;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+          margin: 0 0 4px;
+        }
+        .gym-sub {
+          color: rgba(255,255,255,0.6) !important;
+          font-size: 11px;
+          margin: 0;
+          line-height: 1.6;
+        }
+
+        /* Receipt no + date row */
+        .receipt-meta {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 14px 24px;
+          border-bottom: 2px dashed #E4E4DE;
+          background: #FAFAF8;
+        }
+        .receipt-no-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: #7A7A72;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin: 0 0 2px;
+        }
+        .receipt-no-value {
+          font-size: 18px;
+          font-weight: 800;
+          color: #F06418 !important;
+          font-family: monospace;
+          margin: 0;
+        }
+        .date-label {
+          font-size: 10px;
+          font-weight: 700;
+          color: #7A7A72;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin: 0 0 2px;
+          text-align: right;
+        }
+        .date-value {
+          font-size: 13px;
+          font-weight: 600;
+          color: #1A1A16;
+          margin: 0;
+          text-align: right;
+        }
+
+        /* Sections */
+        .section {
+          padding: 14px 24px;
+          border-bottom: 1px dashed #E4E4DE;
+        }
+        .section:last-child { border-bottom: none; }
+
+        .section-title {
+          font-size: 9px;
+          font-weight: 700;
+          color: #7A7A72;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          margin: 0 0 10px;
+        }
+
+        .row {
+          display: flex;
+          justify-content: space-between;
+          align-items: baseline;
+          margin-bottom: 6px;
+          font-size: 13px;
+          gap: 12px;
+        }
+        .row:last-child { margin-bottom: 0; }
+
+        .row-label {
+          color: #7A7A72;
+          flex-shrink: 0;
+          min-width: 110px;
+        }
+        .row-value {
+          color: #1A1A16;
+          font-weight: 600;
+          text-align: right;
+        }
+        .row-value.mono {
+          font-family: monospace;
+          color: #F06418 !important;
+        }
+        .row-value.discount {
+          color: #F06418 !important;
+        }
+
+        /* Total row */
+        .total-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-top: 12px;
+          padding-top: 12px;
+          border-top: 2px solid #1A1A16;
+        }
+        .total-label {
+          font-size: 14px;
+          font-weight: 800;
+          color: #1A1A16;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+        }
+        .total-amount {
+          font-size: 24px;
+          font-weight: 800;
+          color: #1A1A16;
+        }
+
+        /* Footer */
+        .receipt-footer {
+          background: #F06418 !important;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+          padding: 14px 24px;
+          text-align: center;
+        }
+        .footer-text {
+          color: #fff !important;
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin: 0 0 2px;
+        }
+        .footer-id {
+          color: rgba(255,255,255,0.7) !important;
+          font-size: 9px;
+          font-family: monospace;
+          margin: 0;
+        }
+
+        /* Print-only second button */
+        .print-link-wrap {
+          margin-top: 16px;
+          text-align: center;
+        }
+
         @media print {
           .no-print { display: none !important; }
-          body { background: white !important; }
-          .receipt-card {
-            box-shadow: none !important;
-            border: none !important;
-            max-width: 100% !important;
+          body { background: #fff !important; padding: 0; }
+          .screen-wrap { padding: 0; background: #fff; }
+          .receipt {
+            max-width: 100%;
+            border: none;
+            border-radius: 0;
           }
+          .receipt-header { background: #111111 !important; }
+          .gym-name { color: #F06418 !important; }
+          .gym-sub { color: rgba(255,255,255,0.7) !important; }
+          .receipt-no-value { color: #F06418 !important; }
+          .row-value.mono { color: #F06418 !important; }
+          .row-value.discount { color: #F06418 !important; }
+          .receipt-footer { background: #F06418 !important; }
+          .footer-text { color: #fff !important; }
+          .footer-id { color: rgba(255,255,255,0.7) !important; }
         }
-        @page { margin: 1cm; size: A5; }
+
+        @page {
+          size: A5;
+          margin: 1cm;
+        }
       `}</style>
 
-      {/* Screen wrapper */}
-      <div className="min-h-screen bg-[#F8F8F6] flex items-start justify-center pt-8 pb-16 px-4">
-        <div className="w-full max-w-md">
+      <div className="screen-wrap">
+        {/* Actions — hidden on print */}
+        <div className="actions-bar no-print">
+          <Link href="/dashboard/fees" className="back-link">
+            <ArrowLeft className="w-4 h-4" />
+            Back to Fees
+          </Link>
+          <PrintButton />
+        </div>
 
-          {/* Actions bar — hidden on print */}
-          <div className="no-print flex items-center justify-between mb-5">
-            <Link href="/dashboard/fees" className="flex items-center gap-1.5 text-sm text-[#4A4A44] hover:text-[#F06418] transition-colors">
-              <ArrowLeft className="w-4 h-4" /> Back to Fees
-            </Link>
-            <PrintButton />
+        {/* Receipt */}
+        <div className="receipt">
+
+          {/* Dark header */}
+          <div className="receipt-header">
+            <img src="/logo.png" alt="Level Up Fitness Club" />
+            <p className="gym-name">Level Up Fitness Club</p>
+            <p className="gym-sub">
+              3rd Floor, High Street Mall, Paragon City, Lahore<br />
+              03000202902 · levelupfitness.com.pk
+            </p>
           </div>
 
-          {/* Receipt card */}
-          <div className="receipt-card bg-white border border-[#E4E4DE] rounded-2xl overflow-hidden shadow-sm">
-
-            {/* Header */}
-            <div className="bg-[#111111] px-6 py-5 text-center">
-              <img
-                src="/logo.png"
-                alt="Level Up Fitness Club"
-                className="h-14 w-auto object-contain mx-auto mb-2"
-              />
-              <p className="text-white/60 text-xs">3rd Floor, High Street Mall, Paragon City, Lahore</p>
-              <p className="text-white/60 text-xs mt-0.5">03000202902</p>
+          {/* Receipt no + date */}
+          <div className="receipt-meta">
+            <div>
+              <p className="receipt-no-label">Receipt No</p>
+              <p className="receipt-no-value">{receiptNo}</p>
             </div>
-
-            {/* Receipt header */}
-            <div className="border-b border-dashed border-[#E4E4DE] px-6 py-4 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide">Payment Receipt</p>
-                <p className="text-xl font-bold text-[#F06418] mt-0.5">{payment.receipt_no ?? `RCP-${payment.id.slice(-6).toUpperCase()}`}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-xs text-[#7A7A72]">Date</p>
-                <p className="text-sm font-semibold text-[#1A1A16]">{formatDate(payment.payment_date)}</p>
-              </div>
-            </div>
-
-            {/* Member info */}
-            <div className="border-b border-dashed border-[#E4E4DE] px-6 py-4">
-              <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-2">Member Details</p>
-              <div className="space-y-1">
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#7A7A72]">Name</span>
-                  <span className="font-semibold text-[#1A1A16]">{member?.full_name ?? "—"}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#7A7A72]">Membership No</span>
-                  <span className="font-mono font-semibold text-[#F06418]">{member?.membership_no ?? "—"}</span>
-                </div>
-                {member?.phone && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-[#7A7A72]">Phone</span>
-                    <span className="text-[#1A1A16]">{member.phone}</span>
-                  </div>
-                )}
-                {pkg?.name && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-[#7A7A72]">Package</span>
-                    <span className="text-[#1A1A16]">{pkg.name}</span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Payment breakdown */}
-            <div className="border-b border-dashed border-[#E4E4DE] px-6 py-4">
-              <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Payment Details</p>
-
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#4A4A44]">
-                    {typeLabels[payment.payment_type ?? "other"]}
-                    {payment.month_covered && (
-                      <span className="text-[#7A7A72] ml-1">({formatDate(payment.month_covered).split(" ").slice(1).join(" ")})</span>
-                    )}
-                  </span>
-                  <span className="font-medium text-[#1A1A16]">
-                    {formatPKR(originalAmount ? Number(originalAmount.replace(/[Rs ,]/g, "")) : payment.amount)}
-                  </span>
-                </div>
-
-                {discountAmount && (
-                  <div className="flex justify-between text-sm text-[#F06418]">
-                    <span>Discount ({discountPct}%)</span>
-                    <span className="font-medium">− {discountAmount}</span>
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-[#E4E4DE] flex justify-between items-center">
-                <span className="text-base font-bold text-[#1A1A16]">Total Paid</span>
-                <span className="text-xl font-bold text-[#F06418]">{formatPKR(payment.amount)}</span>
-              </div>
-            </div>
-
-            {/* Payment method + collector */}
-            <div className="border-b border-dashed border-[#E4E4DE] px-6 py-4">
-              <div className="flex justify-between text-sm mb-1.5">
-                <span className="text-[#7A7A72]">Payment Method</span>
-                <span className="font-semibold text-[#1A1A16]">{payment.payment_method ?? "—"}</span>
-              </div>
-              {collector?.full_name && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#7A7A72]">Collected by</span>
-                  <span className="font-semibold text-[#1A1A16]">{collector.full_name}</span>
-                </div>
-              )}
-              {payment.note && !discountMatch && (
-                <div className="mt-2">
-                  <span className="text-xs text-[#7A7A72]">{payment.note}</span>
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 text-center">
-              <p className="text-xs text-[#7A7A72]">Thank you for your payment!</p>
-              <p className="text-[10px] text-[#7A7A72] mt-1 font-mono">{payment.id}</p>
+            <div>
+              <p className="date-label">Date</p>
+              <p className="date-value">{formatDate(payment.payment_date)}</p>
             </div>
           </div>
 
-          {/* Second print button at bottom */}
-          <div className="no-print mt-4 text-center">
-            <PrintButton variant="link" />
+          {/* Member details */}
+          <div className="section">
+            <p className="section-title">Member Details</p>
+            <div className="row">
+              <span className="row-label">Member Name</span>
+              <span className="row-value">{member?.full_name ?? "—"}</span>
+            </div>
+            <div className="row">
+              <span className="row-label">Membership No</span>
+              <span className="row-value mono">{member?.membership_no ?? "—"}</span>
+            </div>
+            {member?.phone && (
+              <div className="row">
+                <span className="row-label">Phone</span>
+                <span className="row-value">{member.phone}</span>
+              </div>
+            )}
+            {pkg?.name && (
+              <div className="row">
+                <span className="row-label">Package</span>
+                <span className="row-value">{pkg.name}</span>
+              </div>
+            )}
           </div>
+
+          {/* Payment details */}
+          <div className="section">
+            <p className="section-title">Payment Details</p>
+            <div className="row">
+              <span className="row-label">Payment Type</span>
+              <span className="row-value">{typeLabels[payment.payment_type ?? "other"]}</span>
+            </div>
+            <div className="row">
+              <span className="row-label">Payment Method</span>
+              <span className="row-value">{payment.payment_method ?? "—"}</span>
+            </div>
+            {collector?.full_name && (
+              <div className="row">
+                <span className="row-label">Collected by</span>
+                <span className="row-value">{collector.full_name}</span>
+              </div>
+            )}
+            {noteText && (
+              <div className="row">
+                <span className="row-label">Note</span>
+                <span className="row-value" style={{ color: "#4A4A44", fontWeight: 400 }}>{noteText}</span>
+              </div>
+            )}
+            {originalAmt && (
+              <div className="row" style={{ marginTop: 8, paddingTop: 8, borderTop: "1px dashed #E4E4DE" }}>
+                <span className="row-label">Original Amount</span>
+                <span className="row-value" style={{ textDecoration: "line-through", color: "#7A7A72", fontWeight: 400 }}>{originalAmt}</span>
+              </div>
+            )}
+            {discountAmt && (
+              <div className="row">
+                <span className="row-label">Discount ({discountPct}%)</span>
+                <span className="row-value discount">− {discountAmt}</span>
+              </div>
+            )}
+            <div className="total-row">
+              <span className="total-label">Total Paid</span>
+              <span className="total-amount">{formatPKR(payment.amount)}</span>
+            </div>
+          </div>
+
+          {/* Orange footer */}
+          <div className="receipt-footer">
+            <p className="footer-text">Thank you for choosing Level Up Fitness Club!</p>
+            <p className="footer-id">{payment.id}</p>
+          </div>
+        </div>
+
+        {/* Second print link */}
+        <div className="print-link-wrap no-print">
+          <PrintButton variant="link" />
         </div>
       </div>
     </>
