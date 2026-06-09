@@ -35,21 +35,12 @@ const SERVICES = [
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
 
-function findBestPackage(selected: string[], pkgs: Package[]): Package | null {
-  if (!selected.length || !pkgs.length) return null;
-  const sel = selected.map((s) => s.toLowerCase());
-  let best: Package | null = null;
-  let bestScore = -1;
-  for (const pkg of pkgs) {
-    if (!pkg.services_included?.length) continue;
-    const included = pkg.services_included.map((s) => s.toLowerCase());
-    const overlap = sel.filter((s) => included.includes(s)).length;
-    if (overlap > bestScore || (overlap === bestScore && pkg.is_featured && !best?.is_featured)) {
-      bestScore = overlap;
-      best = pkg;
-    }
-  }
-  return bestScore > 0 ? best : null;
+// For each selected service, auto-select the package whose name matches exactly
+function autoPackagesFromServices(services: string[], pkgs: Package[]): string[] {
+  const serviceSet = new Set(services.map((s) => s.toLowerCase()));
+  return pkgs
+    .filter((p) => serviceSet.has(p.name.toLowerCase()))
+    .map((p) => p.id);
 }
 
 export function Step3Services({ form, mode, currentUser }: Step3Props) {
@@ -58,11 +49,11 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
   const [nutritionists, setNutritionists] = useState<StaffMember[]>([]);
   const [showPricing, setShowPricing] = useState(false);
-  const [autoSelectedId, setAutoSelectedId] = useState<string | null>(null);
 
   const selectedServices = watch("services_interested") ?? [];
-  const joiningDate = watch("joining_date");
-  const packageId = watch("package_id");
+  const joiningDate      = watch("joining_date");
+  const packageId        = watch("package_id");
+  const selectedPackageIds = watch("package_ids") ?? [];
 
   const wantsTraining    = selectedServices.includes("Personal Training");
   const wantsNutritionist = selectedServices.includes("Nutritionist");
@@ -108,27 +99,26 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     }
   }, [joiningDate, setValue]);
 
-  useEffect(() => {
-    if (packageId && packages.length > 0) {
-      const pkg = packages.find((p) => p.id === packageId);
-      if (pkg) {
-        setValue("monthly_fee", pkg.monthly_fee);
-        setValue("admission_fee", pkg.admission_fee);
-      }
-    }
-  }, [packageId, packages, setValue]);
-
-  // Auto-select best-matching package based on services chosen
+  // Auto-select packages matching selected services (by name), staff mode only
   useEffect(() => {
     if (!packages.length || mode !== "staff") return;
-    const match = findBestPackage(selectedServices, packages);
-    if (match) {
-      setValue("package_id", match.id);
-      setAutoSelectedId(match.id);
-    } else {
-      setAutoSelectedId(null);
-    }
+    const matched = autoPackagesFromServices(selectedServices, packages);
+    setValue("package_ids", matched);
+    setValue("package_id", matched[0] ?? undefined);
   }, [selectedServices, packages, setValue, mode]);
+
+  // Recalculate total monthly fee whenever selected packages change
+  useEffect(() => {
+    if (!packages.length) return;
+    const total = selectedPackageIds.reduce((sum, id) => {
+      const pkg = packages.find((p) => p.id === id);
+      return sum + (pkg?.monthly_fee ?? 0);
+    }, 0);
+    if (total > 0) setValue("monthly_fee", total);
+    // Use admission_fee from first selected package (or 0 if add-on only)
+    const primary = packages.find((p) => p.id === selectedPackageIds[0]);
+    if (primary) setValue("admission_fee", primary.admission_fee);
+  }, [selectedPackageIds, packages, setValue]);
 
   function toggleService(serviceId: string) {
     const current = selectedServices;
@@ -137,6 +127,15 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     } else {
       setValue("services_interested", [...current, serviceId]);
     }
+  }
+
+  function togglePackage(pkgId: string) {
+    const current = selectedPackageIds;
+    const updated = current.includes(pkgId)
+      ? current.filter((id) => id !== pkgId)
+      : [...current, pkgId];
+    setValue("package_ids", updated);
+    setValue("package_id", updated[0] ?? undefined);
   }
 
   return (
@@ -278,39 +277,69 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
           {/* Body */}
           <div className="bg-white p-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Multi-select packages */}
               <div className="sm:col-span-2">
-                <Select
-                  label="Package"
-                  placeholder="Select package"
-                  {...register("package_id")}
-                >
-                  {packages.map((pkg) => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {pkg.name} — Rs {pkg.monthly_fee.toLocaleString()}/mo
-                    </option>
-                  ))}
-                </Select>
+                <label className="block text-sm font-medium text-[#1A1A16] mb-2">
+                  Packages <span className="text-xs text-[#7A7A72] font-normal ml-1">Select all that apply</span>
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {packages.map((pkg) => {
+                    const selected = selectedPackageIds.includes(pkg.id);
+                    return (
+                      <button
+                        key={pkg.id}
+                        type="button"
+                        onClick={() => togglePackage(pkg.id)}
+                        className={cn(
+                          "flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg border text-left transition-all",
+                          selected
+                            ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]"
+                            : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:bg-[#FEF0E8]"
+                        )}
+                      >
+                        <span className="text-sm font-semibold leading-tight">{pkg.name}</span>
+                        <span className={cn("text-xs font-medium", selected ? "text-[#F06418]" : "text-[#7A7A72]")}>
+                          Rs {pkg.monthly_fee.toLocaleString()}/mo
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
 
-                {autoSelectedId && packageId === autoSelectedId && (
-                  <p className="flex items-center gap-1.5 text-xs text-amber-600 mt-1.5">
+                {/* Auto-selected hint */}
+                {selectedPackageIds.length > 0 && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-600 mt-2">
                     <Sparkles className="w-3 h-3 flex-shrink-0" />
-                    Auto-selected based on services — change if needed
+                    Auto-selected based on services — adjust as needed
                   </p>
                 )}
 
-                {packageId && (() => {
-                  const pkg = packages.find((p) => p.id === packageId);
-                  if (!pkg) return null;
-                  return (
-                    <div className="mt-2 bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3 flex items-center justify-between">
-                      <span className="text-sm font-semibold text-[#1A1A16]">{pkg.name}</span>
-                      <div className="text-right">
-                        <span className="text-sm font-bold text-[#F06418]">Rs {pkg.monthly_fee.toLocaleString()}</span>
-                        <span className="text-xs text-[#7A7A72]">/mo</span>
-                      </div>
+                {/* Total fee summary */}
+                {selectedPackageIds.length > 0 && (
+                  <div className="mt-3 bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3">
+                    <div className="space-y-1 mb-2">
+                      {selectedPackageIds.map((id) => {
+                        const pkg = packages.find((p) => p.id === id);
+                        if (!pkg) return null;
+                        return (
+                          <div key={id} className="flex items-center justify-between text-xs text-[#4A4A44]">
+                            <span>{pkg.name}</span>
+                            <span className="font-medium">Rs {pkg.monthly_fee.toLocaleString()}</span>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })()}
+                    <div className="flex items-center justify-between pt-2 border-t border-[#FDDCC8]">
+                      <span className="text-sm font-semibold text-[#1A1A16]">Total Monthly</span>
+                      <span className="text-base font-bold text-[#F06418]">
+                        Rs {selectedPackageIds.reduce((sum, id) => {
+                          const pkg = packages.find((p) => p.id === id);
+                          return sum + (pkg?.monthly_fee ?? 0);
+                        }, 0).toLocaleString()}
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <Select label="Assign Trainer" placeholder="No trainer" {...register("trainer_id")}>

@@ -58,6 +58,7 @@ export const step3Schema = z.object({
   nutritionist_preference: z.string().optional(),
   notes: z.string().optional(),
   // Staff section (optional for public mode)
+  package_ids: z.array(z.string()).optional(),
   package_id: z.string().optional(),
   trainer_id: z.string().optional(),
   joining_date: z.string().optional(),
