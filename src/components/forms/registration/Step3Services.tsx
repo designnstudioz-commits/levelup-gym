@@ -9,7 +9,7 @@ import type { Package, StaffMember, SystemUser } from "@/types/database";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { addMonths, format } from "date-fns";
-import { ChevronDown, ChevronUp, Info } from "lucide-react";
+import { ChevronDown, ChevronUp, Info, Sparkles } from "lucide-react";
 
 interface Step3Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -35,12 +35,30 @@ const SERVICES = [
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
 
+function findBestPackage(selected: string[], pkgs: Package[]): Package | null {
+  if (!selected.length || !pkgs.length) return null;
+  const sel = selected.map((s) => s.toLowerCase());
+  let best: Package | null = null;
+  let bestScore = -1;
+  for (const pkg of pkgs) {
+    if (!pkg.services_included?.length) continue;
+    const included = pkg.services_included.map((s) => s.toLowerCase());
+    const overlap = sel.filter((s) => included.includes(s)).length;
+    if (overlap > bestScore || (overlap === bestScore && pkg.is_featured && !best?.is_featured)) {
+      bestScore = overlap;
+      best = pkg;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
 export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const { register, watch, setValue, formState: { errors } } = form;
   const [packages, setPackages] = useState<Package[]>([]);
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
   const [nutritionists, setNutritionists] = useState<StaffMember[]>([]);
   const [showPricing, setShowPricing] = useState(false);
+  const [autoSelectedId, setAutoSelectedId] = useState<string | null>(null);
 
   const selectedServices = watch("services_interested") ?? [];
   const joiningDate = watch("joining_date");
@@ -99,6 +117,18 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
       }
     }
   }, [packageId, packages, setValue]);
+
+  // Auto-select best-matching package based on services chosen
+  useEffect(() => {
+    if (!packages.length || mode !== "staff") return;
+    const match = findBestPackage(selectedServices, packages);
+    if (match) {
+      setValue("package_id", match.id);
+      setAutoSelectedId(match.id);
+    } else {
+      setAutoSelectedId(null);
+    }
+  }, [selectedServices, packages, setValue, mode]);
 
   function toggleService(serviceId: string) {
     const current = selectedServices;
@@ -260,6 +290,13 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                     </option>
                   ))}
                 </Select>
+
+                {autoSelectedId && packageId === autoSelectedId && (
+                  <p className="flex items-center gap-1.5 text-xs text-amber-600 mt-1.5">
+                    <Sparkles className="w-3 h-3 flex-shrink-0" />
+                    Auto-selected based on services — change if needed
+                  </p>
+                )}
 
                 {packageId && (() => {
                   const pkg = packages.find((p) => p.id === packageId);

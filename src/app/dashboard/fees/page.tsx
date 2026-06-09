@@ -289,7 +289,7 @@ export default function FeesPage() {
         </div>
 
         {/* ── Tab content ───────────────────────────────────────── */}
-        {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} />}
+        {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} />}
         {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String((m as any).packages?.monthly_fee ?? m.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
         {tab === "analytics"   && <AnalyticsTab payments={payments} />}
@@ -440,12 +440,27 @@ export default function FeesPage() {
 }
 
 // ── Tab 1: Overview ──────────────────────────────────────────────────
-function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, onCollect, onSelectMember }: {
+function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, onCollect, onSelectMember, onRefresh }: {
   payments: PaymentRow[]; todayPayments: PaymentRow[];
   expired: MemberWithPackage[]; unpaidActive: MemberWithPackage[];
   loading: boolean; onCollect: () => void;
   onSelectMember: (m: MemberWithPackage) => void;
+  onRefresh: () => void;
 }) {
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    if (!deleteId) return;
+    setDeleting(true);
+    const supabase = createClient();
+    await supabase.from("fee_payments").update({ deleted_at: new Date().toISOString() }).eq("id", deleteId);
+    setDeleting(false);
+    setDeleteId(null);
+    onRefresh();
+    toast.success("Payment reversed successfully.");
+  }
+
   return (
     <div className="space-y-5">
       {/* Quick collect CTA */}
@@ -489,13 +504,17 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-2 flex-shrink-0">
                       <span className="text-sm font-bold text-green-700">{formatPKR(p.amount)}</span>
                       <Link href={`/dashboard/fees/receipt/${p.id}`}>
                         <span className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
-                          <Receipt className="w-3 h-3" /> View Receipt
+                          <Receipt className="w-3 h-3" /> Receipt
                         </span>
                       </Link>
+                      <button onClick={() => setDeleteId(p.id)}
+                        className="flex items-center gap-1 px-2.5 py-1 rounded-lg border border-red-200 text-xs font-semibold text-red-500 hover:bg-red-50 hover:border-red-400 transition-colors whitespace-nowrap">
+                        <Trash2 className="w-3 h-3" /> Reverse
+                      </button>
                     </div>
                   </div>
                 );
@@ -549,6 +568,33 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
           )}
         </Card>
       </div>
+
+      {/* ── Reverse payment confirm dialog ── */}
+      {deleteId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
+                <Trash2 className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-[#1A1A16]">Reverse This Payment?</h3>
+                <p className="text-sm text-[#7A7A72] mt-0.5">The payment record will be removed. Member's outstanding balance will be restored.</p>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-5">
+              <button onClick={() => setDeleteId(null)} disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-xl border border-[#E4E4DE] text-sm font-semibold text-[#4A4A44] hover:bg-[#F8F8F6] transition-colors">
+                Cancel
+              </button>
+              <button onClick={handleDelete} disabled={deleting}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-700 transition-colors disabled:opacity-60">
+                {deleting ? "Reversing…" : "Yes, Reverse"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -697,10 +743,13 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                   const cleanNote = hasDiscount
                     ? p.note?.split(" · ").slice(1).join(" · ") || null
                     : p.note;
-                  // Format month covered: "Jun 2026"
-                  const monthLabel = p.month_covered
-                    ? format(new Date(p.month_covered + "T12:00:00"), "MMM yyyy")
+                  // Format month covered — use explicit month_covered if set,
+                  // else fall back to the payment_date month
+                  const monthSource = p.month_covered ?? p.payment_date;
+                  const monthLabel = monthSource
+                    ? format(new Date(monthSource + "T12:00:00"), "MMM yyyy")
                     : null;
+                  const monthInferred = !p.month_covered && !!p.payment_date;
                   return (
                     <tr key={p.id} className="hover:bg-[#F8F8F6] transition-colors">
                       <td className="px-5 py-3">
@@ -721,7 +770,11 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                       </td>
                       <td className="px-4 py-3">
                         {monthLabel ? (
-                          <span className="text-xs font-semibold text-[#1A1A16] bg-[#F8F8F6] border border-[#E4E4DE] px-2 py-0.5 rounded-md whitespace-nowrap">
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
+                            monthInferred
+                              ? "text-[#7A7A72] bg-[#F8F8F6] border-[#E4E4DE]"
+                              : "text-[#1A1A16] bg-[#F8F8F6] border-[#E4E4DE]"
+                          }`}>
                             {monthLabel}
                           </span>
                         ) : (
