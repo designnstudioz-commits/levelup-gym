@@ -13,6 +13,7 @@ import {
   User,
   Trash2,
   Archive,
+  AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -52,6 +53,8 @@ export default function SubmissionsPage() {
   const [rejectModal, setRejectModal] = useState<SubmissionWithPackage | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [processing, setProcessing] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleteModal, setBulkDeleteModal] = useState(false);
 
   const fetchSubmissions = useCallback(async () => {
     setLoading(true);
@@ -215,6 +218,55 @@ export default function SubmissionsPage() {
     fetchSubmissions();
   }
 
+  function toggleSelect(id: string) {
+    const newSelected = new Set(selected);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelected(newSelected);
+  }
+
+  function toggleSelectAll() {
+    if (selected.size === filtered.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(filtered.map((s) => s.id)));
+    }
+  }
+
+  async function handleBulkDelete() {
+    if (selected.size === 0) return;
+    if (!confirm(`Delete ${selected.size} selected submission(s)? This cannot be undone.`)) return;
+
+    setProcessing("bulk");
+    try {
+      const supabase = createClient();
+      const selectedArray = Array.from(selected);
+
+      for (const id of selectedArray) {
+        await supabase.from("submissions").update({ deleted_at: new Date().toISOString() }).eq("id", id);
+        await supabase.from("activity_logs").insert({
+          action: "deleted_submission",
+          entity_type: "submission",
+          entity_id: id,
+          description: `Deleted submission from bulk removal`,
+        });
+      }
+
+      toast.success(`Deleted ${selected.size} submission(s)`);
+      setSelected(new Set());
+      setBulkDeleteModal(false);
+      fetchSubmissions();
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete. Please try again.");
+    } finally {
+      setProcessing(null);
+    }
+  }
+
   const STATUS_TABS: { key: StatusFilter; label: string }[] = [
     { key: "pending",  label: "Pending"  },
     { key: "approved", label: "Approved" },
@@ -237,7 +289,10 @@ export default function SubmissionsPage() {
             {STATUS_TABS.map((tab) => (
               <button
                 key={tab.key}
-                onClick={() => setStatusFilter(tab.key)}
+                onClick={() => {
+                  setStatusFilter(tab.key);
+                  setSelected(new Set());
+                }}
                 className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
                   statusFilter === tab.key
                     ? "bg-[#F06418] text-white"
@@ -260,6 +315,16 @@ export default function SubmissionsPage() {
               className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
             />
           </div>
+
+          {selected.size > 0 && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setBulkDeleteModal(true)}
+            >
+              <Trash2 className="w-4 h-4" /> Delete {selected.size}
+            </Button>
+          )}
 
           {statusFilter === "rejected" && filtered.length > 0 && (
             <Button variant="danger" size="sm" onClick={emptyArchive}>
@@ -289,7 +354,15 @@ export default function SubmissionsPage() {
               <table className="w-full">
                 <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
                   <tr>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member</th>
+                    <th className="w-12 px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selected.size === filtered.length && filtered.length > 0}
+                        onChange={toggleSelectAll}
+                        className="w-4 h-4 rounded border border-[#E4E4DE] cursor-pointer accent-[#F06418]"
+                      />
+                    </th>
+                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Member</th>
                     <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
                     <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
                     <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Services</th>
@@ -300,8 +373,21 @@ export default function SubmissionsPage() {
                 </thead>
                 <tbody className="divide-y divide-[#E4E4DE]">
                   {filtered.map((sub) => (
-                    <tr key={sub.id} className="hover:bg-[#F8F8F6] transition-colors">
-                      <td className="px-5 py-3">
+                    <tr
+                      key={sub.id}
+                      className={`hover:bg-[#F8F8F6] transition-colors ${
+                        selected.has(sub.id) ? "bg-blue-50" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(sub.id)}
+                          onChange={() => toggleSelect(sub.id)}
+                          className="w-4 h-4 rounded border border-[#E4E4DE] cursor-pointer accent-[#F06418]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0">
                             {sub.photo_url ? (
@@ -568,6 +654,55 @@ export default function SubmissionsPage() {
             </div>
           </div>
         )}
+      </Modal>
+
+      {/* Bulk delete modal */}
+      <Modal
+        open={bulkDeleteModal}
+        onClose={() => setBulkDeleteModal(false)}
+        title="Delete Submissions"
+        size="sm"
+      >
+        <div className="p-5 space-y-4">
+          <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg p-3">
+            <AlertTriangle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700">
+              You are about to permanently delete <strong>{selected.size}</strong> submission(s).
+              This action cannot be undone.
+            </p>
+          </div>
+
+          <div className="bg-[#F8F8F6] rounded-lg p-3 max-h-48 overflow-y-auto">
+            <p className="text-xs font-semibold text-[#7A7A72] uppercase tracking-wide mb-2">Submissions to delete:</p>
+            <ul className="space-y-1">
+              {filtered
+                .filter((sub) => selected.has(sub.id))
+                .map((sub) => (
+                  <li key={sub.id} className="text-sm text-[#4A4A44]">
+                    • {sub.full_name} ({sub.phone})
+                  </li>
+                ))}
+            </ul>
+          </div>
+
+          <div className="flex gap-3">
+            <Button
+              variant="secondary"
+              onClick={() => setBulkDeleteModal(false)}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={handleBulkDelete}
+              loading={processing === "bulk"}
+              className="flex-1"
+            >
+              <Trash2 className="w-4 h-4" /> Delete All
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

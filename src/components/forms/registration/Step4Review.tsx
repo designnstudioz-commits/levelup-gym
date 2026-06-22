@@ -1,8 +1,11 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { UseFormReturn } from "react-hook-form";
 import { cn } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import type { FullRegistrationData } from "@/lib/validations/registration";
+import type { Package } from "@/types/database";
 
 interface Step4Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -34,6 +37,37 @@ export function Step4Review({ form, mode }: Step4Props) {
   const { register, watch, formState: { errors } } = form;
   const data = watch();
   const termsAgreed = watch("terms_agreed");
+  const [packages, setPackages] = useState<Package[]>([]);
+
+  useEffect(() => {
+    const packageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);
+    if (!packageIds?.length) {
+      setPackages([]);
+      return;
+    }
+
+    const supabase = createClient();
+    const fetchPackages = async () => {
+      const { data, error } = await supabase
+        .from("packages")
+        .select("*")
+        .in("id", packageIds);
+
+      if (error) {
+        setPackages([]);
+        return;
+      }
+
+      setPackages(data ?? []);
+    };
+
+    fetchPackages();
+  }, [data.package_id, data.package_ids]);
+
+  const selectedPackageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);
+  const packageNames = selectedPackageIds
+    .map((id) => packages.find((pkg) => pkg.id === id)?.name)
+    .filter(Boolean) as string[];
 
   return (
     <div className="space-y-6">
@@ -58,6 +92,18 @@ export function Step4Review({ form, mode }: Step4Props) {
             <ReviewField label="Vaccination" value={data.vaccinated} />
             <ReviewField label="Emergency Contact" value={data.emergency_name} />
             <ReviewField label="Emergency Phone" value={data.emergency_phone} />
+            {packageNames.length > 0 && (
+              <div className="py-2 border-b border-[#E4E4DE] sm:col-span-2">
+                <p className="text-xs text-[#7A7A72] font-medium">Selected Package{packageNames.length > 1 ? "s" : ""}</p>
+                <div className="flex flex-wrap gap-1.5 mt-1">
+                  {packageNames.map((name) => (
+                    <span key={name} className="bg-[#FEF0E8] text-[#C04E10] text-xs px-2 py-0.5 rounded-full font-medium">
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
             {data.services_interested && data.services_interested.length > 0 && (
               <div className="py-2 border-b border-[#E4E4DE] sm:col-span-2">
                 <p className="text-xs text-[#7A7A72] font-medium">Services Interested</p>

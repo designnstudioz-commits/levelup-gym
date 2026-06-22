@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   User, Phone, Mail, MapPin, Calendar, CreditCard, Dumbbell,
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
-  Percent, Minus, Fingerprint, Printer,
+  Percent, Minus, Fingerprint, Printer, Camera, Trash2, Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -156,6 +156,9 @@ export default function MemberDetailPage() {
     marital_status: "", blood_group: "", height: "", weight: "",
     medical_notes: "", emergency_name: "", emergency_phone: "",
   });
+  const [editPhotoUrl, setEditPhotoUrl] = useState<string | null>(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   function openEditProfile() {
     if (!member) return;
@@ -177,7 +180,36 @@ export default function MemberDetailPage() {
       emergency_name: member.emergency_name ?? "",
       emergency_phone: member.emergency_phone ?? "",
     });
+    setEditPhotoUrl(member.photo_url ?? null);
     setEditProfileModal(true);
+  }
+
+  async function handleEditPhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast.error("Only images allowed"); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error("Image must be under 5 MB"); return; }
+    setPhotoUploading(true);
+    const preview = URL.createObjectURL(file);
+    setEditPhotoUrl(preview);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload/photo", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        toast.error(json.error ?? "Upload failed");
+        setEditPhotoUrl(member?.photo_url ?? null);
+      } else {
+        setEditPhotoUrl(json.url);
+        toast.success("Photo uploaded");
+      }
+    } catch {
+      toast.error("Upload failed");
+      setEditPhotoUrl(member?.photo_url ?? null);
+    } finally {
+      setPhotoUploading(false);
+    }
   }
 
   async function saveProfile() {
@@ -204,6 +236,7 @@ export default function MemberDetailPage() {
       medical_notes:     profileForm.medical_notes.trim() || null,
       emergency_name:    profileForm.emergency_name.trim() || null,
       emergency_phone:   profileForm.emergency_phone.trim() || null,
+      photo_url:         editPhotoUrl?.startsWith("blob:") ? member?.photo_url ?? null : (editPhotoUrl || null),
       updated_at:        new Date().toISOString(),
     }).eq("id", id);
 
@@ -506,6 +539,26 @@ export default function MemberDetailPage() {
     fetchMember();
   }
 
+  async function unfreezeMembership() {
+    if (!confirm(`Unfreeze membership for ${member?.full_name}?`)) return;
+    setSaving(true);
+    const supabase = createClient();
+    await supabase.from("members").update({
+      status: "active",
+      frozen_until: null,
+      freeze_reason: null,
+    }).eq("id", id);
+    await supabase.from("activity_logs").insert({
+      action: "unfroze_membership",
+      entity_type: "member",
+      entity_id: id,
+      description: `Unfroze membership for ${member?.full_name}`,
+    });
+    toast.success("Membership unfrozen");
+    setSaving(false);
+    fetchMember();
+  }
+
   async function archiveMember() {
     if (!confirm(`Archive ${member?.full_name}? They will be hidden from active lists.`)) return;
     const supabase = createClient();
@@ -586,7 +639,12 @@ export default function MemberDetailPage() {
             <div className="flex flex-col items-center text-center pb-4 border-b border-[#E4E4DE] mb-4">
               <div className="w-20 h-20 rounded-full bg-[#FEF0E8] flex items-center justify-center mb-3 overflow-hidden">
                 {member.photo_url ? (
-                  <img src={member.photo_url} alt="" className="w-20 h-20 object-cover" />
+                  <img
+                    src={member.photo_url}
+                    alt=""
+                    className="w-20 h-20 object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
                 ) : (
                   <User className="w-9 h-9 text-[#F06418]" />
                 )}
@@ -657,14 +715,24 @@ export default function MemberDetailPage() {
               >
                 <Calendar className="w-4 h-4" /> Renew Membership
               </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-start"
-                onClick={() => setFreezeModal(true)}
-              >
-                <Snowflake className="w-4 h-4" /> Freeze Membership
-              </Button>
+              {member.status === "frozen" ? (
+                <Button
+                  size="sm"
+                  className="w-full justify-start bg-[#F06418] text-white hover:bg-[#C04E10]"
+                  onClick={unfreezeMembership}
+                >
+                  <Snowflake className="w-4 h-4" /> Unfreeze Membership
+                </Button>
+              ) : (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="w-full justify-start"
+                  onClick={() => setFreezeModal(true)}
+                >
+                  <Snowflake className="w-4 h-4" /> Freeze Membership
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -953,6 +1021,48 @@ export default function MemberDetailPage() {
       {/* Edit Profile Modal */}
       <Modal open={editProfileModal} onClose={() => setEditProfileModal(false)} title="Edit Member Profile" size="lg">
         <div className="space-y-5">
+
+          {/* Photo upload */}
+          <div className="flex items-center gap-4 pb-4 border-b border-[#E4E4DE]">
+            <div className="relative flex-shrink-0">
+              <div className="w-20 h-20 rounded-full bg-[#FEF0E8] border-2 border-[#FDDCC8] overflow-hidden flex items-center justify-center">
+                {photoUploading ? (
+                  <Loader2 className="w-7 h-7 text-[#F06418] animate-spin" />
+                ) : editPhotoUrl ? (
+                  <img src={editPhotoUrl} alt="" className="w-full h-full object-cover" onError={() => setEditPhotoUrl(null)} />
+                ) : (
+                  <User className="w-9 h-9 text-[#F06418]" />
+                )}
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-sm font-semibold text-[#1A1A16]">Profile Photo</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  disabled={photoUploading}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] rounded-lg hover:bg-[#FDDCC8] disabled:opacity-50 transition-colors"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                  {editPhotoUrl ? "Change Photo" : "Upload Photo"}
+                </button>
+                {editPhotoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setEditPhotoUrl(null)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Remove
+                  </button>
+                )}
+              </div>
+              <p className="text-xs text-[#7A7A72]">JPG, PNG or WEBP · Max 5 MB</p>
+            </div>
+            <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={handleEditPhotoChange} />
+          </div>
+
           {/* Personal */}
           <div>
             <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Personal Information</p>
