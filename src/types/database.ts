@@ -253,6 +253,22 @@ export interface DailyMember {
   deleted_at: string | null;
 }
 
+export interface DeviceCommand {
+  id: string;
+  device_serial: string;
+  command_id: number;
+  command: string;
+  command_type: string;
+  status: "pending" | "sent" | "acked" | "failed";
+  member_id: string | null;
+  created_by: string | null;
+  sent_at: string | null;
+  acked_at: string | null;
+  return_code: number | null;
+  error: string | null;
+  created_at: string;
+}
+
 export interface SmsLog {
   id: string;
   recipients: string[] | null;

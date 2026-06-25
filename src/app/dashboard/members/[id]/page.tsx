@@ -8,6 +8,7 @@ import {
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
   Percent, Minus, Fingerprint, Printer, Camera, Trash2, Loader2,
+  Send, Clock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -702,7 +703,7 @@ export default function MemberDetailPage() {
 
             {/* Biometric / Device ID */}
             <div className="mt-4 pt-4 border-t border-[#E4E4DE]">
-              <DeviceIdField memberId={member.id} deviceUserId={member.device_user_id} thumbRegistered={member.thumb_registered} onSaved={fetchMember} />
+              <DeviceEnrollmentsField memberId={member.id} onSaved={fetchMember} />
             </div>
 
             {/* Quick actions */}
@@ -1499,79 +1500,239 @@ export default function MemberDetailPage() {
   );
 }
 
-// ── Device ID Field ──────────────────────────────────────────────────
-function DeviceIdField({ memberId, deviceUserId, thumbRegistered, onSaved }: {
+// ── Device Enrollments Field ──────────────────────────────────────────
+type Device = { id: string; serial_no: string; name: string | null };
+type Enrollment = { id: string; device_serial: string; device_user_id: string };
+type CmdStatus = "pending" | "sent" | "acked" | "failed";
+type LastCmd = { status: CmdStatus; created_at: string };
+
+function DeviceEnrollmentsField({ memberId, onSaved }: {
   memberId: string;
-  deviceUserId: string | null;
-  thumbRegistered: boolean;
   onSaved: () => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(deviceUserId ?? "");
+  const [devices, setDevices] = useState<Device[]>([]);
+  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [lastCmds, setLastCmds] = useState<Record<string, LastCmd>>({});
+  const [loading, setLoading] = useState(true);
+  const [editingSerial, setEditingSerial] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
+  const [pushing, setPushing] = useState<string | null>(null); // serial being pushed
 
-  async function save() {
-    setSaving(true);
-    const supabase = createClient();
-    const { error } = await supabase.from("members").update({
-      device_user_id: value.trim() || null,
-      thumb_registered: !!value.trim(),
-    }).eq("id", memberId);
-    setSaving(false);
-    if (error) {
-      console.error("Device ID save error:", error);
-      toast.error(`Save failed: ${error.message}`);
-      return;
+  const supabase = createClient();
+
+  async function load() {
+    setLoading(true);
+    const [{ data: devs }, { data: enrs }, { data: cmds }] = await Promise.all([
+      supabase.from("devices").select("id, serial_no, name").order("name"),
+      supabase.from("device_enrollments").select("id, device_serial, device_user_id")
+        .eq("member_id", memberId).is("deleted_at", null),
+      supabase.from("device_commands").select("device_serial, status, created_at")
+        .eq("member_id", memberId).eq("command_type", "push_user")
+        .order("created_at", { ascending: false }).limit(20),
+    ]);
+    setDevices(devs ?? []);
+    setEnrollments(enrs ?? []);
+    // Keep the latest command status per device
+    const map: Record<string, LastCmd> = {};
+    for (const c of (cmds ?? [])) {
+      if (!map[c.device_serial]) map[c.device_serial] = { status: c.status, created_at: c.created_at };
     }
-    setEditing(false);
+    setLastCmds(map);
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [memberId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function enrollmentFor(serial: string) {
+    return enrollments.find((e) => e.device_serial === serial) ?? null;
+  }
+
+  function startEdit(serial: string) {
+    const existing = enrollmentFor(serial);
+    setEditValue(existing?.device_user_id ?? "");
+    setEditingSerial(serial);
+  }
+
+  async function saveEnrollment(serial: string) {
+    setSaving(true);
+    const uid = editValue.trim();
+    const existing = enrollmentFor(serial);
+
+    if (!uid) {
+      if (existing) {
+        await supabase.from("device_enrollments")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("id", existing.id);
+        toast.success("Enrollment removed");
+      }
+    } else if (existing) {
+      const { error } = await supabase.from("device_enrollments")
+        .update({ device_user_id: uid })
+        .eq("id", existing.id);
+      if (error) { toast.error(`Save failed: ${error.message}`); setSaving(false); return; }
+      toast.success("Enrollment updated");
+    } else {
+      const { error } = await supabase.from("device_enrollments").insert({
+        member_id: memberId, device_serial: serial, device_user_id: uid,
+      });
+      if (error) { toast.error(`Save failed: ${error.message}`); setSaving(false); return; }
+      toast.success("Enrollment saved");
+    }
+
+    setSaving(false);
+    setEditingSerial(null);
+    await load();
     onSaved();
-    toast.success("Device ID saved");
+  }
+
+  async function removeEnrollment(serial: string) {
+    const existing = enrollmentFor(serial);
+    if (!existing) return;
+    await supabase.from("device_enrollments")
+      .update({ deleted_at: new Date().toISOString() })
+      .eq("id", existing.id);
+    toast.success("Enrollment removed");
+    await load();
+    onSaved();
+  }
+
+  async function pushToDevice(serial: string) {
+    setPushing(serial);
+    try {
+      const res = await fetch("/api/devices/push-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, device_serial: serial }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? "Push failed");
+      } else {
+        toast.success(`Queued — device will receive "${data.name}" within ~30 seconds`);
+        await load();
+      }
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setPushing(null);
+    }
+  }
+
+  function CmdBadge({ serial }: { serial: string }) {
+    const cmd = lastCmds[serial];
+    if (!cmd) return null;
+    const cfg: Record<CmdStatus, { label: string; cls: string; icon: React.ReactNode }> = {
+      pending: { label: "Queued", cls: "text-amber-600 bg-amber-50 border-amber-200", icon: <Clock className="w-2.5 h-2.5" /> },
+      sent:    { label: "Sent",   cls: "text-blue-600 bg-blue-50 border-blue-200",   icon: <Send className="w-2.5 h-2.5" /> },
+      acked:   { label: "Done ✓", cls: "text-green-600 bg-green-50 border-green-200", icon: <Check className="w-2.5 h-2.5" /> },
+      failed:  { label: "Failed", cls: "text-red-600 bg-red-50 border-red-200",      icon: <X className="w-2.5 h-2.5" /> },
+    };
+    const { label, cls, icon } = cfg[cmd.status];
+    return (
+      <span className={`inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full border ${cls}`}>
+        {icon} {label}
+      </span>
+    );
   }
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-1.5">
-          <Fingerprint className="w-3.5 h-3.5 text-[#F06418]" />
-          <span className="text-xs font-semibold text-[#1A1A16]">Biometric Device ID</span>
-        </div>
-        {!editing ? (
-          <button onClick={() => { setValue(deviceUserId ?? ""); setEditing(true); }}
-            className="text-xs text-[#F06418] hover:underline flex items-center gap-1">
-            <Edit3 className="w-3 h-3" /> {deviceUserId ? "Edit" : "Set"}
-          </button>
-        ) : (
-          <div className="flex gap-2">
-            <button onClick={save} disabled={saving} className="text-xs text-green-600 hover:underline flex items-center gap-1 disabled:opacity-50">
-              <Check className="w-3 h-3" /> Save
-            </button>
-            <button onClick={() => setEditing(false)} className="text-xs text-red-600 hover:underline">
-              <X className="w-3 h-3" />
-            </button>
-          </div>
-        )}
+      <div className="flex items-center gap-1.5 mb-3">
+        <Fingerprint className="w-3.5 h-3.5 text-[#F06418]" />
+        <span className="text-xs font-semibold text-[#1A1A16]">Biometric Device Enrollments</span>
       </div>
 
-      {editing ? (
-        <input type="text" placeholder="e.g. 1 (from ZKTeco device)" value={value}
-          onChange={(e) => setValue(e.target.value)}
-          className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-        />
+      {loading ? (
+        <p className="text-xs text-[#7A7A72]">Loading devices…</p>
+      ) : devices.length === 0 ? (
+        <p className="text-xs text-[#7A7A72]">No devices registered yet.</p>
       ) : (
-        <div className={`flex items-center gap-2 text-xs rounded-lg px-2.5 py-1.5 ${deviceUserId ? "bg-green-50 border border-green-200" : "bg-[#F8F8F6] border border-[#E4E4DE]"}`}>
-          <Fingerprint className={`w-3.5 h-3.5 ${deviceUserId ? "text-green-600" : "text-[#7A7A72]"}`} />
-          {deviceUserId ? (
-            <span className="text-green-700 font-semibold">Enrolled — ID: {deviceUserId}</span>
-          ) : (
-            <span className="text-[#7A7A72]">Not enrolled on device yet</span>
-          )}
-        </div>
-      )}
+        <div className="space-y-2">
+          {devices.map((dev) => {
+            const enr = enrollmentFor(dev.serial_no);
+            const isEditing = editingSerial === dev.serial_no;
+            const isPushing = pushing === dev.serial_no;
+            const label = dev.name || dev.serial_no;
 
-      {editing && (
-        <p className="text-[10px] text-[#7A7A72] mt-1">
-          This is the User ID assigned when you enrolled this member on the SpeedFace V5L.
-        </p>
+            return (
+              <div key={dev.serial_no} className="rounded-lg border border-[#E4E4DE] bg-[#F8F8F6] px-2.5 py-2">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] font-medium text-[#1A1A16]">{label}</span>
+                    <CmdBadge serial={dev.serial_no} />
+                  </div>
+                  {!isEditing ? (
+                    <div className="flex items-center gap-2">
+                      {enr && (
+                        <button
+                          onClick={() => pushToDevice(dev.serial_no)}
+                          disabled={isPushing}
+                          title="Send user info to this device — device picks it up within ~30s"
+                          className="text-[10px] text-[#F06418] hover:underline flex items-center gap-0.5 disabled:opacity-50"
+                        >
+                          {isPushing
+                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            : <Send className="w-2.5 h-2.5" />
+                          }
+                          {isPushing ? "Sending…" : "Push to Device"}
+                        </button>
+                      )}
+                      <button onClick={() => startEdit(dev.serial_no)}
+                        className="text-[10px] text-[#4A4A44] hover:text-[#F06418] hover:underline flex items-center gap-0.5">
+                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : "Enroll"}
+                      </button>
+                      {enr && (
+                        <button onClick={() => removeEnrollment(dev.serial_no)}
+                          className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5">
+                          <X className="w-2.5 h-2.5" /> Remove
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => saveEnrollment(dev.serial_no)} disabled={saving}
+                        className="text-[10px] text-green-600 hover:underline flex items-center gap-0.5 disabled:opacity-50">
+                        <Check className="w-2.5 h-2.5" /> Save
+                      </button>
+                      <button onClick={() => setEditingSerial(null)}
+                        className="text-[10px] text-red-500 hover:underline">
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {isEditing ? (
+                  <>
+                    <input
+                      type="text"
+                      placeholder="User ID from ZKTeco (e.g. 1)"
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      autoFocus
+                      className="w-full px-2 py-1 text-xs rounded border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                    />
+                    <p className="text-[10px] text-[#7A7A72] mt-1">Leave blank to remove enrollment.</p>
+                  </>
+                ) : enr ? (
+                  <div className="flex items-center gap-1.5 text-xs text-green-700">
+                    <Fingerprint className="w-3 h-3 text-green-600" />
+                    <span className="font-semibold">Enrolled — User ID: {enr.device_user_id}</span>
+                  </div>
+                ) : (
+                  <span className="text-[11px] text-[#7A7A72]">Not enrolled</span>
+                )}
+
+                {enr && !isEditing && (
+                  <p className="text-[10px] text-[#7A7A72] mt-1.5">
+                    "Push to Device" sends the name to the machine. Then do the face scan at the device to complete enrollment.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

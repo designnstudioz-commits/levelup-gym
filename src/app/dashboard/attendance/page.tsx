@@ -105,8 +105,7 @@ export default function AttendancePage() {
       .order("punch_time", { ascending: false })
       .limit(500);
 
-    if (deviceFilter !== "all") query = query.eq("device_id", deviceFilter);
-
+    // NOTE: deviceFilter is applied client-side so per-device counts on cards stay correct
     const [{ data: atts }, { data: unveri }, { data: devs }] = await Promise.all([
       query,
       supabase.from("unverified_attendances").select("*").eq("resolved", false).order("punch_time", { ascending: false }).limit(100),
@@ -117,7 +116,7 @@ export default function AttendancePage() {
     setUnverified(unveri ?? []);
     setDevices((devs ?? []) as Device[]);
     setLoading(false);
-  }, [dateRange, customDate, deviceFilter]);
+  }, [dateRange, customDate]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -146,6 +145,7 @@ export default function AttendancePage() {
 
   // Filtered records
   const filtered = records.filter((r) => {
+    if (deviceFilter !== "all" && r.device_id !== deviceFilter) return false;
     if (punchFilter !== "all" && r.punch_type !== punchFilter) return false;
     if (!search) return true;
     const q = search.toLowerCase();

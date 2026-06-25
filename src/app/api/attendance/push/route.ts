@@ -25,10 +25,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const supabase = getServiceClient();
-    await supabase.from("devices").upsert(
-      { serial_no: sn, last_seen: new Date().toISOString(), name: `Device ${sn}` },
-      { onConflict: "serial_no", ignoreDuplicates: false }
-    );
+    const now = new Date().toISOString();
+    // Try insert first; if device already exists just update last_seen (preserve custom name)
+    const { error } = await supabase.from("devices").insert({ serial_no: sn, last_seen: now, name: `Device ${sn}` });
+    if (error) {
+      await supabase.from("devices").update({ last_seen: now }).eq("serial_no", sn);
+    }
   } catch (e) {
     console.error("[ADMS Heartbeat DB Error]", e);
   }
@@ -50,20 +52,14 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceClient();
 
-    // Parse first line as URL params to get sn, table, Stamp
-    const firstLine = body.split("\n")[0].trim();
-    const params = new URLSearchParams(firstLine);
-
-    const serialNo = params.get("sn") ?? params.get("SN") ?? getSN(req);
-    const table = params.get("table");
+    // table and SN come from the URL query string, not the body
+    const serialNo = req.nextUrl.searchParams.get("SN") ?? req.nextUrl.searchParams.get("sn") ?? getSN(req);
+    const table = req.nextUrl.searchParams.get("table") ?? req.nextUrl.searchParams.get("Table");
 
     console.log(`[ADMS POST] SN=${serialNo} table=${table}`);
 
-    // Update device last_seen
-    await supabase.from("devices").upsert(
-      { serial_no: serialNo, last_seen: new Date().toISOString(), name: `Device ${serialNo}` },
-      { onConflict: "serial_no", ignoreDuplicates: false }
-    );
+    // Update device last_seen only (preserve custom name)
+    await supabase.from("devices").update({ last_seen: new Date().toISOString() }).eq("serial_no", serialNo);
 
     if (table !== "ATTLOG") {
       console.log(`[ADMS POST] Ignoring table=${table}`);
@@ -115,52 +111,49 @@ export async function POST(req: NextRequest) {
       }
       const punchTimeUTC = localDate.toISOString();
 
-      // Look up member
-      const { data: member } = await supabase
-        .from("members")
-        .select("id, full_name, status")
+      // Look up member via device_enrollments (device-specific user ID)
+      const { data: enrollment } = await supabase
+        .from("device_enrollments")
+        .select("member_id, members(id, full_name, status)")
+        .eq("device_serial", serialNo)
         .eq("device_user_id", uid)
         .is("deleted_at", null)
         .single();
+      const member = enrollment ? (enrollment.members as any) : null;
 
       if (member) {
-        // Dedup: ignore if same member punched within last 2 minutes (accidental double scan)
-        const twoMinAgo = new Date(localDate.getTime() - 2 * 60 * 1000).toISOString();
-        const { count: recentCount } = await supabase
-          .from("attendances")
-          .select("*", { count: "exact", head: true })
-          .eq("member_id", member.id)
-          .gte("punch_time", twoMinAgo)
-          .lte("punch_time", punchTimeUTC);
-
-        if ((recentCount ?? 0) > 0) {
-          console.log(`[ADMS POST] Duplicate scan within 2 min — skipped for ${member.full_name}`);
-        } else {
           // Toggle logic: check last punch to determine in/out
           const { data: lastPunch } = await supabase
             .from("attendances")
-            .select("punch_type")
+            .select("punch_type, punch_time")
             .eq("member_id", member.id)
             .order("punch_time", { ascending: false })
             .limit(1)
             .single();
 
-          // If device explicitly signals out (AttState 1/5) honour it,
-          // otherwise alternate: last=in → out, last=out/none → in
+          // Determine punch type first
           let punchType: string;
           if (state === "1" || state === "5") {
             punchType = "out";
           } else if (state === "0" || state === "4") {
-            punchType = "in";
+            punchType = lastPunch?.punch_type === "in" ? "out" : "in";
           } else {
-            // Unknown state — toggle based on last record
             punchType = lastPunch?.punch_type === "in" ? "out" : "in";
           }
 
-          // If device always sends state=0 (most gyms), still toggle correctly
-          if ((state === "0" || state === "4") && lastPunch?.punch_type === "in") {
-            punchType = "out";
-          }
+          // Dedup: skip only if same member punched the same type within last 30 seconds
+          const thirtySecAgo = new Date(localDate.getTime() - 30 * 1000).toISOString();
+          const { count: recentCount } = await supabase
+            .from("attendances")
+            .select("*", { count: "exact", head: true })
+            .eq("member_id", member.id)
+            .eq("punch_type", punchType)
+            .gte("punch_time", thirtySecAgo)
+            .lte("punch_time", punchTimeUTC);
+
+          if ((recentCount ?? 0) > 0) {
+            console.log(`[ADMS POST] Duplicate ${punchType.toUpperCase()} within 30s — skipped for ${member.full_name}`);
+          } else {
 
           const { error } = await supabase.from("attendances").insert({
             member_id: member.id,

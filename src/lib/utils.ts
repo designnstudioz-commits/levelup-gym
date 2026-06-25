@@ -25,10 +25,11 @@ export function formatDate(date: string | Date | null | undefined): string {
 export function formatDateTime(date: string | Date | null | undefined): string {
   if (!date) return "—";
   try {
-    const d = new Date(date);
-    // Add 5 hours for PKT (UTC+5)
-    d.setHours(d.getHours() + 5);
-    return format(d, "dd MMM yyyy, hh:mm a");
+    return new Date(date).toLocaleString("en-PK", {
+      timeZone: "Asia/Karachi",
+      day: "2-digit", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true,
+    });
   } catch {
     return "—";
   }
