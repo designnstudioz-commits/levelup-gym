@@ -314,26 +314,41 @@ export function Step1Personal({ form }: Step1Props) {
           />
         </div>
         <div>
-          <Select
-            label="Gender"
-            required
-            placeholder="Select gender"
-            error={errors.gender?.message}
-            {...register("gender")}
-          >
-            <option value="Male">Male</option>
-            <option value="Female">Female</option>
-          </Select>
+          <label className="block text-sm font-medium text-[#1A1A16] mb-1.5">
+            Gender <span className="text-[#F06418]">*</span>
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            {["Male", "Female"].map((g) => {
+              const selected = watch("gender") === g;
+              return (
+                <button key={g} type="button"
+                  onClick={() => setValue("gender", g as any, { shouldValidate: true })}
+                  className={`py-2.5 rounded-lg border-2 text-sm font-bold transition-all ${
+                    selected ? "bg-[#F06418] border-[#F06418] text-white" : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+                  }`}>
+                  {g === "Male" ? "♂ Male" : "♀ Female"}
+                </button>
+              );
+            })}
+          </div>
+          {errors.gender && <p className="text-xs text-red-600 mt-1">{errors.gender.message}</p>}
         </div>
         <div>
-          <Select
-            label="Marital Status"
-            placeholder="Select status"
-            {...register("marital_status")}
-          >
-            <option value="Single">Single</option>
-            <option value="Married">Married</option>
-          </Select>
+          <label className="block text-sm font-medium text-[#1A1A16] mb-1.5">Marital Status</label>
+          <div className="grid grid-cols-2 gap-2">
+            {["Single", "Married"].map((s) => {
+              const selected = watch("marital_status") === s;
+              return (
+                <button key={s} type="button"
+                  onClick={() => setValue("marital_status", s as any)}
+                  className={`py-2.5 rounded-lg border-2 text-sm font-bold transition-all ${
+                    selected ? "bg-[#F06418] border-[#F06418] text-white" : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+                  }`}>
+                  {s}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
