@@ -81,11 +81,13 @@ export default function SubmissionsPage() {
   const filtered = submissions.filter((s) => {
     if (!search) return true;
     const q = search.toLowerCase();
+    const refNo = `${s.gender === "Female" ? "luf" : "lum"}-${new Date(s.created_at).getFullYear()}-${s.id.slice(-4).toLowerCase()}`;
     return (
       s.full_name.toLowerCase().includes(q) ||
       s.phone.includes(q) ||
       s.email?.toLowerCase().includes(q) ||
-      s.cnic?.includes(q)
+      s.cnic?.includes(q) ||
+      refNo.includes(q)
     );
   });
 
@@ -309,7 +311,7 @@ export default function SubmissionsPage() {
             <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              placeholder="Search by name, phone, CNIC..."
+              placeholder="Search by name, phone, CNIC, reference no..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
