@@ -73,11 +73,52 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
   // ── Public mode ───────────────────────────────────────────────────────
   if (mode === "public") {
+    const selectedServices = watch("services_interested") ?? [];
+
+    function toggleService(name: string) {
+      const updated = selectedServices.includes(name)
+        ? selectedServices.filter((s) => s !== name)
+        : [...selectedServices, name];
+      setValue("services_interested", updated);
+    }
+
     return (
-      <div className="py-4 text-center space-y-2">
-        <p className="text-sm text-[#4A4A44]">
-          You're almost done! Our staff will contact you to confirm your services and package after reviewing your application.
-        </p>
+      <div className="space-y-4">
+        <div>
+          <p className="text-sm font-semibold text-[#1A1A16] mb-1">
+            Which services are you interested in?
+          </p>
+          <p className="text-xs text-[#7A7A72] mb-4">
+            Select all that apply — our staff will confirm details and pricing when they contact you.
+          </p>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {packages.map((pkg) => {
+              const selected = selectedServices.includes(pkg.name);
+              return (
+                <button
+                  key={pkg.id}
+                  type="button"
+                  onClick={() => toggleService(pkg.name)}
+                  className={cn(
+                    "px-3 py-2.5 rounded-lg border text-left text-sm font-semibold leading-tight transition-all",
+                    selected
+                      ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]"
+                      : "bg-white border-[#E4E4DE] text-[#1A1A16] hover:border-[#F06418] hover:bg-[#FEF0E8]"
+                  )}
+                >
+                  {pkg.name}
+                </button>
+              );
+            })}
+          </div>
+
+          {selectedServices.length > 0 && (
+            <p className="text-xs text-[#F06418] mt-3 font-medium">
+              {selectedServices.length} service{selectedServices.length !== 1 ? "s" : ""} selected
+            </p>
+          )}
+        </div>
       </div>
     );
   }
