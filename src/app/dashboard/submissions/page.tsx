@@ -401,6 +401,9 @@ export default function SubmissionsPage() {
                           <div>
                             <p className="text-sm font-semibold text-[#1A1A16]">{sub.full_name}</p>
                             <p className="text-xs text-[#7A7A72]">{sub.gender ?? "—"}</p>
+                            <p className="text-xs font-mono text-[#F06418]">
+                              {(sub.gender === "Female" ? "LUF" : "LUM")}-{new Date(sub.created_at).getFullYear()}-{sub.id.slice(-4).toUpperCase()}
+                            </p>
                           </div>
                         </div>
                       </td>
