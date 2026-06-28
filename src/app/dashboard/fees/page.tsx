@@ -464,14 +464,9 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
   return (
     <div className="space-y-5">
       {/* Quick collect CTA */}
-      <div className="bg-[#111111] rounded-xl p-5 flex items-center justify-between">
-        <div>
-          <p className="text-white font-bold text-base">Quick Fee Collection</p>
-          <p className="text-white/60 text-sm mt-0.5">Search any member and collect instantly</p>
-        </div>
-        <Button onClick={onCollect} className="flex-shrink-0">
-          <Plus className="w-4 h-4" /> Collect Fee
-        </Button>
+      <div className="bg-[#111111] rounded-xl p-5">
+        <p className="text-white font-bold text-base">Quick Fee Collection</p>
+        <p className="text-white/60 text-sm mt-0.5">Search any member and collect instantly</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
