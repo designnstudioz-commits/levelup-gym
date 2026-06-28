@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -44,6 +44,7 @@ export default function MembersPage() {
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [paidThisMonth, setPaidThisMonth] = useState<Set<string>>(new Set());
+  const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null }[]>([]);
   const [page, setPage] = useState(1);
 
   // Filters
@@ -72,7 +73,7 @@ export default function MembersPage() {
     if (statusFilter !== "all") query = query.eq("status", statusFilter);
     if (genderFilter !== "all") query = query.eq("gender", genderFilter);
 
-    const [{ data, error }, { data: feeData }] = await Promise.all([
+    const [{ data, error }, { data: feeData }, { data: countData }] = await Promise.all([
       query,
       supabase
         .from("fee_payments")
@@ -80,9 +81,14 @@ export default function MembersPage() {
         .is("deleted_at", null)
         .gte("payment_date", monthStart)
         .lte("payment_date", monthEnd),
+      supabase
+        .from("members")
+        .select("status, gender")
+        .is("deleted_at", null),
     ]);
 
     if (!error) setMembers(data ?? []);
+    setAllCounts(countData ?? []);
     setPaidThisMonth(new Set((feeData ?? []).map((f: any) => f.member_id)));
     setLoading(false);
   }, [statusFilter, genderFilter]);
@@ -129,12 +135,29 @@ export default function MembersPage() {
   const hasActiveFilters = genderFilter !== "all" || expiringOnly || !!search || feeFilter !== "all";
   function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setFeeFilter("all"); }
 
-  const STATUS_TABS: { key: StatusFilter; label: string }[] = [
-    { key: "active", label: "Active" },
-    { key: "inactive", label: "Inactive" },
-    { key: "frozen", label: "Frozen" },
-    { key: "archived", label: "Archived" },
-    { key: "all", label: "All" },
+  // Contextual counts: status counts respect gender filter, gender counts respect status filter
+  const statusCounts = useMemo(() => {
+    const base = genderFilter === "all" ? allCounts : allCounts.filter((c) => c.gender === genderFilter);
+    const map: Record<string, number> = { active: 0, inactive: 0, frozen: 0, archived: 0, all: 0 };
+    base.forEach((c) => { if (c.status && map[c.status] !== undefined) map[c.status]++; map.all++; });
+    return map;
+  }, [allCounts, genderFilter]);
+
+  const genderCounts = useMemo(() => {
+    const base = statusFilter === "all" ? allCounts : allCounts.filter((c) => c.status === statusFilter);
+    return {
+      all: base.length,
+      Male: base.filter((c) => c.gender === "Male").length,
+      Female: base.filter((c) => c.gender === "Female").length,
+    };
+  }, [allCounts, statusFilter]);
+
+  const STATUS_TABS: { key: StatusFilter; label: string; count: number }[] = [
+    { key: "active",   label: "Active",   count: statusCounts.active },
+    { key: "inactive", label: "Inactive", count: statusCounts.inactive },
+    { key: "frozen",   label: "Frozen",   count: statusCounts.frozen },
+    { key: "archived", label: "Archived", count: statusCounts.archived },
+    { key: "all",      label: "All",      count: statusCounts.all },
   ];
 
   const rangeStart = filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
@@ -161,9 +184,12 @@ export default function MembersPage() {
             <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
               {STATUS_TABS.map((tab) => (
                 <button key={tab.key} onClick={() => setStatusFilter(tab.key)}
-                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${statusFilter === tab.key ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${statusFilter === tab.key ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
                 >
                   {tab.label}
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${statusFilter === tab.key ? "bg-white/25 text-white" : "bg-[#E4E4DE] text-[#7A7A72]"}`}>
+                    {tab.count}
+                  </span>
                 </button>
               ))}
             </div>
@@ -186,9 +212,12 @@ export default function MembersPage() {
             <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
               {(["all", "Male", "Female"] as const).map((g) => (
                 <button key={g} onClick={() => setGenderFilter(g)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${genderFilter === g ? "bg-[#1A1A1A] text-white" : "text-[#4A4A44] hover:bg-white"}`}
+                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${genderFilter === g ? "bg-[#1A1A1A] text-white" : "text-[#4A4A44] hover:bg-white"}`}
                 >
                   {g === "all" ? "All Genders" : g}
+                  <span className={`text-[10px] font-bold px-1 py-0.5 rounded-full leading-none ${genderFilter === g ? "bg-white/20 text-white" : "bg-[#E4E4DE] text-[#7A7A72]"}`}>
+                    {g === "all" ? genderCounts.all : genderCounts[g]}
+                  </span>
                 </button>
               ))}
             </div>
