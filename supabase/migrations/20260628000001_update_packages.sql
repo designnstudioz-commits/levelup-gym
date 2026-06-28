@@ -7,7 +7,8 @@ INSERT INTO packages (name, type, duration_months, admission_fee, monthly_fee, m
 -- ── Core Memberships ─────────────────────────────────────────────────
 ('Gym',               'Individual', 1, 15000, 10000, 1, 'Build strength. Build you.',                                    'active'),
 ('Zumba',             'Individual', 1, 15000, 12000, 1, 'Dance. Sweat. Feel alive.',                                     'active'),
-('CrossFit / MMA',    'Individual', 1, 15000,  8000, 1, 'Stronger everyday. Better everyday.',                           'active'),
+('CrossFit',          'Individual', 1, 15000,  8000, 1, 'Stronger everyday. Better everyday.',                           'active'),
+('MMA',              'Individual', 1, 15000,  8000, 1, 'Mixed martial arts training.',                                   'active'),
 ('Hybrid',            'Individual', 1, 15000, 12000, 1, 'Female only. Strength. Cardio. Functional.',                    'active'),
 ('Pilates Monthly',   'Individual', 1, 15000, 20000, 1, '4 sessions per week. Strength + Mobility + Balance.',           'active'),
 
@@ -15,8 +16,6 @@ INSERT INTO packages (name, type, duration_months, admission_fee, monthly_fee, m
 ('Infinity Vault',    'Individual', 1, 15000, 25000, 1, 'Gym + 4 Sessions Jacuzzi + 2 Sessions Ice Plunge + 10 Frames Snooker + Table Tennis + 10 Frames Pool Game + Unlimited Chess & Carom Board', 'active'),
 ('Wellness Vault',    'Individual', 1, 15000, 12000, 1, 'Gym + 4 Sessions Jacuzzi',                                     'active'),
 ('Recovery Vault',    'Individual', 1, 15000, 18000, 1, 'Gym + 4 Sessions Jacuzzi & Ice Plunge',                        'active'),
-('Family Vault',      'Family',     1, 15000,     0, 4, 'Pay parents registrations & get 2 kids membership free + 10% off monthly fee', 'active'),
-('Tribe Vault',       'Individual', 1,  7500,     0, 1, '50% off registration fee with 4 friends + 10% off monthly fee', 'active'),
 
 -- ── Personal Training ────────────────────────────────────────────────
 ('Personal Training — Bronze',   'Individual', 1, 0, 15000, 1, 'Your goals. Your coach. Bronze level. Gym fee applies separately.', 'active'),
