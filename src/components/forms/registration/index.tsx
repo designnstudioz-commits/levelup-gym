@@ -86,7 +86,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
 
       if (mode === "staff") {
         // Staff registration → directly create member (skip approval queue)
-        const membershipNo = await generateMembershipNo();
+        const membershipNo = await generateMembershipNo(values.gender);
 
         const { data, error } = await supabase
           .from("members")
@@ -181,7 +181,8 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
 
         if (error) throw error;
 
-        const ref = `LUF-${new Date().getFullYear()}-${data.id.slice(-4).toUpperCase()}`;
+        const prefix = values.gender === "Female" ? "LUF" : "LUM";
+        const ref = `${prefix}-${new Date().getFullYear()}-${data.id.slice(-4).toUpperCase()}`;
         setReferenceNo(ref);
         setSubmitted(true);
         toast.success("Registration submitted successfully!");
