@@ -220,6 +220,14 @@ export default function MemberDetailPage() {
     }
     setSaving(true);
     const supabase = createClient();
+
+    // If gender changed, swap the membership number prefix accordingly
+    let updatedMembershipNo = member?.membership_no ?? null;
+    if (profileForm.gender && profileForm.gender !== member?.gender && updatedMembershipNo) {
+      const newPrefix = profileForm.gender === "Female" ? "LUF" : "LUM";
+      updatedMembershipNo = updatedMembershipNo.replace(/^(LUM|LUF|LUS)/, newPrefix);
+    }
+
     const { error } = await supabase.from("members").update({
       full_name:         profileForm.full_name.trim(),
       secondary_name:    profileForm.secondary_name.trim() || null,
@@ -238,6 +246,7 @@ export default function MemberDetailPage() {
       emergency_name:    profileForm.emergency_name.trim() || null,
       emergency_phone:   profileForm.emergency_phone.trim() || null,
       photo_url:         editPhotoUrl?.startsWith("blob:") ? member?.photo_url ?? null : (editPhotoUrl || null),
+      membership_no:     updatedMembershipNo,
       updated_at:        new Date().toISOString(),
     }).eq("id", id);
 

@@ -80,7 +80,7 @@ export async function generateReceiptNo(): Promise<string> {
     .from("fee_payments")
     .select("*", { count: "exact", head: true });
   const next = (count ?? 0) + 1;
-  return `RCP-${year}-${String(next).padStart(4, "0")}`;
+  return `PMT-${year}-${String(next).padStart(4, "0")}`;
 }
 
 export async function generateMembershipNo(
