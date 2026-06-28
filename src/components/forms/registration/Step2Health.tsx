@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
+import { formatPhone } from "@/lib/utils";
 
 interface Step2Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -149,7 +150,8 @@ export function Step2Health({ form }: Step2Props) {
             type="tel"
             placeholder="0300-0000000"
             error={errors.emergency_phone?.message}
-            {...register("emergency_phone")}
+            value={watch("emergency_phone") ?? ""}
+            onChange={(e) => setValue("emergency_phone", formatPhone(e.target.value), { shouldValidate: true })}
           />
         </div>
       </div>

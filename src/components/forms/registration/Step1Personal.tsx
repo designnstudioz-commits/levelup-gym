@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
-import { formatCnic } from "@/lib/utils";
+import { formatCnic, formatPhone } from "@/lib/utils";
 
 interface Step1Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -364,14 +364,16 @@ export function Step1Personal({ form }: Step1Props) {
             type="tel"
             placeholder="0300-0000000"
             error={errors.phone?.message}
-            {...register("phone")}
+            value={watch("phone") ?? ""}
+            onChange={(e) => setValue("phone", formatPhone(e.target.value), { shouldValidate: true })}
           />
           <Input
             label="WhatsApp Number"
             type="tel"
             placeholder="Same as phone"
             error={errors.whatsapp?.message}
-            {...register("whatsapp")}
+            value={watch("whatsapp") ?? ""}
+            onChange={(e) => setValue("whatsapp", formatPhone(e.target.value))}
           />
           <Input
             label="Email Address"

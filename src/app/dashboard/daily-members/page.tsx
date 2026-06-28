@@ -18,7 +18,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
-import { formatDate, formatPKR, generateMembershipNo } from "@/lib/utils";
+import { formatDate, formatPKR, generateMembershipNo, formatPhone } from "@/lib/utils";
 import type { DailyMember, Package, StaffMember } from "@/types/database";
 import { addMonths } from "date-fns";
 
@@ -378,7 +378,7 @@ export default function DailyMembersPage() {
                 value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} />
             </div>
             <Input label="Phone" type="tel" placeholder="0300-0000000"
-              value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              value={form.phone} onChange={(e) => setForm({ ...form, phone: formatPhone(e.target.value) })} />
             <Input label="Age" type="number" placeholder="25"
               value={form.age} onChange={(e) => setForm({ ...form, age: e.target.value })} />
             <Select label="Gender" value={form.gender} onChange={(e) => setForm({ ...form, gender: e.target.value })} placeholder="Select">

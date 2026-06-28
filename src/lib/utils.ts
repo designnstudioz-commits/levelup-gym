@@ -1,6 +1,12 @@
 import { format, formatDistanceToNow, differenceInDays } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 
+export function formatPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= 4) return digits;
+  return `${digits.slice(0, 4)}-${digits.slice(4)}`;
+}
+
 export function formatCnic(raw: string): string {
   const digits = raw.replace(/\D/g, "").slice(0, 13);
   if (digits.length <= 5) return digits;

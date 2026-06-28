@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, generateReceiptNo } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
 import { addMonths, format } from "date-fns";
@@ -1122,9 +1122,9 @@ export default function MemberDetailPage() {
             <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Contact</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input label="Phone" required type="tel" value={profileForm.phone}
-                onChange={(e) => setProfileForm((f) => ({ ...f, phone: e.target.value }))} />
+                onChange={(e) => setProfileForm((f) => ({ ...f, phone: formatPhone(e.target.value) }))} />
               <Input label="WhatsApp" type="tel" value={profileForm.whatsapp}
-                onChange={(e) => setProfileForm((f) => ({ ...f, whatsapp: e.target.value }))} />
+                onChange={(e) => setProfileForm((f) => ({ ...f, whatsapp: formatPhone(e.target.value) }))} />
               <Input label="Email" type="email" value={profileForm.email}
                 onChange={(e) => setProfileForm((f) => ({ ...f, email: e.target.value }))} />
               <Input label="CNIC" placeholder="XXXXX-XXXXXXX-X" value={profileForm.cnic}
@@ -1154,7 +1154,7 @@ export default function MemberDetailPage() {
               <Input label="Name" value={profileForm.emergency_name}
                 onChange={(e) => setProfileForm((f) => ({ ...f, emergency_name: e.target.value }))} />
               <Input label="Phone" type="tel" value={profileForm.emergency_phone}
-                onChange={(e) => setProfileForm((f) => ({ ...f, emergency_phone: e.target.value }))} />
+                onChange={(e) => setProfileForm((f) => ({ ...f, emergency_phone: formatPhone(e.target.value) }))} />
             </div>
           </div>
 

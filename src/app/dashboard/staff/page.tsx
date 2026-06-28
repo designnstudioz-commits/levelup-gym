@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatPKR, formatCnic } from "@/lib/utils";
+import { formatPKR, formatCnic, formatPhone } from "@/lib/utils";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import type { StaffMember, StaffRole } from "@/types/database";
 
@@ -398,7 +398,7 @@ export default function StaffPage() {
               type="tel"
               placeholder="0300-0000000"
               value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              onChange={(e) => setForm({ ...form, phone: formatPhone(e.target.value) })}
             />
             <Input
               label="Email"
