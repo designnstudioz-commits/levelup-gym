@@ -156,6 +156,7 @@ export default function MemberDetailPage() {
     email: "", cnic: "", address: "", dob: "", gender: "",
     marital_status: "", blood_group: "", height: "", weight: "",
     medical_notes: "", emergency_name: "", emergency_phone: "",
+    joining_date: "", expiry_date: "", admission_fee: "",
   });
   const [editPhotoUrl, setEditPhotoUrl] = useState<string | null>(null);
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -180,6 +181,9 @@ export default function MemberDetailPage() {
       medical_notes: member.medical_notes ?? "",
       emergency_name: member.emergency_name ?? "",
       emergency_phone: member.emergency_phone ?? "",
+      joining_date: member.joining_date ?? "",
+      expiry_date: member.expiry_date ?? "",
+      admission_fee: member.admission_fee ? String(member.admission_fee) : "",
     });
     setEditPhotoUrl(member.photo_url ?? null);
     setEditProfileModal(true);
@@ -218,6 +222,10 @@ export default function MemberDetailPage() {
       toast.error("Name and phone are required");
       return;
     }
+    if (!profileForm.joining_date) {
+      toast.error("Joining date is required");
+      return;
+    }
     setSaving(true);
     const supabase = createClient();
 
@@ -247,6 +255,9 @@ export default function MemberDetailPage() {
       emergency_phone:   profileForm.emergency_phone.trim() || null,
       photo_url:         editPhotoUrl?.startsWith("blob:") ? member?.photo_url ?? null : (editPhotoUrl || null),
       membership_no:     updatedMembershipNo,
+      joining_date:      profileForm.joining_date || null,
+      expiry_date:       profileForm.expiry_date || null,
+      admission_fee:     profileForm.admission_fee ? parseFloat(profileForm.admission_fee) : null,
       updated_at:        new Date().toISOString(),
     }).eq("id", id);
 
@@ -1155,6 +1166,19 @@ export default function MemberDetailPage() {
               value={profileForm.medical_notes}
               onChange={(e) => setProfileForm((f) => ({ ...f, medical_notes: e.target.value }))}
             />
+          </div>
+
+          {/* Membership */}
+          <div>
+            <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Membership Details</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <Input label="Joining Date *" type="date" required value={profileForm.joining_date}
+                onChange={(e) => setProfileForm((f) => ({ ...f, joining_date: e.target.value }))} />
+              <Input label="Expiry Date" type="date" value={profileForm.expiry_date}
+                onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+              <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
+                onChange={(e) => setProfileForm((f) => ({ ...f, admission_fee: e.target.value }))} />
+            </div>
           </div>
 
           <div className="flex gap-3 pt-1">
