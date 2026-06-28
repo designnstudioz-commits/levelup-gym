@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Search, UserPlus, RefreshCw, User, ArrowRight,
-  SlidersHorizontal, X,
+  SlidersHorizontal, X, ChevronLeft, ChevronRight,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -21,7 +21,22 @@ type MemberWithJoins = Member & {
 };
 
 type StatusFilter = "all" | "active" | "inactive" | "frozen" | "archived";
-type SortKey = "name_asc" | "newest" | "expiry_asc" | "expiry_desc";
+type SortKey =
+  | "newest" | "oldest"
+  | "name_asc" | "name_desc"
+  | "membership_asc"
+  | "join_newest" | "join_oldest"
+  | "expiry_asc" | "expiry_desc";
+
+const PAGE_SIZE = 50;
+
+/** Returns true for members genuinely added by staff in the last 3 days.
+ *  Imported GymAutomate members are excluded (their comment starts with "GymAutomate"). */
+function isNewMember(m: MemberWithJoins): boolean {
+  if (m.comment?.startsWith("GymAutomate")) return false;
+  const threeDaysAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+  return new Date(m.created_at).getTime() >= threeDaysAgo;
+}
 
 export default function MembersPage() {
   const router = useRouter();
@@ -29,6 +44,7 @@ export default function MembersPage() {
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [paidThisMonth, setPaidThisMonth] = useState<Set<string>>(new Set());
+  const [page, setPage] = useState(1);
 
   // Filters
   const [search, setSearch]             = useState("");
@@ -37,6 +53,9 @@ export default function MembersPage() {
   const [sortKey, setSortKey]           = useState<SortKey>("newest");
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
+
+  // Reset to page 1 whenever any filter changes
+  useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, feeFilter]);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -89,12 +108,23 @@ export default function MembersPage() {
       );
     })
     .sort((a, b) => {
-      if (sortKey === "name_asc")    return a.full_name.localeCompare(b.full_name);
-      if (sortKey === "newest")      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-      if (sortKey === "expiry_asc")  return (a.expiry_date ?? "").localeCompare(b.expiry_date ?? "");
-      if (sortKey === "expiry_desc") return (b.expiry_date ?? "").localeCompare(a.expiry_date ?? "");
-      return 0;
+      switch (sortKey) {
+        case "newest":         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        case "oldest":         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case "name_asc":       return a.full_name.localeCompare(b.full_name);
+        case "name_desc":      return b.full_name.localeCompare(a.full_name);
+        case "membership_asc": return (a.membership_no ?? "").localeCompare(b.membership_no ?? "");
+        case "join_newest":    return (b.joining_date ?? "").localeCompare(a.joining_date ?? "");
+        case "join_oldest":    return (a.joining_date ?? "").localeCompare(b.joining_date ?? "");
+        case "expiry_asc":     return (a.expiry_date ?? "").localeCompare(b.expiry_date ?? "");
+        case "expiry_desc":    return (b.expiry_date ?? "").localeCompare(a.expiry_date ?? "");
+        default:               return 0;
+      }
     });
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage   = Math.min(page, totalPages);
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const hasActiveFilters = genderFilter !== "all" || expiringOnly || !!search || feeFilter !== "all";
   function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setFeeFilter("all"); }
@@ -107,11 +137,20 @@ export default function MembersPage() {
     { key: "all", label: "All" },
   ];
 
+  const rangeStart = filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;
+  const rangeEnd   = Math.min(safePage * PAGE_SIZE, filtered.length);
+
   return (
     <div className="flex flex-col flex-1">
       <DashboardHeader
         title="Members"
-        subtitle={`${filtered.length} member${filtered.length !== 1 ? "s" : ""} shown`}
+        subtitle={
+          filtered.length === 0
+            ? "No members found"
+            : filtered.length <= PAGE_SIZE
+            ? `${filtered.length} member${filtered.length !== 1 ? "s" : ""}`
+            : `${rangeStart}–${rangeEnd} of ${filtered.length} members`
+        }
       />
 
       <div className="flex-1 p-6 space-y-4">
@@ -157,10 +196,23 @@ export default function MembersPage() {
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
               className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]"
             >
-              <option value="newest">Newest First</option>
-              <option value="name_asc">Name A → Z</option>
-              <option value="expiry_asc">Expiry: Soonest</option>
-              <option value="expiry_desc">Expiry: Latest</option>
+              <optgroup label="Date Added">
+                <option value="newest">Newest Added</option>
+                <option value="oldest">Oldest Added</option>
+              </optgroup>
+              <optgroup label="Name">
+                <option value="name_asc">Name A → Z</option>
+                <option value="name_desc">Name Z → A</option>
+              </optgroup>
+              <optgroup label="Membership / Year">
+                <option value="membership_asc">Membership No (A → Z)</option>
+                <option value="join_newest">Join Date: Newest</option>
+                <option value="join_oldest">Join Date: Oldest</option>
+              </optgroup>
+              <optgroup label="Expiry">
+                <option value="expiry_asc">Expiry: Soonest</option>
+                <option value="expiry_desc">Expiry: Latest</option>
+              </optgroup>
             </select>
 
             <label className="flex items-center gap-1.5 text-xs text-[#4A4A44] cursor-pointer bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-2.5 py-1.5 hover:border-[#F06418] transition-colors">
@@ -210,13 +262,79 @@ export default function MembersPage() {
             <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
           </div>
         ) : viewMode === "list" ? (
-          <MembersTable members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} paidThisMonth={paidThisMonth} />
+          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} paidThisMonth={paidThisMonth} />
         ) : viewMode === "grid" ? (
-          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} paidThisMonth={paidThisMonth} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} paidThisMonth={paidThisMonth} />
         ) : (
-          <MembersGrid members={filtered} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} paidThisMonth={paidThisMonth} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} paidThisMonth={paidThisMonth} />
+        )}
+
+        {/* Pagination */}
+        {!loading && totalPages > 1 && (
+          <div className="flex items-center justify-between bg-white border border-[#E4E4DE] rounded-xl px-5 py-3">
+            <span className="text-xs text-[#7A7A72]">
+              Showing <span className="font-semibold text-[#1A1A16]">{rangeStart}–{rangeEnd}</span> of <span className="font-semibold text-[#1A1A16]">{filtered.length}</span> members
+            </span>
+
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={safePage === 1}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" /> Prev
+              </button>
+
+              <PageNumbers current={safePage} total={totalPages} onSelect={setPage} />
+
+              <button
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={safePage === totalPages}
+                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Next <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Page number buttons ──────────────────────────────────────────────
+function PageNumbers({ current, total, onSelect }: { current: number; total: number; onSelect: (p: number) => void }) {
+  const pages: (number | "...")[] = [];
+
+  if (total <= 7) {
+    for (let i = 1; i <= total; i++) pages.push(i);
+  } else {
+    pages.push(1);
+    if (current > 3) pages.push("...");
+    for (let i = Math.max(2, current - 1); i <= Math.min(total - 1, current + 1); i++) pages.push(i);
+    if (current < total - 2) pages.push("...");
+    pages.push(total);
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      {pages.map((p, i) =>
+        p === "..." ? (
+          <span key={`ellipsis-${i}`} className="px-2 text-xs text-[#7A7A72]">…</span>
+        ) : (
+          <button
+            key={p}
+            onClick={() => onSelect(p as number)}
+            className={`min-w-[28px] h-7 text-xs font-medium rounded-lg border transition-colors ${
+              p === current
+                ? "bg-[#F06418] text-white border-[#F06418]"
+                : "border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+            }`}
+          >
+            {p}
+          </button>
+        )
+      )}
     </div>
   );
 }
@@ -244,7 +362,8 @@ function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberW
             {members.map((m) => {
               const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
               const pkgColor = (m as any).packages?.color ?? "#F06418";
-              const feePaid = paidThisMonth.has(m.id);
+              const feePaid  = paidThisMonth.has(m.id);
+              const isNew    = isNewMember(m);
               return (
                 <tr key={m.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onNavigate(m.id)}>
                   <td className="px-5 py-3">
@@ -255,7 +374,12 @@ function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberW
                         )}
                       </div>
                       <div>
-                        <p className="text-sm font-semibold text-[#1A1A16]">{m.full_name}</p>
+                        <p className="text-sm font-semibold text-[#1A1A16] flex items-center gap-1.5">
+                          {m.full_name}
+                          {isNew && (
+                            <span className="text-[10px] font-bold bg-[#F06418] text-white px-1.5 py-0.5 rounded-full leading-none">New</span>
+                          )}
+                        </p>
                         <p className="text-xs text-[#7A7A72]">{m.gender ?? "—"}</p>
                       </div>
                     </div>
@@ -308,7 +432,8 @@ function MembersGrid({ members, onNavigate, compact, paidThisMonth }: { members:
         const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
         const days = daysUntilExpiry(m.expiry_date);
         const pkgColor = (m as any).packages?.color ?? "#F06418";
-        const feePaid = paidThisMonth.has(m.id);
+        const feePaid  = paidThisMonth.has(m.id);
+        const isNew    = isNewMember(m);
 
         return (
           <button key={m.id} onClick={() => onNavigate(m.id)}
@@ -323,8 +448,13 @@ function MembersGrid({ members, onNavigate, compact, paidThisMonth }: { members:
                     <span className="text-[#F06418] text-sm font-bold">{m.full_name.charAt(0)}</span>
                   )}
                 </div>
-                <div className="min-w-0">
-                  <p className={`font-bold text-[#1A1A16] truncate group-hover:text-[#F06418] transition-colors ${compact ? "text-xs" : "text-sm"}`}>{m.full_name}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <p className={`font-bold text-[#1A1A16] truncate group-hover:text-[#F06418] transition-colors ${compact ? "text-xs" : "text-sm"}`}>{m.full_name}</p>
+                    {isNew && (
+                      <span className="text-[10px] font-bold bg-[#F06418] text-white px-1.5 py-0.5 rounded-full leading-none flex-shrink-0">New</span>
+                    )}
+                  </div>
                   <p className="text-[10px] font-mono text-[#F06418]">{m.membership_no}</p>
                 </div>
               </div>
