@@ -157,15 +157,20 @@ export default function AttendancePage() {
     );
   });
 
-  // Per-device stats
+  // Per-device stats — always from full records so each card shows its own count
   const deviceStats = devices.map((d) => ({
     device: d,
     count: records.filter((r) => r.device_id === d.serial_no).length,
     online: d.last_seen ? (Date.now() - new Date(d.last_seen).getTime()) < 2 * 60 * 1000 : false,
   }));
 
-  const uniqueMembers = new Set(records.filter((r) => r.member?.id).map((r) => r.member!.id)).size;
-  const hourCounts = records.reduce((acc, r) => {
+  // Stats cards respect device filter but not search/punch-type (so KPIs reflect selected device)
+  const deviceFiltered = deviceFilter === "all"
+    ? records
+    : records.filter((r) => r.device_id === deviceFilter);
+
+  const uniqueMembers = new Set(deviceFiltered.filter((r) => r.member?.id).map((r) => r.member!.id)).size;
+  const hourCounts = deviceFiltered.reduce((acc, r) => {
     const h = new Date(r.punch_time).getHours();
     acc[h] = (acc[h] || 0) + 1;
     return acc;
@@ -365,12 +370,12 @@ export default function AttendancePage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard
             title={deviceFilter !== "all" ? `Punches (${getDevice(deviceFilter)?.name ?? deviceFilter})` : `Total Punches (${DATE_LABELS[dateRange]})`}
-            value={records.filter((r) => r.punch_type === "in").length}
+            value={deviceFiltered.filter((r) => r.punch_type === "in").length}
             icon={CalendarCheck} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]"
           />
           <StatsCard title="Unique Members" value={uniqueMembers} icon={Users} iconColor="text-blue-600" iconBg="bg-blue-50" />
           <StatsCard title="Peak Hour" value={peakLabel} icon={Activity} iconColor="text-purple-600" iconBg="bg-purple-50" />
-          <StatsCard title="Total Records" value={records.length} icon={CheckCircle} iconColor="text-green-600" iconBg="bg-green-50" />
+          <StatsCard title="Total Records" value={deviceFiltered.length} icon={CheckCircle} iconColor="text-green-600" iconBg="bg-green-50" />
         </div>
 
         {/* ── Filter bar ─────────────────────────────────────────── */}

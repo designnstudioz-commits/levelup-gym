@@ -1517,32 +1517,74 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
-  const [pushing, setPushing] = useState<string | null>(null); // serial being pushed
+  const [pushing, setPushing] = useState<string | null>(null);
+  const [nextIds, setNextIds] = useState<Record<string, number>>({});
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const supabase = createClient();
 
   async function load() {
     setLoading(true);
-    const [{ data: devs }, { data: enrs }, { data: cmds }] = await Promise.all([
+    const [{ data: devs }, { data: enrs }, { data: cmds }, { data: allEnrs }] = await Promise.all([
       supabase.from("devices").select("id, serial_no, name").order("name"),
       supabase.from("device_enrollments").select("id, device_serial, device_user_id")
         .eq("member_id", memberId).is("deleted_at", null),
       supabase.from("device_commands").select("device_serial, status, created_at")
         .eq("member_id", memberId).eq("command_type", "push_user")
         .order("created_at", { ascending: false }).limit(20),
+      // All enrollments across all members to compute next available ID per device
+      supabase.from("device_enrollments").select("device_serial, device_user_id").is("deleted_at", null),
     ]);
     setDevices(devs ?? []);
     setEnrollments(enrs ?? []);
-    // Keep the latest command status per device
     const map: Record<string, LastCmd> = {};
     for (const c of (cmds ?? [])) {
       if (!map[c.device_serial]) map[c.device_serial] = { status: c.status, created_at: c.created_at };
     }
     setLastCmds(map);
+    // Compute next available user ID per device (max existing + 1, default 1)
+    const maxMap: Record<string, number> = {};
+    for (const row of (allEnrs ?? [])) {
+      const n = parseInt(row.device_user_id, 10);
+      if (!isNaN(n)) maxMap[row.device_serial] = Math.max(maxMap[row.device_serial] ?? 0, n);
+    }
+    const nextMap: Record<string, number> = {};
+    for (const serial in maxMap) nextMap[serial] = maxMap[serial] + 1;
+    setNextIds(nextMap);
     setLoading(false);
+    return map;
   }
 
-  useEffect(() => { load(); }, [memberId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Poll only command statuses every 5s while any command is pending/sent
+  async function refreshCmds(): Promise<Record<string, LastCmd>> {
+    const { data: cmds } = await supabase
+      .from("device_commands").select("device_serial, status, created_at")
+      .eq("member_id", memberId).eq("command_type", "push_user")
+      .order("created_at", { ascending: false }).limit(20);
+    const map: Record<string, LastCmd> = {};
+    for (const c of (cmds ?? [])) {
+      if (!map[c.device_serial]) map[c.device_serial] = { status: c.status, created_at: c.created_at };
+    }
+    setLastCmds(map);
+    return map;
+  }
+
+  function startPolling() {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(async () => {
+      const map = await refreshCmds();
+      const hasActive = Object.values(map).some((c) => c.status === "pending" || c.status === "sent");
+      if (!hasActive) {
+        clearInterval(pollRef.current!);
+        pollRef.current = null;
+      }
+    }, 5000);
+  }
+
+  useEffect(() => {
+    load();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [memberId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function enrollmentFor(serial: string) {
     return enrollments.find((e) => e.device_serial === serial) ?? null;
@@ -1550,7 +1592,8 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
 
   function startEdit(serial: string) {
     const existing = enrollmentFor(serial);
-    setEditValue(existing?.device_user_id ?? "");
+    // Pre-fill with next available ID when enrolling fresh; keep existing ID when editing
+    setEditValue(existing?.device_user_id ?? String(nextIds[serial] ?? 1));
     setEditingSerial(serial);
   }
 
@@ -1582,6 +1625,8 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
 
     setSaving(false);
     setEditingSerial(null);
+    // Clear cmd status so Push button reappears after an edit
+    setLastCmds((prev) => { const next = { ...prev }; delete next[serial]; return next; });
     await load();
     onSaved();
   }
@@ -1609,8 +1654,9 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
       if (!res.ok) {
         toast.error(data.error ?? "Push failed");
       } else {
-        toast.success(`Queued — device will receive "${data.name}" within ~30 seconds`);
+        toast.success(`Queued — device will pick it up within ~30 seconds`);
         await load();
+        startPolling();
       }
     } catch {
       toast.error("Network error");
@@ -1654,6 +1700,8 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
             const isEditing = editingSerial === dev.serial_no;
             const isPushing = pushing === dev.serial_no;
             const label = dev.name || dev.serial_no;
+            const cmdStatus = lastCmds[dev.serial_no]?.status;
+            const showPushBtn = enr && cmdStatus !== "acked";
 
             return (
               <div key={dev.serial_no} className="rounded-lg border border-[#E4E4DE] bg-[#F8F8F6] px-2.5 py-2">
@@ -1664,7 +1712,7 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
                   </div>
                   {!isEditing ? (
                     <div className="flex items-center gap-2">
-                      {enr && (
+                      {showPushBtn && (
                         <button
                           onClick={() => pushToDevice(dev.serial_no)}
                           disabled={isPushing}
@@ -1680,7 +1728,7 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
                       )}
                       <button onClick={() => startEdit(dev.serial_no)}
                         className="text-[10px] text-[#4A4A44] hover:text-[#F06418] hover:underline flex items-center gap-0.5">
-                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : "Enroll"}
+                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : `Enroll (ID ${nextIds[dev.serial_no] ?? 1})`}
                       </button>
                       {enr && (
                         <button onClick={() => removeEnrollment(dev.serial_no)}
@@ -1724,11 +1772,6 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
                   <span className="text-[11px] text-[#7A7A72]">Not enrolled</span>
                 )}
 
-                {enr && !isEditing && (
-                  <p className="text-[10px] text-[#7A7A72] mt-1.5">
-                    "Push to Device" sends the name to the machine. Then do the face scan at the device to complete enrollment.
-                  </p>
-                )}
               </div>
             );
           })}

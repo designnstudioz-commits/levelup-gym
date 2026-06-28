@@ -94,7 +94,7 @@ export default function SubmissionsPage() {
     try {
       const supabase = createClient();
 
-      const membershipNo = await generateMembershipNo();
+      const membershipNo = await generateMembershipNo(sub.gender);
 
       // Insert into members
       const { data: newMember, error: memberError } = await supabase.from("members").insert({

@@ -165,7 +165,7 @@ export default function DailyMembersPage() {
     setSaving(true);
     try {
       const supabase = createClient();
-      const membershipNo = await generateMembershipNo();
+      const membershipNo = await generateMembershipNo(convertModal.gender);
       const pkg = packages.find((p) => p.id === convertForm.package_id);
 
       const { data: newMember, error } = await supabase.from("members").insert({

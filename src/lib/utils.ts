@@ -83,14 +83,19 @@ export async function generateReceiptNo(): Promise<string> {
   return `RCP-${year}-${String(next).padStart(4, "0")}`;
 }
 
-export async function generateMembershipNo(): Promise<string> {
+export async function generateMembershipNo(
+  gender?: string | null,
+  type: "member" | "staff" = "member"
+): Promise<string> {
   const supabase = createClient();
   const year = new Date().getFullYear();
+  const prefix = type === "staff" ? "LUS" : gender === "Female" ? "LUF" : "LUM";
   const { count } = await supabase
     .from("members")
-    .select("*", { count: "exact", head: true });
+    .select("*", { count: "exact", head: true })
+    .like("membership_no", `${prefix}-%`);
   const next = (count ?? 0) + 1;
-  return `LUF-${year}-${String(next).padStart(4, "0")}`;
+  return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
 }
 
 export function cn(...classes: (string | undefined | null | false)[]): string {
