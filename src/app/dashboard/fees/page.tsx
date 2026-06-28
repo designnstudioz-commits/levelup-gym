@@ -76,6 +76,9 @@ export default function FeesPage() {
   // Quick Collect
   const [collectModal, setCollectModal]       = useState(false);
   const [memberSearch, setMemberSearch]       = useState("");
+  const [searchPrefix, setSearchPrefix]       = useState<"LUM" | "LUF" | "LUS">("LUM");
+  const [searchYear, setSearchYear]           = useState(String(new Date().getFullYear()));
+  const [searchCode, setSearchCode]           = useState("");
   const [memberResults, setMemberResults]     = useState<MemberWithPackage[]>([]);
   const [selectedMember, setSelectedMember]   = useState<MemberWithPackage | null>(null);
   const [feeAmount, setFeeAmount]             = useState("");
@@ -146,20 +149,21 @@ export default function FeesPage() {
 
   // Member search for quick collect
   useEffect(() => {
-    if (!memberSearch.trim()) { setMemberResults([]); return; }
-    const q = memberSearch.toLowerCase();
+    const code = searchCode.trim();
+    if (!code) { setMemberResults([]); return; }
+    const prefix = `${searchPrefix}-${searchYear}-`;
     setMemberResults(
       members.filter((m) =>
-        m.full_name.toLowerCase().includes(q) ||
-        m.phone.includes(q) ||
-        m.membership_no.toLowerCase().includes(q)
-      ).slice(0, 5)
+        m.membership_no.toUpperCase().startsWith(prefix) &&
+        m.membership_no.toUpperCase().includes(code.toUpperCase())
+      ).slice(0, 8)
     );
-  }, [memberSearch, members]);
+  }, [searchCode, searchPrefix, searchYear, members]);
 
   async function selectMember(m: MemberWithPackage) {
     setSelectedMember(m);
     setMemberSearch("");
+    setSearchCode("");
     setMemberResults([]);
     setFeeAmount(String((m as any).packages?.monthly_fee ?? m.monthly_fee ?? ""));
     setFeeType("membership");
@@ -296,18 +300,40 @@ export default function FeesPage() {
       </div>
 
       {/* ── Quick Collect Modal ──────────────────────────────────── */}
-      <Modal open={collectModal} onClose={() => { setCollectModal(false); setSelectedMember(null); setMemberSearch(""); setAlreadyPaidWarning(false); }} title="Collect Fee Payment" size="md">
+      <Modal open={collectModal} onClose={() => { setCollectModal(false); setSelectedMember(null); setMemberSearch(""); setSearchCode(""); setMemberResults([]); setAlreadyPaidWarning(false); }} title="Collect Fee Payment" size="md">
         <div className="p-5 space-y-4">
 
           {/* Member search */}
           {!selectedMember ? (
             <div>
               <label className="text-sm font-medium text-[#1A1A16] block mb-2">Search Member <span className="text-[#F06418]">*</span></label>
-              <div className="relative">
-                <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
-                <input type="text" placeholder="Name, phone, or membership no..." value={memberSearch}
-                  onChange={(e) => setMemberSearch(e.target.value)} autoFocus
-                  className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+
+              {/* Prefix selector */}
+              <div className="flex gap-2 mb-2">
+                {(["LUM", "LUF", "LUS"] as const).map((p) => (
+                  <button key={p} type="button" onClick={() => { setSearchPrefix(p); setSearchCode(""); setMemberResults([]); }}
+                    className={`px-4 py-1.5 rounded-lg text-sm font-bold border-2 transition-all ${searchPrefix === p ? "bg-[#F06418] border-[#F06418] text-white" : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418]"}`}>
+                    {p}
+                  </button>
+                ))}
+                <select value={searchYear} onChange={(e) => { setSearchYear(e.target.value); setSearchCode(""); setMemberResults([]); }}
+                  className="ml-auto px-3 py-1.5 text-sm font-semibold border-2 border-[#E4E4DE] rounded-lg bg-white text-[#1A1A16] focus:outline-none focus:border-[#F06418]">
+                  {[...new Set(members.map(m => m.membership_no?.split("-")[1]).filter(Boolean))].sort().map(y => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                  {![...members.map(m => m.membership_no?.split("-")[1])].includes(searchYear) && (
+                    <option value={searchYear}>{searchYear}</option>
+                  )}
+                </select>
+              </div>
+
+              {/* Code input */}
+              <div className="flex items-center gap-2 bg-[#F8F8F6] border-2 border-[#E4E4DE] rounded-lg px-3 py-2 focus-within:border-[#F06418] transition-all">
+                <span className="text-sm font-bold text-[#F06418] flex-shrink-0">{searchPrefix}-{searchYear}-</span>
+                <input type="text" placeholder="0001" value={searchCode} autoFocus
+                  onChange={(e) => setSearchCode(e.target.value.toUpperCase())}
+                  className="flex-1 bg-transparent text-sm font-semibold text-[#1A1A16] placeholder-[#C0C0B8] focus:outline-none tracking-widest"
+                  maxLength={4}
                 />
               </div>
               {memberResults.length > 0 && (
