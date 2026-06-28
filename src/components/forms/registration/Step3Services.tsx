@@ -101,13 +101,20 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                   type="button"
                   onClick={() => toggleService(pkg.name)}
                   className={cn(
-                    "px-3 py-2.5 rounded-lg border text-left text-sm font-semibold leading-tight transition-all",
+                    "flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg border text-left transition-all",
                     selected
-                      ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]"
-                      : "bg-white border-[#E4E4DE] text-[#1A1A16] hover:border-[#F06418] hover:bg-[#FEF0E8]"
+                      ? "bg-[#FEF0E8] border-[#F06418]"
+                      : "bg-white border-[#E4E4DE] hover:border-[#F06418] hover:bg-[#FEF0E8]"
                   )}
                 >
-                  {pkg.name}
+                  <span className={cn("text-sm font-semibold leading-tight", selected ? "text-[#C04E10]" : "text-[#1A1A16]")}>
+                    {pkg.name}
+                  </span>
+                  {pkg.monthly_fee > 0 && (
+                    <span className={cn("text-xs font-medium", selected ? "text-[#F06418]" : "text-[#7A7A72]")}>
+                      Rs {pkg.monthly_fee.toLocaleString()}/mo
+                    </span>
+                  )}
                 </button>
               );
             })}

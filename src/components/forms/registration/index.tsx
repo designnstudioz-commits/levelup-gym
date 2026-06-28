@@ -254,7 +254,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
 
   return (
     <div>
-      <ProgressBar currentStep={currentStep} totalSteps={4} labels={STEP_LABELS} />
+      <ProgressBar currentStep={currentStep} totalSteps={4} labels={STEP_LABELS} onStepClick={setCurrentStep} />
 
       <div className="min-h-[400px]">
         {currentStep === 1 && <Step1Personal form={form} />}
