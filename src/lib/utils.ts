@@ -96,11 +96,21 @@ export async function generateMembershipNo(
   const supabase = createClient();
   const year = new Date().getFullYear();
   const prefix = type === "staff" ? "LUS" : gender === "Female" ? "LUF" : "LUM";
-  const { count } = await supabase
+
+  // Find the highest existing sequence for this prefix + current year to avoid collisions
+  const { data } = await supabase
     .from("members")
-    .select("*", { count: "exact", head: true })
-    .like("membership_no", `${prefix}-%`);
-  const next = (count ?? 0) + 1;
+    .select("membership_no")
+    .like("membership_no", `${prefix}-${year}-%`)
+    .order("membership_no", { ascending: false })
+    .limit(1);
+
+  let next = 1;
+  if (data && data.length > 0) {
+    const seq = parseInt((data[0].membership_no as string).split("-")[2] ?? "0", 10);
+    if (!isNaN(seq)) next = seq + 1;
+  }
+
   return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
 }
 
