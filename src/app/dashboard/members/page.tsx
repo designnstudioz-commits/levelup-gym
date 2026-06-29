@@ -53,10 +53,11 @@ export default function MembersPage() {
   const [genderFilter, setGenderFilter] = useState<"all" | "Male" | "Female">("all");
   const [sortKey, setSortKey]           = useState<SortKey>("newest");
   const [expiringOnly, setExpiringOnly] = useState(false);
+  const [newOnly, setNewOnly]           = useState(false);
   const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
 
   // Reset to page 1 whenever any filter changes
-  useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, feeFilter]);
+  useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, newOnly, feeFilter]);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -101,6 +102,7 @@ export default function MembersPage() {
         const days = daysUntilExpiry(m.expiry_date);
         if (days === null || days > 30 || days < 0) return false;
       }
+      if (newOnly && !isNewMember(m)) return false;
       if (feeFilter === "paid"    && !paidThisMonth.has(m.id)) return false;
       if (feeFilter === "pending" &&  paidThisMonth.has(m.id)) return false;
       if (!search) return true;
@@ -132,8 +134,8 @@ export default function MembersPage() {
   const safePage   = Math.min(page, totalPages);
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const hasActiveFilters = genderFilter !== "all" || expiringOnly || !!search || feeFilter !== "all";
-  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setFeeFilter("all"); }
+  const hasActiveFilters = genderFilter !== "all" || expiringOnly || newOnly || !!search || feeFilter !== "all";
+  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setNewOnly(false); setFeeFilter("all"); }
 
   // Contextual counts: status counts respect gender filter, gender counts respect status filter
   const statusCounts = useMemo(() => {
@@ -248,6 +250,18 @@ export default function MembersPage() {
               <input type="checkbox" className="accent-[#F06418]" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
               Expiring in 30 days
             </label>
+
+            <button
+              onClick={() => setNewOnly((v) => !v)}
+              className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors ${
+                newOnly
+                  ? "bg-[#F06418] text-white border-[#F06418]"
+                  : "bg-[#F8F8F6] text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418] hover:text-[#F06418]"
+              }`}
+            >
+              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${newOnly ? "bg-white/25 text-white" : "bg-[#F06418] text-white"}`}>New</span>
+              Added in last 3 days
+            </button>
 
             {/* Fee status filter */}
             <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
