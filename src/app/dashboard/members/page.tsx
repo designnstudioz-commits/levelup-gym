@@ -63,8 +63,11 @@ export default function MembersPage() {
     setLoading(true);
     const supabase = createClient();
     const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-    const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+    const y   = now.getFullYear();
+    const m   = String(now.getMonth() + 1).padStart(2, "0");
+    const monthStart = `${y}-${m}-01`;
+    const lastDay    = new Date(y, now.getMonth() + 1, 0).getDate();
+    const monthEnd   = `${y}-${m}-${String(lastDay).padStart(2, "0")}`;
 
     let query = supabase
       .from("members")

@@ -472,7 +472,7 @@ export default function MemberDetailPage() {
       amount: finalAmount,
       payment_type: feeType as any,
       payment_method: feeMethod as any,
-      payment_date: new Date().toISOString().split("T")[0],
+      payment_date: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })(),
       receipt_no: receiptNo,
       note: fullNote,
       commission_staff_id: showCommission && commissionStaffId ? commissionStaffId : null,
