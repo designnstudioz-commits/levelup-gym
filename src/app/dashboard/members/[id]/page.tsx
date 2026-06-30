@@ -467,7 +467,7 @@ export default function MemberDetailPage() {
     const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
     const receiptNo = await generateReceiptNo();
 
-    await supabase.from("fee_payments").insert({
+    const { error: feeError } = await supabase.from("fee_payments").insert({
       member_id: id,
       amount: finalAmount,
       payment_type: feeType as any,
@@ -479,6 +479,11 @@ export default function MemberDetailPage() {
       commission_rate: showCommission && commissionRate ? Number(commissionRate) : null,
       commission_amount: showCommission && commissionAmount > 0 ? commissionAmount : null,
     });
+    if (feeError) {
+      toast.error("Failed to save payment. Please try again.");
+      setSaving(false);
+      return;
+    }
     await supabase.from("activity_logs").insert({
       action: "paid_fee",
       entity_type: "member",
