@@ -18,10 +18,9 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
-import { addMonths, format } from "date-fns";
 
 const SERVICES = [
   "Gym", "Cardio", "Personal Training", "CrossFit", "MMA",
@@ -466,13 +465,15 @@ export default function MemberDetailPage() {
         : null;
     const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
     const receiptNo = await generateReceiptNo();
+    const today = new Date();
+    const paymentDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
 
     const { error: feeError } = await supabase.from("fee_payments").insert({
       member_id: id,
       amount: finalAmount,
       payment_type: feeType as any,
       payment_method: feeMethod as any,
-      payment_date: (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })(),
+      payment_date: paymentDate,
       receipt_no: receiptNo,
       note: fullNote,
       commission_staff_id: showCommission && commissionStaffId ? commissionStaffId : null,
@@ -484,6 +485,18 @@ export default function MemberDetailPage() {
       setSaving(false);
       return;
     }
+
+    // Paying a recurring fee (membership, or trainer/nutritionist/physio for
+    // packages billed that way) pushes out the expiry date. If the current
+    // cycle hasn't lapsed yet, extend from it so paying early doesn't cost
+    // the member their remaining days; otherwise the cycle restarts from
+    // the payment date.
+    if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
+      const durationMonths = (member as any)?.packages?.duration_months || 1;
+      const newExpiry = extendExpiryDate(member?.expiry_date, paymentDate, durationMonths);
+      await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
+    }
+
     await supabase.from("activity_logs").insert({
       action: "paid_fee",
       entity_type: "member",
@@ -1178,7 +1191,15 @@ export default function MemberDetailPage() {
             <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Membership Details</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Input label="Joining Date *" type="date" required value={profileForm.joining_date}
-                onChange={(e) => setProfileForm((f) => ({ ...f, joining_date: e.target.value }))} />
+                onChange={(e) => {
+                  const newJoiningDate = e.target.value;
+                  const durationMonths = member?.packages?.duration_months || 1;
+                  setProfileForm((f) => ({
+                    ...f,
+                    joining_date: newJoiningDate,
+                    expiry_date: newJoiningDate ? addMonthsToDateStr(newJoiningDate, durationMonths) : f.expiry_date,
+                  }));
+                }} />
               <Input label="Expiry Date" type="date" value={profileForm.expiry_date}
                 onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))} />
               <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
@@ -1402,7 +1423,7 @@ export default function MemberDetailPage() {
         <div className="p-5 space-y-4">
           <Input label="New Joining Date" type="date" value={joiningDate} onChange={(e) => {
             setJoiningDate(e.target.value);
-            if (e.target.value) setExpiryDate(format(addMonths(new Date(e.target.value), 1), "yyyy-MM-dd"));
+            if (e.target.value) setExpiryDate(addMonthsToDateStr(e.target.value, member?.packages?.duration_months || 1));
           }} />
           <Input label="New Expiry Date" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
           <div className="flex gap-3 pt-2">

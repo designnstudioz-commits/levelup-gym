@@ -19,7 +19,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
-import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay } from "@/lib/utils";
+import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 
@@ -33,7 +33,7 @@ interface PaymentRow extends FeePayment {
 }
 
 interface MemberWithPackage extends Member {
-  packages?: { name: string; monthly_fee: number; color: string | null } | null;
+  packages?: { name: string; monthly_fee: number; color: string | null; duration_months: number | null } | null;
 }
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
@@ -129,7 +129,7 @@ export default function FeesPage() {
         .order("payment_date", { ascending: false })
         .order("created_at", { ascending: false }),
       supabase.from("members")
-        .select("*, packages(name, monthly_fee, color)")
+        .select("*, packages(name, monthly_fee, color, duration_months)")
         .eq("status", "active")
         .is("deleted_at", null)
         .order("full_name"),
@@ -209,6 +209,15 @@ export default function FeesPage() {
       }).select("id").single();
 
       if (error) throw error;
+
+      // Paying a recurring fee pushes out the expiry date — extend from the
+      // current cycle if it hasn't lapsed yet, so paying early doesn't cost
+      // the member their remaining days.
+      if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
+        const durationMonths = selectedMember.packages?.duration_months || 1;
+        const newExpiry = extendExpiryDate(selectedMember.expiry_date, today, durationMonths);
+        await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", selectedMember.id);
+      }
 
       await supabase.from("activity_logs").insert({
         action: "paid_fee", entity_type: "member", entity_id: selectedMember.id,

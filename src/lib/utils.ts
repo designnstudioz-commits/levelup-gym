@@ -1,4 +1,4 @@
-import { format, formatDistanceToNow, differenceInDays } from "date-fns";
+import { format, formatDistanceToNow, differenceInDays, addMonths } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 
 export function formatPhone(raw: string): string {
@@ -48,6 +48,32 @@ export function timeAgo(date: string | Date | null | undefined): string {
   } catch {
     return "—";
   }
+}
+
+/** Adds `months` to a "YYYY-MM-DD" date string, e.g. for computing a
+ *  membership's expiry date from its joining date + package duration. */
+export function addMonthsToDateStr(dateStr: string, months: number): string {
+  return format(addMonths(new Date(dateStr), months), "yyyy-MM-dd");
+}
+
+/** Fee types that count as a member's recurring dues (as opposed to
+ *  one-off charges like admission fees). Paying any of these is what
+ *  keeps a member's status current — staff don't always pick "membership"
+ *  in the dropdown (e.g. Personal Training packages are often logged as
+ *  "trainer"). */
+export const RECURRING_FEE_TYPES = ["membership", "trainer", "nutritionist", "physiotherapy"] as const;
+
+/** Computes a member's new expiry date after a recurring-dues payment.
+ *  If their current expiry hasn't lapsed yet, the new cycle extends from
+ *  it so paying early doesn't cost them the remaining days. Otherwise the
+ *  cycle restarts from the payment date. */
+export function extendExpiryDate(
+  currentExpiry: string | null | undefined,
+  paymentDate: string,
+  durationMonths: number
+): string {
+  const base = currentExpiry && currentExpiry >= paymentDate ? currentExpiry : paymentDate;
+  return addMonthsToDateStr(base, durationMonths);
 }
 
 export function daysUntilExpiry(expiryDate: string | null | undefined): number | null {
