@@ -38,12 +38,26 @@ function isNewMember(m: MemberWithJoins): boolean {
   return new Date(m.created_at).getTime() >= threeDaysAgo;
 }
 
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Adds `months` to a "YYYY-MM-DD" date string using local date components only
+ *  (never toISOString/UTC parsing — that's what caused fees to flip to Pending
+ *  around month boundaries before). */
+function addMonthsToDateStr(dateStr: string, months: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1 + months, d);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 export default function MembersPage() {
   const router = useRouter();
   const [members, setMembers]   = useState<MemberWithJoins[]>([]);
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [paidThisMonth, setPaidThisMonth] = useState<Set<string>>(new Set());
+  const [lastMembershipPayment, setLastMembershipPayment] = useState<Map<string, string>>(new Map());
   const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null }[]>([]);
   const [page, setPage] = useState(1);
 
@@ -62,16 +76,13 @@ export default function MembersPage() {
   const fetchMembers = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
-    const now = new Date();
-    const y   = now.getFullYear();
-    const m   = String(now.getMonth() + 1).padStart(2, "0");
-    const monthStart = `${y}-${m}-01`;
-    const lastDay    = new Date(y, now.getMonth() + 1, 0).getDate();
-    const monthEnd   = `${y}-${m}-${String(lastDay).padStart(2, "0")}`;
+
+    // Look back 13 months so even annual packages have their last payment in range.
+    const cutoff = addMonthsToDateStr(todayStr(), -13);
 
     let query = supabase
       .from("members")
-      .select("*, packages(name, monthly_fee, color), trainer:staff_members!members_trainer_id_fkey(full_name)")
+      .select("*, packages(name, monthly_fee, color, duration_months), trainer:staff_members!members_trainer_id_fkey(full_name)")
       .is("deleted_at", null);
 
     if (statusFilter !== "all") query = query.eq("status", statusFilter);
@@ -81,10 +92,15 @@ export default function MembersPage() {
       query,
       supabase
         .from("fee_payments")
-        .select("member_id")
+        // Recurring-dues payment types only — "admission" and "other" are
+        // one-off charges and don't cover a billing cycle. Staff don't always
+        // pick "membership" in the dropdown (e.g. Personal Training packages
+        // are often logged as "trainer"), so any of these count.
+        .select("member_id, payment_date")
+        .in("payment_type", ["membership", "trainer", "nutritionist", "physiotherapy"])
         .is("deleted_at", null)
-        .gte("payment_date", monthStart)
-        .lte("payment_date", monthEnd),
+        .gte("payment_date", cutoff)
+        .order("payment_date", { ascending: false }),
       supabase
         .from("members")
         .select("status, gender")
@@ -93,9 +109,29 @@ export default function MembersPage() {
 
     if (!error) setMembers(data ?? []);
     setAllCounts(countData ?? []);
-    setPaidThisMonth(new Set((feeData ?? []).map((f: any) => f.member_id)));
+
+    // Most recent recurring-dues payment per member (payment_date is sorted
+    // desc, so the first time we see a member_id is their latest payment).
+    const lastPaid = new Map<string, string>();
+    for (const f of (feeData ?? []) as { member_id: string; payment_date: string }[]) {
+      if (!lastPaid.has(f.member_id)) lastPaid.set(f.member_id, f.payment_date);
+    }
+    setLastMembershipPayment(lastPaid);
     setLoading(false);
   }, [statusFilter, genderFilter]);
+
+  /** A member's fee is current if their last recurring-dues payment still
+   *  covers today, based on their OWN package's billing cycle — not the
+   *  shared calendar month. A member who joins/pays on June 30 for a
+   *  1-month package is covered through ~July 30, so they must not flip to
+   *  "Pending" the instant the calendar rolls into July. */
+  const isFeeCurrent = useCallback((m: MemberWithJoins): boolean => {
+    const lastPaid = lastMembershipPayment.get(m.id);
+    if (!lastPaid) return false;
+    const durationMonths = (m as any).packages?.duration_months || 1;
+    const dueDate = addMonthsToDateStr(lastPaid, durationMonths);
+    return dueDate >= todayStr();
+  }, [lastMembershipPayment]);
 
   useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
@@ -106,8 +142,8 @@ export default function MembersPage() {
         if (days === null || days > 30 || days < 0) return false;
       }
       if (newOnly && !isNewMember(m)) return false;
-      if (feeFilter === "paid"    && !paidThisMonth.has(m.id)) return false;
-      if (feeFilter === "pending" &&  paidThisMonth.has(m.id)) return false;
+      if (feeFilter === "paid"    && !isFeeCurrent(m)) return false;
+      if (feeFilter === "pending" &&  isFeeCurrent(m)) return false;
       if (!search) return true;
       const q = search.toLowerCase();
       return (
@@ -308,11 +344,11 @@ export default function MembersPage() {
             <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
           </div>
         ) : viewMode === "list" ? (
-          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} paidThisMonth={paidThisMonth} />
+          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} isFeeCurrent={isFeeCurrent} />
         ) : viewMode === "grid" ? (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} paidThisMonth={paidThisMonth} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} isFeeCurrent={isFeeCurrent} />
         ) : (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} paidThisMonth={paidThisMonth} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} isFeeCurrent={isFeeCurrent} />
         )}
 
         {/* Pagination */}
@@ -386,7 +422,7 @@ function PageNumbers({ current, total, onSelect }: { current: number; total: num
 }
 
 // ── List (Table) View ────────────────────────────────────────────────
-function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; paidThisMonth: Set<string> }) {
+function MembersTable({ members, onNavigate, isFeeCurrent }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; isFeeCurrent: (m: MemberWithJoins) => boolean }) {
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
       <div className="overflow-x-auto">
@@ -408,7 +444,7 @@ function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberW
             {members.map((m) => {
               const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
               const pkgColor = (m as any).packages?.color ?? "#F06418";
-              const feePaid  = paidThisMonth.has(m.id);
+              const feePaid  = isFeeCurrent(m);
               const isNew    = isNewMember(m);
               return (
                 <tr key={m.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onNavigate(m.id)}>
@@ -467,7 +503,7 @@ function MembersTable({ members, onNavigate, paidThisMonth }: { members: MemberW
 }
 
 // ── Grid / Compact View ─────────────────────────────────────────────
-function MembersGrid({ members, onNavigate, compact, paidThisMonth }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; paidThisMonth: Set<string> }) {
+function MembersGrid({ members, onNavigate, compact, isFeeCurrent }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; isFeeCurrent: (m: MemberWithJoins) => boolean }) {
   const cols = compact
     ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
     : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
@@ -478,7 +514,7 @@ function MembersGrid({ members, onNavigate, compact, paidThisMonth }: { members:
         const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
         const days = daysUntilExpiry(m.expiry_date);
         const pkgColor = (m as any).packages?.color ?? "#F06418";
-        const feePaid  = paidThisMonth.has(m.id);
+        const feePaid  = isFeeCurrent(m);
         const isNew    = isNewMember(m);
 
         return (
