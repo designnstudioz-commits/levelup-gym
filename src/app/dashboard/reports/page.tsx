@@ -96,7 +96,10 @@ export default function ReportsPage() {
       { data: dailyMembers },
     ] = await Promise.all([
       supabase.from("fee_payments").select("id, amount, payment_type, payment_method, payment_date, member_id, commission_staff_id, commission_rate, commission_amount").is("deleted_at", null).gte("payment_date", from).lte("payment_date", to),
-      supabase.from("members").select("id, full_name, membership_no, gender, status, joining_date, expiry_date, package_id, monthly_fee, packages(name, color), trainer_id").is("deleted_at", null),
+      // No status filter here (reports need inactive/archived too), and the gym
+      // already has 1000+ members — Supabase/PostgREST silently caps unlimited
+      // queries at 1000 rows, so this needs an explicit ceiling above the real count.
+      supabase.from("members").select("id, full_name, membership_no, gender, status, joining_date, expiry_date, package_id, monthly_fee, packages(name, color), trainer_id").is("deleted_at", null).limit(10000),
       supabase.from("attendances").select("id, punch_time, punch_type, member_id, device_id").gte("punch_time", `${from}T00:00:00+05:00`).lte("punch_time", `${to}T23:59:59+05:00`),
       supabase.from("submissions").select("id, status, referral_source, created_at, reviewed_at, gender").is("deleted_at", null).gte("created_at", `${from}T00:00:00`).lte("created_at", `${to}T23:59:59`),
       supabase.from("staff_members").select("id, full_name, role, salary").in("role", ["Trainer", "Nutritionist", "Other"]).eq("status", "active").is("deleted_at", null),

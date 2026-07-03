@@ -80,10 +80,17 @@ export default function MembersPage() {
     // Look back 13 months so even annual packages have their last payment in range.
     const cutoff = addMonthsToDateStr(todayStr(), -13);
 
+    // Supabase/PostgREST caps any query with no explicit limit at 1000 rows —
+    // silently, with no error. The gym already has 1000+ members, so every
+    // query here needs an explicit ceiling well above the real row count or
+    // members past row #1000 quietly vanish from the list, search, and counts.
+    const ROW_CEILING = 10000;
+
     let query = supabase
       .from("members")
       .select("*, packages(name, monthly_fee, color, duration_months), trainer:staff_members!members_trainer_id_fkey(full_name)")
-      .is("deleted_at", null);
+      .is("deleted_at", null)
+      .limit(ROW_CEILING);
 
     if (statusFilter !== "all") query = query.eq("status", statusFilter);
     if (genderFilter !== "all") query = query.eq("gender", genderFilter);
@@ -100,11 +107,13 @@ export default function MembersPage() {
         .in("payment_type", ["membership", "trainer", "nutritionist", "physiotherapy"])
         .is("deleted_at", null)
         .gte("payment_date", cutoff)
-        .order("payment_date", { ascending: false }),
+        .order("payment_date", { ascending: false })
+        .limit(ROW_CEILING),
       supabase
         .from("members")
         .select("status, gender")
-        .is("deleted_at", null),
+        .is("deleted_at", null)
+        .limit(ROW_CEILING),
     ]);
 
     if (!error) setMembers(data ?? []);
