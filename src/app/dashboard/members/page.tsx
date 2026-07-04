@@ -12,7 +12,7 @@ import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, fetchAllRows } from "@/lib/utils";
 import type { Member } from "@/types/database";
 
 type MemberWithJoins = Member & {
@@ -58,7 +58,7 @@ export default function MembersPage() {
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [lastMembershipPayment, setLastMembershipPayment] = useState<Map<string, string>>(new Map());
-  const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null }[]>([]);
+  const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null; deleted_at: string | null }[]>([]);
   const [page, setPage] = useState(1);
 
   // Filters
@@ -80,52 +80,61 @@ export default function MembersPage() {
     // Look back 13 months so even annual packages have their last payment in range.
     const cutoff = addMonthsToDateStr(todayStr(), -13);
 
-    // Supabase/PostgREST caps any query with no explicit limit at 1000 rows —
-    // silently, with no error. The gym already has 1000+ members, so every
-    // query here needs an explicit ceiling well above the real row count or
-    // members past row #1000 quietly vanish from the list, search, and counts.
-    const ROW_CEILING = 10000;
+    try {
+      const [data, feeData, countData] = await Promise.all([
+        fetchAllRows<MemberWithJoins>((from, to) => {
+          let q = supabase
+            .from("members")
+            .select("*, packages(name, monthly_fee, color, duration_months), trainer:staff_members!members_trainer_id_fkey(full_name)");
+          // Archived members have deleted_at set (that's how archiving works —
+          // see archiveMember() in the member detail page), so the "Archived"
+          // tab has to query for deleted_at NOT null instead of excluding it
+          // like every other tab does.
+          if (statusFilter === "archived") {
+            q = q.eq("status", "archived").not("deleted_at", "is", null);
+          } else {
+            q = q.is("deleted_at", null);
+            if (statusFilter !== "all") q = q.eq("status", statusFilter);
+          }
+          if (genderFilter !== "all") q = q.eq("gender", genderFilter);
+          return q.range(from, to) as any;
+        }),
+        fetchAllRows<{ member_id: string; payment_date: string }>((from, to) =>
+          supabase
+            .from("fee_payments")
+            // Recurring-dues payment types only — "admission" and "other" are
+            // one-off charges and don't cover a billing cycle. Staff don't
+            // always pick "membership" in the dropdown (e.g. Personal
+            // Training packages are often logged as "trainer"), so any of
+            // these count.
+            .select("member_id, payment_date")
+            .in("payment_type", ["membership", "trainer", "nutritionist", "physiotherapy"])
+            .is("deleted_at", null)
+            .gte("payment_date", cutoff)
+            .order("payment_date", { ascending: false })
+            .range(from, to) as any
+        ),
+        // No deleted_at filter here — this feeds the status-tab counts, and
+        // the "Archived" tab's count needs to include the deleted_at-set
+        // rows too.
+        fetchAllRows<{ status: string | null; gender: string | null; deleted_at: string | null }>((from, to) =>
+          supabase.from("members").select("status, gender, deleted_at").range(from, to) as any
+        ),
+      ]);
 
-    let query = supabase
-      .from("members")
-      .select("*, packages(name, monthly_fee, color, duration_months), trainer:staff_members!members_trainer_id_fkey(full_name)")
-      .is("deleted_at", null)
-      .limit(ROW_CEILING);
+      setMembers(data);
+      setAllCounts(countData);
 
-    if (statusFilter !== "all") query = query.eq("status", statusFilter);
-    if (genderFilter !== "all") query = query.eq("gender", genderFilter);
-
-    const [{ data, error }, { data: feeData }, { data: countData }] = await Promise.all([
-      query,
-      supabase
-        .from("fee_payments")
-        // Recurring-dues payment types only — "admission" and "other" are
-        // one-off charges and don't cover a billing cycle. Staff don't always
-        // pick "membership" in the dropdown (e.g. Personal Training packages
-        // are often logged as "trainer"), so any of these count.
-        .select("member_id, payment_date")
-        .in("payment_type", ["membership", "trainer", "nutritionist", "physiotherapy"])
-        .is("deleted_at", null)
-        .gte("payment_date", cutoff)
-        .order("payment_date", { ascending: false })
-        .limit(ROW_CEILING),
-      supabase
-        .from("members")
-        .select("status, gender")
-        .is("deleted_at", null)
-        .limit(ROW_CEILING),
-    ]);
-
-    if (!error) setMembers(data ?? []);
-    setAllCounts(countData ?? []);
-
-    // Most recent recurring-dues payment per member (payment_date is sorted
-    // desc, so the first time we see a member_id is their latest payment).
-    const lastPaid = new Map<string, string>();
-    for (const f of (feeData ?? []) as { member_id: string; payment_date: string }[]) {
-      if (!lastPaid.has(f.member_id)) lastPaid.set(f.member_id, f.payment_date);
+      // Most recent recurring-dues payment per member (payment_date is
+      // sorted desc, so the first time we see a member_id is their latest).
+      const lastPaid = new Map<string, string>();
+      for (const f of feeData) {
+        if (!lastPaid.has(f.member_id)) lastPaid.set(f.member_id, f.payment_date);
+      }
+      setLastMembershipPayment(lastPaid);
+    } catch (err) {
+      console.error("Failed to fetch members:", err);
     }
-    setLastMembershipPayment(lastPaid);
     setLoading(false);
   }, [statusFilter, genderFilter]);
 
@@ -189,12 +198,21 @@ export default function MembersPage() {
   const statusCounts = useMemo(() => {
     const base = genderFilter === "all" ? allCounts : allCounts.filter((c) => c.gender === genderFilter);
     const map: Record<string, number> = { active: 0, inactive: 0, frozen: 0, archived: 0, all: 0 };
-    base.forEach((c) => { if (c.status && map[c.status] !== undefined) map[c.status]++; map.all++; });
+    base.forEach((c) => {
+      if (c.status === "archived") { map.archived++; return; }
+      if (c.deleted_at) return; // shouldn't happen outside archived, but stay consistent with the main query
+      if (c.status && map[c.status] !== undefined) map[c.status]++;
+      map.all++;
+    });
     return map;
   }, [allCounts, genderFilter]);
 
   const genderCounts = useMemo(() => {
-    const base = statusFilter === "all" ? allCounts : allCounts.filter((c) => c.status === statusFilter);
+    const base = statusFilter === "archived"
+      ? allCounts.filter((c) => c.status === "archived")
+      : statusFilter === "all"
+      ? allCounts.filter((c) => !c.deleted_at)
+      : allCounts.filter((c) => c.status === statusFilter && !c.deleted_at);
     return {
       all: base.length,
       Male: base.filter((c) => c.gender === "Male").length,

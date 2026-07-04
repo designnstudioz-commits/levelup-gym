@@ -1,6 +1,27 @@
 import { format, formatDistanceToNow, differenceInDays, addMonths } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 
+/** Fetches every row matching a query, paging around Supabase/PostgREST's
+ *  server-side row cap (commonly 1000) that silently truncates a single
+ *  request no matter what `.limit()`/`.range()` the client asks for. Pass a
+ *  function that applies `.range(from, to)` to a fresh query each call —
+ *  Supabase query builders can't be reused across pages. */
+export async function fetchAllRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  pageSize = 1000
+): Promise<T[]> {
+  let all: T[] = [];
+  let from = 0;
+  while (true) {
+    const { data, error } = await page(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    all = all.concat(data ?? []);
+    if (!data || data.length < pageSize) break;
+    from += pageSize;
+  }
+  return all;
+}
+
 export function formatPhone(raw: string): string {
   const digits = raw.replace(/\D/g, "").slice(0, 11);
   if (digits.length <= 4) return digits;
