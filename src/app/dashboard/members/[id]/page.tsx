@@ -376,14 +376,14 @@ export default function MemberDetailPage() {
     const supabase = createClient();
     const pkg = packages.find((p) => p.id === selectedPackage);
 
-    // Merge the new package's services into whatever the member already has
-    // — add, never silently remove manually-added services.
-    const mergedServices = Array.from(new Set([...(member?.services ?? []), ...(pkg?.services_included ?? [])]));
+    // Changing package resets services to exactly what the new package
+    // includes — it's the source of truth, not an incremental add-on.
+    const newServices = pkg?.services_included ?? [];
 
     await supabase.from("members").update({
       package_id: selectedPackage || null,
       monthly_fee: pkg?.monthly_fee ?? member?.monthly_fee,
-      services: mergedServices,
+      services: newServices,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
       action: "updated_package",
@@ -391,8 +391,8 @@ export default function MemberDetailPage() {
       entity_id: id,
       description: `Updated package for ${member?.full_name} to ${pkg?.name ?? "None"}`,
     });
-    setServices(mergedServices);
-    setSelectedServices(mergedServices);
+    setServices(newServices);
+    setSelectedServices(newServices);
     toast.success("Package updated");
     setEditPackage(false);
     setSaving(false);
