@@ -142,20 +142,40 @@ export async function generateMembershipNo(
 ): Promise<string> {
   const supabase = createClient();
   const year = new Date().getFullYear();
-  const prefix = type === "staff" ? "LUS" : gender === "Female" ? "LUF" : "LUM";
 
-  // Find the highest existing sequence for this prefix + current year to avoid collisions
+  if (type === "staff") {
+    // Staff numbering is unchanged — its own independent per-prefix counter.
+    const prefix = "LUS";
+    const { data } = await supabase
+      .from("members")
+      .select("membership_no")
+      .like("membership_no", `${prefix}-${year}-%`)
+      .order("membership_no", { ascending: false })
+      .limit(1);
+    let next = 1;
+    if (data && data.length > 0) {
+      const seq = parseInt((data[0].membership_no as string).split("-")[2] ?? "0", 10);
+      if (!isNaN(seq)) next = seq + 1;
+    }
+    return `${prefix}-${year}-${String(next).padStart(4, "0")}`;
+  }
+
+  // Male and Female share ONE sequence per year — LUM/LUF only label gender,
+  // the number itself increments regardless of who's being registered. So
+  // the search has to span both prefixes, and since "LUM" > "LUF"
+  // alphabetically the two prefixes don't sort in numeric order together —
+  // the max has to be found by parsing every row's sequence in JS, not by
+  // ordering the raw membership_no string.
+  const prefix = gender === "Female" ? "LUF" : "LUM";
   const { data } = await supabase
     .from("members")
     .select("membership_no")
-    .like("membership_no", `${prefix}-${year}-%`)
-    .order("membership_no", { ascending: false })
-    .limit(1);
+    .or(`membership_no.like.LUM-${year}-%,membership_no.like.LUF-${year}-%`);
 
   let next = 1;
-  if (data && data.length > 0) {
-    const seq = parseInt((data[0].membership_no as string).split("-")[2] ?? "0", 10);
-    if (!isNaN(seq)) next = seq + 1;
+  for (const row of data ?? []) {
+    const seq = parseInt((row.membership_no as string).split("-")[2] ?? "", 10);
+    if (!isNaN(seq) && seq >= next) next = seq + 1;
   }
 
   return `${prefix}-${year}-${String(next).padStart(4, "0")}`;

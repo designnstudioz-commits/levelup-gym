@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
 
@@ -228,11 +228,14 @@ export default function MemberDetailPage() {
     setSaving(true);
     const supabase = createClient();
 
-    // If gender changed, swap the membership number prefix accordingly
+    // If gender changed, generate a fresh membership number rather than
+    // swapping the prefix in place — Male and Female now share one number
+    // sequence, so blindly reusing the same digits under the other prefix
+    // (e.g. LUM-2026-0007 -> LUF-2026-0007) could collide with a number
+    // already assigned to someone else.
     let updatedMembershipNo = member?.membership_no ?? null;
     if (profileForm.gender && profileForm.gender !== member?.gender && updatedMembershipNo) {
-      const newPrefix = profileForm.gender === "Female" ? "LUF" : "LUM";
-      updatedMembershipNo = updatedMembershipNo.replace(/^(LUM|LUF|LUS)/, newPrefix);
+      updatedMembershipNo = await generateMembershipNo(profileForm.gender);
     }
 
     const { error } = await supabase.from("members").update({
