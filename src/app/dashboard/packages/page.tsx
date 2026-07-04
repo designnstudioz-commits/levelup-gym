@@ -28,6 +28,8 @@ const ALL_SERVICES = [
   "Gym", "Cardio", "Personal Training", "CrossFit", "MMA",
   "Table Tennis", "Zumba", "Hybrid Workout", "METCON",
   "Nutritionist", "Paid Locker", "Shower Facility",
+  "Jacuzzi", "Ice Plunge", "Steam Room / Sauna", "Physiotherapy",
+  "Pilates", "Kids Play Area", "Snooker & Pool", "Chess & Carom",
 ];
 
 const SERVICE_ICONS: Record<string, string> = {
@@ -35,6 +37,9 @@ const SERVICE_ICONS: Record<string, string> = {
   "CrossFit": "⚡", "MMA": "🥊", "Table Tennis": "🏓",
   "Zumba": "💃", "Hybrid Workout": "🔥", "METCON": "⏱️",
   "Nutritionist": "🥗", "Paid Locker": "🔒", "Shower Facility": "🚿",
+  "Jacuzzi": "🛁", "Ice Plunge": "🧊", "Steam Room / Sauna": "♨️",
+  "Physiotherapy": "🩺", "Pilates": "🧘", "Kids Play Area": "🧸",
+  "Snooker & Pool": "🎱", "Chess & Carom": "♟️",
 };
 
 const PACKAGE_COLORS = [

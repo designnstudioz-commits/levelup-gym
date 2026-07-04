@@ -26,6 +26,8 @@ const SERVICES = [
   "Gym", "Cardio", "Personal Training", "CrossFit", "MMA",
   "Table Tennis", "Zumba", "Hybrid Workout", "METCON",
   "Nutritionist", "Paid Locker", "Shower Facility",
+  "Jacuzzi", "Ice Plunge", "Steam Room / Sauna", "Physiotherapy",
+  "Pilates", "Kids Play Area", "Snooker & Pool", "Chess & Carom",
 ];
 
 const SERVICE_ICONS: Record<string, string> = {
@@ -33,6 +35,9 @@ const SERVICE_ICONS: Record<string, string> = {
   "CrossFit": "⚡", "MMA": "🥊", "Table Tennis": "🏓",
   "Zumba": "💃", "Hybrid Workout": "🔥", "METCON": "⏱️",
   "Nutritionist": "🥗", "Paid Locker": "🔒", "Shower Facility": "🚿",
+  "Jacuzzi": "🛁", "Ice Plunge": "🧊", "Steam Room / Sauna": "♨️",
+  "Physiotherapy": "🩺", "Pilates": "🧘", "Kids Play Area": "🧸",
+  "Snooker & Pool": "🎱", "Chess & Carom": "♟️",
 };
 
 function buildReceiptHtml(r: {
@@ -357,31 +362,28 @@ export default function MemberDetailPage() {
     fetchMember();
   }, [fetchMember]);
 
-  // Load saved services from submission if available
+  // Services live directly on the member record (members.services) — not
+  // tied to submission_id, so CSV-imported/legacy members (no submission)
+  // still have a real, editable services list.
   useEffect(() => {
     if (!member) return;
-    const fetchServices = async () => {
-      const supabase = createClient();
-      if (member.submission_id) {
-        const { data } = await supabase
-          .from("submissions")
-          .select("services_interested")
-          .eq("id", member.submission_id)
-          .single();
-        setServices(data?.services_interested ?? []);
-        setSelectedServices(data?.services_interested ?? []);
-      }
-    };
-    fetchServices();
+    setServices(member.services ?? []);
+    setSelectedServices(member.services ?? []);
   }, [member]);
 
   async function savePackage() {
     setSaving(true);
     const supabase = createClient();
     const pkg = packages.find((p) => p.id === selectedPackage);
+
+    // Merge the new package's services into whatever the member already has
+    // — add, never silently remove manually-added services.
+    const mergedServices = Array.from(new Set([...(member?.services ?? []), ...(pkg?.services_included ?? [])]));
+
     await supabase.from("members").update({
       package_id: selectedPackage || null,
       monthly_fee: pkg?.monthly_fee ?? member?.monthly_fee,
+      services: mergedServices,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
       action: "updated_package",
@@ -389,6 +391,8 @@ export default function MemberDetailPage() {
       entity_id: id,
       description: `Updated package for ${member?.full_name} to ${pkg?.name ?? "None"}`,
     });
+    setServices(mergedServices);
+    setSelectedServices(mergedServices);
     toast.success("Package updated");
     setEditPackage(false);
     setSaving(false);
@@ -415,10 +419,7 @@ export default function MemberDetailPage() {
   async function saveServices() {
     setSaving(true);
     const supabase = createClient();
-    // Update submission if exists
-    if (member?.submission_id) {
-      await supabase.from("submissions").update({ services_interested: selectedServices }).eq("id", member.submission_id);
-    }
+    await supabase.from("members").update({ services: selectedServices }).eq("id", id);
     await supabase.from("activity_logs").insert({
       action: "updated_services",
       entity_type: "member",
@@ -902,6 +903,7 @@ export default function MemberDetailPage() {
               )}
             </Card>
 
+
             {/* Trainer */}
             <Card>
               <div className="flex items-center justify-between mb-3">
@@ -946,62 +948,63 @@ export default function MemberDetailPage() {
                 <p className="text-sm text-[#7A7A72]">No trainer assigned — click Change to assign one</p>
               )}
             </Card>
-          </div>
-        </div>
+          
+              {/* Services */}
+              <Card>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-[#1A1A16]">Services & Activities</h3>
+                  {!editServices ? (
+                    <button onClick={() => { setEditServices(true); setSelectedServices([...services]); }} className="text-xs text-[#F06418] flex items-center gap-1 hover:underline">
+                      <Edit3 className="w-3 h-3" /> Edit Services
+                    </button>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button onClick={saveServices} disabled={saving} className="text-xs text-green-600 flex items-center gap-1 hover:underline disabled:opacity-50">
+                        <Check className="w-3 h-3" /> Save
+                      </button>
+                      <button onClick={() => setEditServices(false)} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
+                        <X className="w-3 h-3" /> Cancel
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-        {/* Services */}
-        <Card>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-sm font-semibold text-[#1A1A16]">Services & Activities</h3>
-            {!editServices ? (
-              <button onClick={() => { setEditServices(true); setSelectedServices([...services]); }} className="text-xs text-[#F06418] flex items-center gap-1 hover:underline">
-                <Edit3 className="w-3 h-3" /> Edit Services
-              </button>
-            ) : (
-              <div className="flex gap-2">
-                <button onClick={saveServices} disabled={saving} className="text-xs text-green-600 flex items-center gap-1 hover:underline disabled:opacity-50">
-                  <Check className="w-3 h-3" /> Save
-                </button>
-                <button onClick={() => setEditServices(false)} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
-                  <X className="w-3 h-3" /> Cancel
-                </button>
-              </div>
-            )}
-          </div>
-
-          {editServices ? (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {SERVICES.map((s) => {
-                const active = selectedServices.includes(s);
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => toggleService(s)}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
-                      active ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]" : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418]"
-                    }`}
-                  >
-                    <span>{SERVICE_ICONS[s]}</span>
-                    <span className="text-xs">{s}</span>
-                  </button>
-                );
-              })}
+                {editServices ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {SERVICES.map((s) => {
+                      const active = selectedServices.includes(s);
+                      return (
+                        <button
+                          key={s}
+                          type="button"
+                          onClick={() => toggleService(s)}
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
+                            active ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]" : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418]"
+                          }`}
+                        >
+                          <span>{SERVICE_ICONS[s]}</span>
+                          <span className="text-xs">{s}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : services.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {services.map((s) => (
+                      <span key={s} className="flex items-center gap-1.5 bg-[#FEF0E8] text-[#C04E10] text-sm px-3 py-1.5 rounded-full font-medium border border-[#FDDCC8]">
+                        <span>{SERVICE_ICONS[s] ?? "•"}</span> {s}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-[#7A7A72]">No services assigned. Click Edit Services to add.</p>
+                )}
+              </Card>
             </div>
-          ) : services.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {services.map((s) => (
-                <span key={s} className="flex items-center gap-1.5 bg-[#FEF0E8] text-[#C04E10] text-sm px-3 py-1.5 rounded-full font-medium border border-[#FDDCC8]">
-                  <span>{SERVICE_ICONS[s] ?? "•"}</span> {s}
-                </span>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-[#7A7A72]">No services assigned. Click Edit Services to add.</p>
-          )}
-        </Card>
+          </div>
 
-        {/* Health info */}
+
+          {/* Health info */}
         {(member.medical_notes || member.blood_group || member.emergency_name) && (
           <Card>
             <div className="flex items-center gap-2 mb-4">
