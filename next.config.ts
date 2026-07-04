@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
       { source: "/iclock/getrequest/:path*", destination: "/api/attendance/getrequest" },
       { source: "/iclock/devicecmd", destination: "/api/attendance/devicecmd" },
       { source: "/iclock/devicecmd/:path*", destination: "/api/attendance/devicecmd" },
+      // Face-recognition devices push captured punch photos here — we don't
+      // store them, just need to acknowledge so the device doesn't retry.
+      { source: "/iclock/fdata", destination: "/api/attendance/fdata" },
+      { source: "/iclock/fdata/:path*", destination: "/api/attendance/fdata" },
     ];
   },
 };

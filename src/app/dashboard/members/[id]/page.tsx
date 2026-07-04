@@ -744,7 +744,7 @@ export default function MemberDetailPage() {
 
             {/* Biometric / Device ID */}
             <div className="mt-4 pt-4 border-t border-[#E4E4DE]">
-              <DeviceEnrollmentsField memberId={member.id} onSaved={fetchMember} />
+              <DeviceEnrollmentsField memberId={member.id} membershipNo={member.membership_no} onSaved={fetchMember} />
             </div>
 
             {/* Quick actions */}
@@ -1568,8 +1568,9 @@ type Enrollment = { id: string; device_serial: string; device_user_id: string };
 type CmdStatus = "pending" | "sent" | "acked" | "failed";
 type LastCmd = { status: CmdStatus; created_at: string };
 
-function DeviceEnrollmentsField({ memberId, onSaved }: {
+function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   memberId: string;
+  membershipNo: string;
   onSaved: () => void;
 }) {
   const [devices, setDevices] = useState<Device[]>([]);
@@ -1652,10 +1653,19 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
     return enrollments.find((e) => e.device_serial === serial) ?? null;
   }
 
+  // Suggested device user ID for a fresh enrollment: the member's own
+  // membership number (e.g. LUM-2026-0056 -> 56), so staff can find/reference
+  // them on the device using a number they already know, instead of an
+  // arbitrary per-device counter. Falls back to the old next-available-slot
+  // counter if the number can't be parsed.
+  function suggestedId(serial: string): number {
+    const fromMembershipNo = parseInt(membershipNo?.split("-")[2] ?? "", 10);
+    return !isNaN(fromMembershipNo) ? fromMembershipNo : (nextIds[serial] ?? 1);
+  }
+
   function startEdit(serial: string) {
     const existing = enrollmentFor(serial);
-    // Pre-fill with next available ID when enrolling fresh; keep existing ID when editing
-    setEditValue(existing?.device_user_id ?? String(nextIds[serial] ?? 1));
+    setEditValue(existing?.device_user_id ?? String(suggestedId(serial)));
     setEditingSerial(serial);
   }
 
@@ -1790,7 +1800,7 @@ function DeviceEnrollmentsField({ memberId, onSaved }: {
                       )}
                       <button onClick={() => startEdit(dev.serial_no)}
                         className="text-[10px] text-[#4A4A44] hover:text-[#F06418] hover:underline flex items-center gap-0.5">
-                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : `Enroll (ID ${nextIds[dev.serial_no] ?? 1})`}
+                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : `Enroll (ID ${suggestedId(dev.serial_no)})`}
                       </button>
                       {enr && (
                         <button onClick={() => removeEnrollment(dev.serial_no)}
