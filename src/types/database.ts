@@ -159,6 +159,7 @@ export interface Member {
   photo_url: string | null;
   // Membership
   package_id: string | null;
+  package_ids: string[] | null;
   services: string[] | null;
   trainer_id: string | null;
   nutritionist_id: string | null;

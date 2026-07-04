@@ -165,7 +165,10 @@ export default function FeesPage() {
     setMemberSearch("");
     setSearchCode("");
     setMemberResults([]);
-    setFeeAmount(String((m as any).packages?.monthly_fee ?? m.monthly_fee ?? ""));
+    // Member's own stored monthly_fee wins — it's the correct combined total
+    // for members on multiple packages; the joined single package's fee is
+    // only a fallback for members with no stored monthly_fee at all.
+    setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? ""));
     setFeeType("membership");
     setDiscountType("none");
     setDiscountValue("");
@@ -304,7 +307,7 @@ export default function FeesPage() {
         {/* ── Tab content ───────────────────────────────────────── */}
         {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} />}
         {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} />}
-        {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String((m as any).packages?.monthly_fee ?? m.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
+        {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
         {tab === "analytics"   && <AnalyticsTab payments={payments} />}
       </div>
 
@@ -359,7 +362,7 @@ export default function FeesPage() {
                         <p className="text-xs text-[#7A7A72]">{m.membership_no} · {(m as any).packages?.name ?? "No package"}</p>
                       </div>
                       <span className="ml-auto text-sm font-bold text-[#F06418]">
-                        {formatPKR((m as any).packages?.monthly_fee ?? m.monthly_fee)}
+                        {formatPKR(m.monthly_fee ?? (m as any).packages?.monthly_fee)}
                       </span>
                     </button>
                   ))}

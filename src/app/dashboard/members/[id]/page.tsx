@@ -283,7 +283,7 @@ export default function MemberDetailPage() {
   }
 
   // Form states
-  const [selectedPackage, setSelectedPackage] = useState("");
+  const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>([]);
   const [selectedTrainer, setSelectedTrainer] = useState("");
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [joiningDate, setJoiningDate] = useState("");
@@ -345,7 +345,10 @@ export default function MemberDetailPage() {
 
     if (memberData) {
       setMember(memberData as any);
-      setSelectedPackage(memberData.package_id ?? "");
+      // Fall back to the single package_id for members who predate package_ids
+      setSelectedPackageIds(
+        memberData.package_ids?.length ? memberData.package_ids : (memberData.package_id ? [memberData.package_id] : [])
+      );
       setSelectedTrainer(memberData.trainer_id ?? "");
       setJoiningDate(memberData.joining_date ?? "");
       setExpiryDate(memberData.expiry_date ?? "");
@@ -374,22 +377,28 @@ export default function MemberDetailPage() {
   async function savePackage() {
     setSaving(true);
     const supabase = createClient();
-    const pkg = packages.find((p) => p.id === selectedPackage);
+    const selectedPkgs = selectedPackageIds
+      .map((pid) => packages.find((p) => p.id === pid))
+      .filter((p): p is PackageType => !!p);
 
-    // Changing package resets services to exactly what the new package
-    // includes — it's the source of truth, not an incremental add-on.
-    const newServices = pkg?.services_included ?? [];
+    // Combined monthly fee is the sum of every selected package. Services
+    // reset to the union of everything the selected packages include — the
+    // multi-package generalization of "package is the source of truth".
+    const totalMonthlyFee = selectedPkgs.reduce((sum, p) => sum + (p.monthly_fee ?? 0), 0);
+    const newServices = Array.from(new Set(selectedPkgs.flatMap((p) => (p as any).services_included ?? [])));
+    const packageNames = selectedPkgs.map((p) => p.name).join(", ") || "None";
 
     await supabase.from("members").update({
-      package_id: selectedPackage || null,
-      monthly_fee: pkg?.monthly_fee ?? member?.monthly_fee,
+      package_id: selectedPackageIds[0] ?? null,
+      package_ids: selectedPackageIds.length ? selectedPackageIds : null,
+      monthly_fee: selectedPkgs.length ? totalMonthlyFee : null,
       services: newServices,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
       action: "updated_package",
       entity_type: "member",
       entity_id: id,
-      description: `Updated package for ${member?.full_name} to ${pkg?.name ?? "None"}`,
+      description: `Updated packages for ${member?.full_name} to ${packageNames}`,
     });
     setServices(newServices);
     setSelectedServices(newServices);
@@ -663,6 +672,11 @@ export default function MemberDetailPage() {
   const { label: statusLabel, variant: statusVariant } = getMemberStatusDisplay(member.status, member.expiry_date);
   const daysLeft = daysUntilExpiry(member.expiry_date);
   const currentPackage = (member as any).packages as PackageType | null;
+  // All assigned packages for display — package_ids if set, else falls back
+  // to the single package_id join (members that predate package_ids).
+  const assignedPackages: PackageType[] = (member.package_ids?.length ? member.package_ids : (member.package_id ? [member.package_id] : []))
+    .map((pid) => packages.find((p) => p.id === pid) ?? (pid === member.package_id ? currentPackage : null))
+    .filter((p): p is PackageType => !!p);
   const currentTrainer = (member as any).trainer as StaffMember | null;
   const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
 
@@ -863,7 +877,10 @@ export default function MemberDetailPage() {
                     <button onClick={savePackage} disabled={saving} className="text-xs text-green-600 flex items-center gap-1 hover:underline disabled:opacity-50">
                       <Check className="w-3 h-3" /> Save
                     </button>
-                    <button onClick={() => { setEditPackage(false); setSelectedPackage(member.package_id ?? ""); }} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
+                    <button onClick={() => {
+                      setEditPackage(false);
+                      setSelectedPackageIds(member.package_ids?.length ? member.package_ids : (member.package_id ? [member.package_id] : []));
+                    }} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
                       <X className="w-3 h-3" /> Cancel
                     </button>
                   </div>
@@ -871,26 +888,61 @@ export default function MemberDetailPage() {
               </div>
 
               {editPackage ? (
-                <Select value={selectedPackage} onChange={(e) => setSelectedPackage(e.target.value)} placeholder="Select package">
-                  <option value="">No package</option>
-                  {packages.map((pkg) => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {pkg.name} — {formatPKR(pkg.monthly_fee)}/mo
-                    </option>
-                  ))}
-                </Select>
-              ) : currentPackage ? (
+                <div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {packages.map((pkg) => {
+                      const selected = selectedPackageIds.includes(pkg.id);
+                      return (
+                        <button
+                          key={pkg.id}
+                          type="button"
+                          onClick={() => setSelectedPackageIds((prev) =>
+                            prev.includes(pkg.id) ? prev.filter((id) => id !== pkg.id) : [...prev, pkg.id]
+                          )}
+                          className={`flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg border text-left transition-all ${
+                            selected ? "bg-[#FEF0E8] border-[#F06418]" : "bg-white border-[#E4E4DE] hover:border-[#F06418] hover:bg-[#FEF0E8]"
+                          }`}
+                        >
+                          <span className={`text-sm font-semibold leading-tight ${selected ? "text-[#C04E10]" : "text-[#1A1A16]"}`}>{pkg.name}</span>
+                          <span className={`text-xs font-medium ${selected ? "text-[#F06418]" : "text-[#7A7A72]"}`}>{formatPKR(pkg.monthly_fee)}/mo</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedPackageIds.length > 0 && (
+                    <p className="text-xs text-[#7A7A72] mt-2">
+                      {selectedPackageIds.length} selected · Total {formatPKR(
+                        selectedPackageIds.reduce((sum, pid) => sum + (packages.find((p) => p.id === pid)?.monthly_fee ?? 0), 0)
+                      )}/month
+                    </p>
+                  )}
+                </div>
+              ) : assignedPackages.length > 0 ? (
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <div>
-                      <p className="text-base font-semibold text-[#1A1A16]">{currentPackage.name}</p>
-                      <p className="text-sm text-[#7A7A72]">{formatPKR(currentPackage.monthly_fee)}/month · Admission {formatPKR(currentPackage.admission_fee)}</p>
-                    </div>
+                    <p className="text-sm font-semibold text-[#1A1A16]">
+                      {assignedPackages.length > 1 ? `${assignedPackages.length} packages` : assignedPackages[0].name}
+                    </p>
                     <Badge variant="active">Active</Badge>
                   </div>
-                  {(currentPackage as any).services_included?.length > 0 && (
+                  <div className="space-y-1.5">
+                    {assignedPackages.map((pkg) => (
+                      <div key={pkg.id} className="flex items-center justify-between text-sm">
+                        <span className="text-[#1A1A16]">{pkg.name}</span>
+                        <span className="text-[#7A7A72]">{formatPKR(pkg.monthly_fee)}/mo</span>
+                      </div>
+                    ))}
+                  </div>
+                  {assignedPackages.length > 1 && (
+                    <div className="flex items-center justify-between text-sm font-semibold mt-2 pt-2 border-t border-[#E4E4DE]">
+                      <span className="text-[#1A1A16]">Total</span>
+                      <span className="text-[#F06418]">{formatPKR(member.monthly_fee)}/month</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-[#7A7A72] mt-1">Admission {formatPKR(assignedPackages[0].admission_fee)}</p>
+                  {services.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-[#E4E4DE]">
-                      {((currentPackage as any).services_included as string[]).map((s: string) => (
+                      {services.map((s) => (
                         <span key={s} className="text-xs px-2 py-0.5 bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] rounded-full">
                           {s}
                         </span>
