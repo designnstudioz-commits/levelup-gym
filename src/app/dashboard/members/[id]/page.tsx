@@ -554,9 +554,14 @@ export default function MemberDetailPage() {
     // Reactivating an archived member: assign a fresh membership number from
     // the shared sequence (their old OLD-prefixed number stays out of the
     // active namespace) and clear deleted_at — without this they'd show
-    // status "active" but remain invisible everywhere else.
-    const isReactivation = !!member?.deleted_at;
-    const newMembershipNo = isReactivation ? await generateMembershipNo(member?.gender) : null;
+    // status "active" but remain invisible everywhere else. Re-fetch
+    // deleted_at fresh here rather than trusting the component's `member`
+    // state — if a save happens in quick succession after another edit on
+    // this page, stale client state must never cause a silent no-op that
+    // leaves the member stuck half-archived.
+    const { data: freshMember } = await supabase.from("members").select("deleted_at, gender").eq("id", id).single();
+    const isReactivation = !!freshMember?.deleted_at;
+    const newMembershipNo = isReactivation ? await generateMembershipNo(freshMember?.gender ?? member?.gender) : null;
 
     await supabase.from("members").update({
       joining_date: joiningDate,
