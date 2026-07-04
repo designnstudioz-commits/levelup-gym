@@ -540,18 +540,31 @@ export default function MemberDetailPage() {
     }
     setSaving(true);
     const supabase = createClient();
+
+    // Reactivating an archived member: assign a fresh membership number from
+    // the shared sequence (their old OLD-prefixed number stays out of the
+    // active namespace) and clear deleted_at — without this they'd show
+    // status "active" but remain invisible everywhere else.
+    const isReactivation = !!member?.deleted_at;
+    const newMembershipNo = isReactivation ? await generateMembershipNo(member?.gender) : null;
+
     await supabase.from("members").update({
       joining_date: joiningDate,
       expiry_date: expiryDate,
       status: "active",
+      ...(isReactivation ? { membership_no: newMembershipNo, deleted_at: null } : {}),
     }).eq("id", id);
+
     await supabase.from("activity_logs").insert({
-      action: "renewed_membership",
+      action: isReactivation ? "reactivated_member" : "renewed_membership",
       entity_type: "member",
       entity_id: id,
-      description: `Renewed membership for ${member?.full_name} until ${formatDate(expiryDate)}`,
+      description: isReactivation
+        ? `Reactivated ${member?.full_name} (was archived) — assigned ${newMembershipNo}, active until ${formatDate(expiryDate)}`
+        : `Renewed membership for ${member?.full_name} until ${formatDate(expiryDate)}`,
     });
-    toast.success("Membership renewed");
+
+    toast.success(isReactivation ? `Reactivated — new membership number: ${newMembershipNo}` : "Membership renewed");
     setRenewModal(false);
     setSaving(false);
     fetchMember();
@@ -755,7 +768,7 @@ export default function MemberDetailPage() {
                 className="w-full justify-start"
                 onClick={() => { setRenewModal(true); }}
               >
-                <Calendar className="w-4 h-4" /> Renew Membership
+                <Calendar className="w-4 h-4" /> {member.deleted_at ? "Reactivate Membership" : "Renew Membership"}
               </Button>
               {member.status === "frozen" ? (
                 <Button
@@ -1422,8 +1435,13 @@ export default function MemberDetailPage() {
       </Modal>
 
       {/* Renew Membership Modal */}
-      <Modal open={renewModal} onClose={() => setRenewModal(false)} title="Renew Membership" size="sm">
+      <Modal open={renewModal} onClose={() => setRenewModal(false)} title={member?.deleted_at ? "Reactivate Membership" : "Renew Membership"} size="sm">
         <div className="p-5 space-y-4">
+          {member?.deleted_at && (
+            <p className="text-xs text-[#7A7A72] bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-3 py-2">
+              This member is archived. A new membership number will be assigned automatically.
+            </p>
+          )}
           <Input label="New Joining Date" type="date" value={joiningDate} onChange={(e) => {
             setJoiningDate(e.target.value);
             if (e.target.value) setExpiryDate(addMonthsToDateStr(e.target.value, member?.packages?.duration_months || 1));
@@ -1431,7 +1449,7 @@ export default function MemberDetailPage() {
           <Input label="New Expiry Date" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
           <div className="flex gap-3 pt-2">
             <Button variant="secondary" onClick={() => setRenewModal(false)} className="flex-1">Cancel</Button>
-            <Button onClick={renewMembership} loading={saving} className="flex-1">Renew</Button>
+            <Button onClick={renewMembership} loading={saving} className="flex-1">{member?.deleted_at ? "Reactivate" : "Renew"}</Button>
           </div>
         </div>
       </Modal>
