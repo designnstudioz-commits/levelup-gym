@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Search, RefreshCw, UserPlus, Users, Dumbbell,
-  Phone, Mail, ArrowRight, X, Fingerprint,
+  Phone, Mail, ArrowRight, X, Fingerprint, Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
@@ -68,6 +68,18 @@ export default function StaffPage() {
   const [form, setForm] = useState(defaultForm);
   const [saving, setSaving] = useState(false);
 
+  // Bulk device push — mirrors the members list's bulk-enroll feature, but
+  // staff already have a device_user_id (auto-assigned on creation, or via
+  // "Assign ID" on the profile page for older records), so this is a
+  // push-only action, not enroll-then-push. Any selected staff member still
+  // missing an ID gets one assigned on the fly (5000+ range).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [devices, setDevices] = useState<{ serial_no: string; name: string | null }[]>([]);
+  const [pushModalOpen, setPushModalOpen] = useState(false);
+  const [pushDevice, setPushDevice] = useState("");
+  const [pushing, setPushing] = useState(false);
+  const [pushProgress, setPushProgress] = useState<{ done: number; total: number } | null>(null);
+
   const fetchStaff = useCallback(async () => {
     setLoading(true);
     const supabase = createClient();
@@ -105,6 +117,10 @@ export default function StaffPage() {
 
   useEffect(() => { fetchStaff(); }, [fetchStaff]);
 
+  useEffect(() => {
+    createClient().from("devices").select("serial_no, name").order("name").then(({ data }) => setDevices(data ?? []));
+  }, []);
+
   // Open add modal when ?add=1 in URL
   useEffect(() => {
     if (searchParams.get("add") === "1") setAddModal(true);
@@ -123,6 +139,83 @@ export default function StaffPage() {
   const trainers = staff.filter((s) => s.role === "Trainer");
   const totalMembers = trainers.reduce((sum, t) => sum + t.member_count, 0);
   const avgMembers = trainers.length ? Math.round(totalMembers / trainers.length) : 0;
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every((s) => selectedIds.has(s.id));
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      if (allFilteredSelected) return new Set();
+      const next = new Set(prev);
+      filtered.forEach((s) => next.add(s.id));
+      return next;
+    });
+  }
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkPushToDevice() {
+    if (!pushDevice) { toast.error("Select a device"); return; }
+    const targets = staff.filter((s) => selectedIds.has(s.id));
+    setPushing(true);
+    setPushProgress({ done: 0, total: targets.length });
+    const supabase = createClient();
+
+    // Track the next available 5000+ ID locally so multiple staff needing
+    // assignment in the same batch don't get handed the same number.
+    const { data: existingIds } = await supabase.from("staff_members").select("device_user_id").gte("device_user_id", "5000").is("deleted_at", null);
+    let nextDeviceId = 5000;
+    for (const row of existingIds ?? []) {
+      const n = parseInt(row.device_user_id ?? "", 10);
+      if (!isNaN(n) && n >= nextDeviceId) nextDeviceId = n + 1;
+    }
+
+    let pushedCount = 0, assignedCount = 0, failedCount = 0;
+
+    // Sequential, not Promise.all — /api/devices/push-user computes each
+    // command's id as a count()+1 read-then-write, so parallel calls
+    // against the same device risk duplicate command ids.
+    for (const s of targets) {
+      try {
+        const staffId = s.id;
+        let deviceUserId = s.device_user_id;
+
+        if (!deviceUserId) {
+          deviceUserId = String(nextDeviceId);
+          nextDeviceId++;
+          const { error: updateError } = await supabase.from("staff_members").update({ device_user_id: deviceUserId }).eq("id", staffId);
+          if (updateError) { failedCount++; setPushProgress((p) => p ? { ...p, done: p.done + 1 } : p); continue; }
+          await supabase.from("activity_logs").insert({
+            action: "updated_staff_device_id",
+            entity_type: "staff_member",
+            entity_id: staffId,
+            description: `Set device ID ${deviceUserId} for ${s.full_name}`,
+          });
+          assignedCount++;
+        }
+
+        const res = await fetch("/api/devices/push-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ staff_id: staffId, device_serial: pushDevice }),
+        });
+        if (res.ok) pushedCount++; else failedCount++;
+      } catch {
+        failedCount++;
+      }
+      setPushProgress((p) => p ? { ...p, done: p.done + 1 } : p);
+    }
+
+    setPushing(false);
+    setPushProgress(null);
+    setPushModalOpen(false);
+    setSelectedIds(new Set());
+    toast.success(`${pushedCount} pushed${assignedCount ? ` (${assignedCount} newly assigned a device ID)` : ""}${failedCount ? `, ${failedCount} failed` : ""}`);
+    fetchStaff();
+  }
 
   async function handleAdd() {
     if (!form.full_name.trim()) { toast.error("Full name is required"); return; }
@@ -253,6 +346,19 @@ export default function StaffPage() {
           </Button>
         </div>
 
+        {/* Bulk action bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 bg-[#FEF0E8] border border-[#FDDCC8] rounded-xl px-4 py-2.5">
+            <span className="text-sm font-medium text-[#C04E10]">{selectedIds.size} selected</span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-[#7A7A72] hover:text-[#1A1A16] hover:underline">
+              Clear
+            </button>
+            <Button size="sm" className="ml-auto" onClick={() => setPushModalOpen(true)}>
+              <Fingerprint className="w-3.5 h-3.5" /> Push to Device
+            </Button>
+          </div>
+        )}
+
         {/* Staff grid */}
         {loading ? (
           <div className="py-16 text-center">
@@ -275,6 +381,9 @@ export default function StaffPage() {
             <table className="w-full">
               <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
                 <tr>
+                  <th className="px-4 py-3 w-8">
+                    <input type="checkbox" className="accent-[#F06418]" checked={allFilteredSelected} onChange={toggleSelectAll} />
+                  </th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Staff Member</th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Role</th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Specialization</th>
@@ -288,6 +397,9 @@ export default function StaffPage() {
               <tbody className="divide-y divide-[#E4E4DE]">
                 {filtered.map((s) => (
                   <tr key={s.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => router.push(`/dashboard/staff/${s.id}`)}>
+                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" className="accent-[#F06418]" checked={selectedIds.has(s.id)} onChange={() => toggleSelect(s.id)} />
+                    </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2.5">
                         <div className="w-8 h-8 rounded-full bg-[#1A1A1A] flex items-center justify-center flex-shrink-0 overflow-hidden">
@@ -331,11 +443,18 @@ export default function StaffPage() {
           /* Grid / Compact view */
           <div className={`grid gap-4 ${viewMode === "compact" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"}`}>
             {filtered.map((member) => (
-              <button
-                key={member.id}
-                onClick={() => router.push(`/dashboard/staff/${member.id}`)}
-                className={`bg-white border border-[#E4E4DE] rounded-xl text-left hover:border-[#F06418] hover:shadow-sm transition-all group ${viewMode === "compact" ? "p-3" : "p-5"}`}
-              >
+              <div key={member.id} className="relative">
+                <input
+                  type="checkbox"
+                  className="absolute top-2 left-2 z-10 accent-[#F06418] w-4 h-4"
+                  checked={selectedIds.has(member.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleSelect(member.id)}
+                />
+                <button
+                  onClick={() => router.push(`/dashboard/staff/${member.id}`)}
+                  className={`w-full bg-white border border-[#E4E4DE] rounded-xl text-left hover:border-[#F06418] hover:shadow-sm transition-all group ${viewMode === "compact" ? "p-3" : "p-5"}`}
+                >
                 <div className={`flex items-start gap-3 ${viewMode === "compact" ? "mb-2" : "mb-4"}`}>
                   <div className={`rounded-full bg-[#1A1A1A] flex items-center justify-center flex-shrink-0 overflow-hidden ${viewMode === "compact" ? "w-8 h-8" : "w-11 h-11"}`}>
                     {member.photo_url ? (
@@ -378,11 +497,38 @@ export default function StaffPage() {
                     </div>
                   </>
                 )}
-              </button>
+                </button>
+              </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* Push to Device modal */}
+      <Modal open={pushModalOpen} onClose={() => !pushing && setPushModalOpen(false)} title="Push to Device" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-[#4A4A44]">
+            Pushing <span className="font-semibold">{selectedIds.size}</span> staff member{selectedIds.size !== 1 ? "s" : ""}. Anyone without a device ID yet will be assigned the next available one (5000+) automatically.
+          </p>
+          <select value={pushDevice} onChange={(e) => setPushDevice(e.target.value)} disabled={pushing}
+            className="w-full text-sm px-3 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418] disabled:opacity-50"
+          >
+            <option value="">Select device...</option>
+            {devices.map((d) => (
+              <option key={d.serial_no} value={d.serial_no}>{d.name ?? d.serial_no}</option>
+            ))}
+          </select>
+          {pushProgress && (
+            <p className="text-xs text-[#7A7A72]">Processing {pushProgress.done}/{pushProgress.total}...</p>
+          )}
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setPushModalOpen(false)} disabled={pushing} className="flex-1">Cancel</Button>
+            <Button onClick={bulkPushToDevice} loading={pushing} disabled={!pushDevice} className="flex-1">
+              {pushing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Fingerprint className="w-4 h-4" />} Push
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       {/* Add Staff Modal */}
       <Modal open={addModal} onClose={() => { setAddModal(false); setForm(defaultForm); }} title="Add Staff Member" size="lg">
