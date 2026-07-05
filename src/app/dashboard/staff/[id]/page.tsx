@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, User, Phone, Mail, CreditCard, Calendar,
   Edit3, Check, X, Dumbbell, Users, Banknote,
-  UserCheck, Clock, CheckCircle, XCircle,
+  UserCheck, Clock, CheckCircle, XCircle, Fingerprint, Send, Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -47,6 +47,17 @@ export default function StaffDetailPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Device enrollment — staff use a single device_user_id column (not the
+  // per-device device_enrollments table members use), reserved to 5000+ so
+  // it never collides with member PINs (derived from membership numbers,
+  // starting at 1).
+  const [devices, setDevices] = useState<{ serial_no: string; name: string | null }[]>([]);
+  const [editingDeviceId, setEditingDeviceId] = useState(false);
+  const [deviceIdInput, setDeviceIdInput] = useState("");
+  const [savingDeviceId, setSavingDeviceId] = useState(false);
+  const [pushDevice, setPushDevice] = useState("");
+  const [pushing, setPushing] = useState(false);
 
   // Edit form state
   const [editForm, setEditForm] = useState({
@@ -93,6 +104,66 @@ export default function StaffDetailPage() {
   }, [id]);
 
   useEffect(() => { fetchStaff(); }, [fetchStaff]);
+
+  useEffect(() => {
+    createClient().from("devices").select("serial_no, name").order("name").then(({ data }) => setDevices(data ?? []));
+  }, []);
+
+  async function suggestNextDeviceId(): Promise<string> {
+    const supabase = createClient();
+    const { data } = await supabase.from("staff_members").select("device_user_id").gte("device_user_id", "5000").is("deleted_at", null);
+    let next = 5000;
+    for (const row of data ?? []) {
+      const n = parseInt(row.device_user_id ?? "", 10);
+      if (!isNaN(n) && n >= next) next = n + 1;
+    }
+    return String(next);
+  }
+
+  async function startEditDeviceId() {
+    setDeviceIdInput(staff?.device_user_id || (await suggestNextDeviceId()));
+    setEditingDeviceId(true);
+  }
+
+  async function saveDeviceId() {
+    const val = deviceIdInput.trim();
+    if (val && parseInt(val, 10) < 5000) {
+      toast.error("Staff device IDs must be 5000 or higher, to avoid colliding with member IDs");
+      return;
+    }
+    setSavingDeviceId(true);
+    const supabase = createClient();
+    const { error } = await supabase.from("staff_members").update({ device_user_id: val || null }).eq("id", id);
+    if (error) { toast.error("Failed to save device ID"); setSavingDeviceId(false); return; }
+    await supabase.from("activity_logs").insert({
+      action: "updated_staff_device_id",
+      entity_type: "staff_member",
+      entity_id: id,
+      description: `Set device ID ${val || "(cleared)"} for ${staff?.full_name}`,
+    });
+    toast.success("Device ID saved");
+    setEditingDeviceId(false);
+    setSavingDeviceId(false);
+    fetchStaff();
+  }
+
+  async function pushStaffToDevice() {
+    if (!pushDevice) { toast.error("Select a device"); return; }
+    setPushing(true);
+    try {
+      const res = await fetch("/api/devices/push-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ staff_id: id, device_serial: pushDevice }),
+      });
+      const data = await res.json();
+      if (!res.ok) toast.error(data.error ?? "Push failed");
+      else toast.success("Queued — device will pick it up within ~30 seconds");
+    } catch {
+      toast.error("Push failed");
+    }
+    setPushing(false);
+  }
 
   async function handleSave() {
     if (!editForm.full_name.trim()) { toast.error("Full name is required"); return; }
@@ -446,6 +517,62 @@ export default function StaffDetailPage() {
                     </button>
                   ))}
                 </div>
+              )}
+            </Card>
+
+            {/* Device Enrollment */}
+            <Card>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-[#1A1A16] flex items-center gap-2">
+                  <Fingerprint className="w-4 h-4 text-[#F06418]" /> Device Enrollment
+                </h3>
+                {!editingDeviceId ? (
+                  <button onClick={startEditDeviceId} className="text-xs text-[#F06418] flex items-center gap-1 hover:underline">
+                    <Edit3 className="w-3 h-3" /> {staff.device_user_id ? "Change" : "Assign ID"}
+                  </button>
+                ) : (
+                  <div className="flex gap-2">
+                    <button onClick={saveDeviceId} disabled={savingDeviceId} className="text-xs text-green-600 flex items-center gap-1 hover:underline disabled:opacity-50">
+                      <Check className="w-3 h-3" /> Save
+                    </button>
+                    <button onClick={() => setEditingDeviceId(false)} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
+                      <X className="w-3 h-3" /> Cancel
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {editingDeviceId ? (
+                <div>
+                  <Input
+                    label="Device ID (5000+)"
+                    type="number"
+                    value={deviceIdInput}
+                    onChange={(e) => setDeviceIdInput(e.target.value)}
+                  />
+                  <p className="text-xs text-[#7A7A72] mt-1.5">
+                    Reserved for staff (5000+) so it never collides with a member's device ID (which matches their membership number).
+                  </p>
+                </div>
+              ) : staff.device_user_id ? (
+                <div>
+                  <p className="text-base font-semibold text-[#1A1A16] font-mono">{staff.device_user_id}</p>
+                  <div className="flex items-center gap-2 mt-3">
+                    <select value={pushDevice} onChange={(e) => setPushDevice(e.target.value)}
+                      className="flex-1 text-sm px-3 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                    >
+                      <option value="">Select device...</option>
+                      {devices.map((d) => (
+                        <option key={d.serial_no} value={d.serial_no}>{d.name ?? d.serial_no}</option>
+                      ))}
+                    </select>
+                    <Button size="sm" onClick={pushStaffToDevice} loading={pushing} disabled={!pushDevice}>
+                      {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Push
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-[#7A7A72]">Not enrolled — click Assign ID to reserve a device ID for this staff member (once their fingerprint/face is registered on the machine at that ID).</p>
               )}
             </Card>
 

@@ -40,6 +40,7 @@ export interface StaffMember {
   specialization: string | null;
   photo_url: string | null;
   bio: string | null;
+  device_user_id: string | null;
   status: "active" | "inactive";
   created_at: string;
   updated_at: string;
