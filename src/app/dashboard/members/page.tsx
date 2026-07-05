@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -69,9 +69,21 @@ export default function MembersPage() {
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [newOnly, setNewOnly]           = useState(false);
   const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
+  const [filtersOpen, setFiltersOpen]   = useState(false);
+  const filtersRef = useRef<HTMLDivElement>(null);
 
   // Reset to page 1 whenever any filter changes
   useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, newOnly, feeFilter]);
+
+  // Close the filters popover on outside click
+  useEffect(() => {
+    if (!filtersOpen) return;
+    function onClick(e: MouseEvent) {
+      if (filtersRef.current && !filtersRef.current.contains(e.target as Node)) setFiltersOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [filtersOpen]);
 
   const fetchMembers = useCallback(async () => {
     setLoading(true);
@@ -192,6 +204,9 @@ export default function MembersPage() {
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
   const hasActiveFilters = genderFilter !== "all" || expiringOnly || newOnly || !!search || feeFilter !== "all";
+  // Count of filters tucked inside the "Filters" popover (excludes search,
+  // which has its own always-visible box)
+  const secondaryFilterCount = [genderFilter !== "all", expiringOnly, newOnly, feeFilter !== "all"].filter(Boolean).length;
   function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setNewOnly(false); setFeeFilter("all"); }
 
   // Contextual counts: status counts respect gender filter, gender counts respect status filter
@@ -275,21 +290,8 @@ export default function MembersPage() {
             <Link href="/dashboard/register"><Button size="sm"><UserPlus className="w-4 h-4" /> Add Member</Button></Link>
           </div>
 
-          {/* Row 2: secondary filters */}
+          {/* Row 2: sort + collapsed filters */}
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
-              {(["all", "Male", "Female"] as const).map((g) => (
-                <button key={g} onClick={() => setGenderFilter(g)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center gap-1 ${genderFilter === g ? "bg-[#1A1A1A] text-white" : "text-[#4A4A44] hover:bg-white"}`}
-                >
-                  {g === "all" ? "All Genders" : g}
-                  <span className={`text-[10px] font-bold px-1 py-0.5 rounded-full leading-none ${genderFilter === g ? "bg-white/20 text-white" : "bg-[#E4E4DE] text-[#7A7A72]"}`}>
-                    {g === "all" ? genderCounts.all : genderCounts[g]}
-                  </span>
-                </button>
-              ))}
-            </div>
-
             <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
               className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]"
             >
@@ -312,47 +314,78 @@ export default function MembersPage() {
               </optgroup>
             </select>
 
-            <label className="flex items-center gap-1.5 text-xs text-[#4A4A44] cursor-pointer bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-2.5 py-1.5 hover:border-[#F06418] transition-colors">
-              <input type="checkbox" className="accent-[#F06418]" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
-              Expiring in 30 days
-            </label>
-
-            <button
-              onClick={() => setNewOnly((v) => !v)}
-              className={`flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-colors ${
-                newOnly
-                  ? "bg-[#F06418] text-white border-[#F06418]"
-                  : "bg-[#F8F8F6] text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418] hover:text-[#F06418]"
-              }`}
-            >
-              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none ${newOnly ? "bg-white/25 text-white" : "bg-[#F06418] text-white"}`}>New</span>
-              Added in last 3 days
-            </button>
-
-            {/* Fee status filter */}
-            <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
-              {([["all", "All Fees"], ["paid", "Paid"], ["pending", "Pending"]] as const).map(([key, label]) => (
-                <button key={key} onClick={() => setFeeFilter(key)}
-                  className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                    feeFilter === key
-                      ? key === "paid" ? "bg-green-600 text-white"
-                        : key === "pending" ? "bg-red-500 text-white"
-                        : "bg-[#1A1A1A] text-white"
-                      : "text-[#4A4A44] hover:bg-white"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {hasActiveFilters && (
-              <button onClick={clearFilters} className="text-xs text-red-600 hover:underline flex items-center gap-1">
-                <X className="w-3 h-3" /> Clear filters
+            <div className="relative" ref={filtersRef}>
+              <button
+                onClick={() => setFiltersOpen((v) => !v)}
+                className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${
+                  filtersOpen || secondaryFilterCount > 0
+                    ? "bg-[#FEF0E8] border-[#F06418] text-[#C04E10]"
+                    : "bg-white border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418]"
+                }`}
+              >
+                <SlidersHorizontal className="w-3.5 h-3.5" /> Filters
+                {secondaryFilterCount > 0 && (
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none bg-[#F06418] text-white">
+                    {secondaryFilterCount}
+                  </span>
+                )}
               </button>
-            )}
 
-            <span className="ml-auto text-xs text-[#7A7A72]">{filtered.length} result{filtered.length !== 1 ? "s" : ""}</span>
+              {filtersOpen && (
+                <div className="absolute z-20 top-full left-0 mt-1.5 w-72 bg-white border border-[#E4E4DE] rounded-xl shadow-lg p-3 space-y-3">
+                  <div>
+                    <p className="text-xs font-semibold text-[#7A7A72] mb-1.5">Gender</p>
+                    <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
+                      {(["all", "Male", "Female"] as const).map((g) => (
+                        <button key={g} onClick={() => setGenderFilter(g)}
+                          className={`flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors flex items-center justify-center gap-1 ${genderFilter === g ? "bg-[#1A1A1A] text-white" : "text-[#4A4A44] hover:bg-white"}`}
+                        >
+                          {g === "all" ? "All" : g}
+                          <span className={`text-[10px] font-bold px-1 py-0.5 rounded-full leading-none ${genderFilter === g ? "bg-white/20 text-white" : "bg-[#E4E4DE] text-[#7A7A72]"}`}>
+                            {g === "all" ? genderCounts.all : genderCounts[g]}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold text-[#7A7A72] mb-1.5">Fee Status</p>
+                    <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
+                      {([["all", "All"], ["paid", "Paid"], ["pending", "Pending"]] as const).map(([key, label]) => (
+                        <button key={key} onClick={() => setFeeFilter(key)}
+                          className={`flex-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                            feeFilter === key
+                              ? key === "paid" ? "bg-green-600 text-white"
+                                : key === "pending" ? "bg-red-500 text-white"
+                                : "bg-[#1A1A1A] text-white"
+                              : "text-[#4A4A44] hover:bg-white"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <label className="flex items-center gap-2 text-xs text-[#4A4A44] cursor-pointer">
+                    <input type="checkbox" className="accent-[#F06418]" checked={expiringOnly} onChange={(e) => setExpiringOnly(e.target.checked)} />
+                    Expiring in 30 days
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs text-[#4A4A44] cursor-pointer">
+                    <input type="checkbox" className="accent-[#F06418]" checked={newOnly} onChange={(e) => setNewOnly(e.target.checked)} />
+                    Added in last 3 days
+                  </label>
+
+                  {hasActiveFilters && (
+                    <button onClick={clearFilters} className="text-xs text-red-600 hover:underline flex items-center gap-1 pt-1 border-t border-[#E4E4DE] w-full">
+                      <X className="w-3 h-3" /> Clear all filters
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 
