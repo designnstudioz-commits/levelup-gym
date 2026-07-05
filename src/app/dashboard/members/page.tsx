@@ -5,12 +5,14 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   Search, UserPlus, RefreshCw, User, ArrowRight,
-  SlidersHorizontal, X, ChevronLeft, ChevronRight,
+  SlidersHorizontal, X, ChevronLeft, ChevronRight, Fingerprint, Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, fetchAllRows } from "@/lib/utils";
 import type { Member } from "@/types/database";
@@ -71,6 +73,14 @@ export default function MembersPage() {
   const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
   const [filtersOpen, setFiltersOpen]   = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
+
+  // Bulk device enrollment
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [devices, setDevices] = useState<{ serial_no: string; name: string | null }[]>([]);
+  const [enrollModalOpen, setEnrollModalOpen] = useState(false);
+  const [enrollDevice, setEnrollDevice] = useState("");
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollProgress, setEnrollProgress] = useState<{ done: number; total: number } | null>(null);
 
   // Reset to page 1 whenever any filter changes
   useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, newOnly, feeFilter]);
@@ -165,6 +175,10 @@ export default function MembersPage() {
 
   useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
+  useEffect(() => {
+    createClient().from("devices").select("serial_no, name").order("name").then(({ data }) => setDevices(data ?? []));
+  }, []);
+
   const filtered = members
     .filter((m) => {
       if (expiringOnly) {
@@ -208,6 +222,78 @@ export default function MembersPage() {
   // which has its own always-visible box)
   const secondaryFilterCount = [genderFilter !== "all", expiringOnly, newOnly, feeFilter !== "all"].filter(Boolean).length;
   function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setNewOnly(false); setFeeFilter("all"); }
+
+  // Selection tracks against the full filtered set (not just the current
+  // page), so "select all" genuinely means every member matching the
+  // active filters, even across multiple pages.
+  const allFilteredSelected = filtered.length > 0 && filtered.every((m) => selectedIds.has(m.id));
+  function toggleSelectAll() {
+    setSelectedIds((prev) => {
+      if (allFilteredSelected) return new Set();
+      const next = new Set(prev);
+      filtered.forEach((m) => next.add(m.id));
+      return next;
+    });
+  }
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkEnrollToDevice() {
+    if (!enrollDevice) { toast.error("Select a device"); return; }
+    const targets = members.filter((m) => selectedIds.has(m.id));
+    setEnrolling(true);
+    setEnrollProgress({ done: 0, total: targets.length });
+    const supabase = createClient();
+    let enrolledCount = 0, alreadyCount = 0, failedCount = 0;
+
+    // Sequential, not Promise.all — /api/devices/push-user computes each
+    // command's id as a count()+1 read-then-write with no unique constraint
+    // to catch a collision, so parallel calls against the same device risk
+    // duplicate command ids.
+    for (const m of targets) {
+      try {
+        const { data: existing } = await supabase
+          .from("device_enrollments")
+          .select("id")
+          .eq("member_id", m.id)
+          .eq("device_serial", enrollDevice)
+          .is("deleted_at", null)
+          .maybeSingle();
+
+        if (existing) {
+          alreadyCount++;
+        } else {
+          const uid = String(parseInt(m.membership_no?.split("-")[2] ?? "", 10) || "");
+          const { error: insertError } = await supabase.from("device_enrollments").insert({
+            member_id: m.id, device_serial: enrollDevice, device_user_id: uid,
+          });
+          if (insertError) { failedCount++; setEnrollProgress((p) => p ? { ...p, done: p.done + 1 } : p); continue; }
+          enrolledCount++;
+        }
+
+        const res = await fetch("/api/devices/push-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ member_id: m.id, device_serial: enrollDevice }),
+        });
+        if (!res.ok) failedCount++;
+      } catch {
+        failedCount++;
+      }
+      setEnrollProgress((p) => p ? { ...p, done: p.done + 1 } : p);
+    }
+
+    setEnrolling(false);
+    setEnrollProgress(null);
+    setEnrollModalOpen(false);
+    setSelectedIds(new Set());
+    toast.success(`${enrolledCount} enrolled and queued, ${alreadyCount} already enrolled (re-pushed)${failedCount ? `, ${failedCount} failed` : ""}`);
+  }
 
   // Contextual counts: status counts respect gender filter, gender counts respect status filter
   const statusCounts = useMemo(() => {
@@ -389,6 +475,19 @@ export default function MembersPage() {
           </div>
         </div>
 
+        {/* Bulk action bar */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 bg-[#FEF0E8] border border-[#FDDCC8] rounded-xl px-4 py-2.5">
+            <span className="text-sm font-medium text-[#C04E10]">{selectedIds.size} selected</span>
+            <button onClick={() => setSelectedIds(new Set())} className="text-xs text-[#7A7A72] hover:text-[#1A1A16] hover:underline">
+              Clear
+            </button>
+            <Button size="sm" className="ml-auto" onClick={() => setEnrollModalOpen(true)}>
+              <Fingerprint className="w-3.5 h-3.5" /> Enroll to Device
+            </Button>
+          </div>
+        )}
+
         {/* Content */}
         {loading ? (
           <div className="py-16 text-center">
@@ -404,12 +503,41 @@ export default function MembersPage() {
             <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
           </div>
         ) : viewMode === "list" ? (
-          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} isFeeCurrent={isFeeCurrent} />
+          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} isFeeCurrent={isFeeCurrent}
+            selectedIds={selectedIds} onToggleSelect={toggleSelect} allSelected={allFilteredSelected} onToggleSelectAll={toggleSelectAll} />
         ) : viewMode === "grid" ? (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} isFeeCurrent={isFeeCurrent} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} isFeeCurrent={isFeeCurrent}
+            selectedIds={selectedIds} onToggleSelect={toggleSelect} />
         ) : (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} isFeeCurrent={isFeeCurrent} />
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} isFeeCurrent={isFeeCurrent}
+            selectedIds={selectedIds} onToggleSelect={toggleSelect} />
         )}
+
+        {/* Enroll to Device modal */}
+        <Modal open={enrollModalOpen} onClose={() => !enrolling && setEnrollModalOpen(false)} title="Enroll to Device" size="sm">
+          <div className="space-y-4">
+            <p className="text-sm text-[#4A4A44]">
+              Enrolling <span className="font-semibold">{selectedIds.size}</span> member{selectedIds.size !== 1 ? "s" : ""}. Each will be assigned their membership number as the device ID and pushed automatically.
+            </p>
+            <select value={enrollDevice} onChange={(e) => setEnrollDevice(e.target.value)} disabled={enrolling}
+              className="w-full text-sm px-3 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418] disabled:opacity-50"
+            >
+              <option value="">Select device...</option>
+              {devices.map((d) => (
+                <option key={d.serial_no} value={d.serial_no}>{d.name ?? d.serial_no}</option>
+              ))}
+            </select>
+            {enrollProgress && (
+              <p className="text-xs text-[#7A7A72]">Processing {enrollProgress.done}/{enrollProgress.total}...</p>
+            )}
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={() => setEnrollModalOpen(false)} disabled={enrolling} className="flex-1">Cancel</Button>
+              <Button onClick={bulkEnrollToDevice} loading={enrolling} disabled={!enrollDevice} className="flex-1">
+                {enrolling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Fingerprint className="w-4 h-4" />} Enroll & Push
+              </Button>
+            </div>
+          </div>
+        </Modal>
 
         {/* Pagination */}
         {!loading && totalPages > 1 && (
@@ -482,13 +610,19 @@ function PageNumbers({ current, total, onSelect }: { current: number; total: num
 }
 
 // ── List (Table) View ────────────────────────────────────────────────
-function MembersTable({ members, onNavigate, isFeeCurrent }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; isFeeCurrent: (m: MemberWithJoins) => boolean }) {
+function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggleSelect, allSelected, onToggleSelectAll }: {
+  members: MemberWithJoins[]; onNavigate: (id: string) => void; isFeeCurrent: (m: MemberWithJoins) => boolean;
+  selectedIds: Set<string>; onToggleSelect: (id: string) => void; allSelected: boolean; onToggleSelectAll: () => void;
+}) {
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full">
           <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
             <tr>
+              <th className="px-4 py-3 w-8">
+                <input type="checkbox" className="accent-[#F06418]" checked={allSelected} onChange={onToggleSelectAll} />
+              </th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Membership No</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
@@ -508,6 +642,9 @@ function MembersTable({ members, onNavigate, isFeeCurrent }: { members: MemberWi
               const isNew    = isNewMember(m);
               return (
                 <tr key={m.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onNavigate(m.id)}>
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" className="accent-[#F06418]" checked={selectedIds.has(m.id)} onChange={() => onToggleSelect(m.id)} />
+                  </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-2.5">
                       <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
@@ -563,7 +700,10 @@ function MembersTable({ members, onNavigate, isFeeCurrent }: { members: MemberWi
 }
 
 // ── Grid / Compact View ─────────────────────────────────────────────
-function MembersGrid({ members, onNavigate, compact, isFeeCurrent }: { members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; isFeeCurrent: (m: MemberWithJoins) => boolean }) {
+function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, onToggleSelect }: {
+  members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; isFeeCurrent: (m: MemberWithJoins) => boolean;
+  selectedIds: Set<string>; onToggleSelect: (id: string) => void;
+}) {
   const cols = compact
     ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
     : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
@@ -578,9 +718,17 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent }: { members: 
         const isNew    = isNewMember(m);
 
         return (
-          <button key={m.id} onClick={() => onNavigate(m.id)}
-            className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden text-left hover:border-[#F06418] hover:shadow-sm transition-all group"
-          >
+          <div key={m.id} className="relative">
+            <input
+              type="checkbox"
+              className="absolute top-2 left-2 z-10 accent-[#F06418] w-4 h-4"
+              checked={selectedIds.has(m.id)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={() => onToggleSelect(m.id)}
+            />
+            <button onClick={() => onNavigate(m.id)}
+              className="w-full bg-white border border-[#E4E4DE] rounded-xl overflow-hidden text-left hover:border-[#F06418] hover:shadow-sm transition-all group"
+            >
             <div className="h-1" style={{ backgroundColor: pkgColor }} />
             <div className={compact ? "p-3" : "p-4"}>
               {/* Avatar + name */}
@@ -634,7 +782,8 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent }: { members: 
                 {!compact && <ArrowRight className="w-3.5 h-3.5 text-[#7A7A72] group-hover:text-[#F06418] transition-colors" />}
               </div>
             </div>
-          </button>
+            </button>
+          </div>
         );
       })}
     </div>
