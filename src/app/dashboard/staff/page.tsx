@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Search, RefreshCw, UserPlus, Users, Dumbbell,
-  Phone, Mail, ArrowRight, X,
+  Phone, Mail, ArrowRight, X, Fingerprint,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
@@ -265,6 +265,7 @@ export default function StaffPage() {
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Specialization</th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Members</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Device ID</th>
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Salary</th>
                   <th className="px-5 py-3" />
                 </tr>
@@ -294,6 +295,13 @@ export default function StaffPage() {
                       {s.role === "Trainer" ? (
                         <span className={`text-sm font-bold ${s.member_count > 0 ? "text-[#F06418]" : "text-[#7A7A72]"}`}>{s.member_count}</span>
                       ) : <span className="text-[#7A7A72] text-xs">—</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      {s.device_user_id ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-[#F06418]">
+                          <Fingerprint className="w-3 h-3" />{s.device_user_id}
+                        </span>
+                      ) : <span className="text-[#7A7A72] text-xs">Not enrolled</span>}
                     </td>
                     <td className="px-4 py-3 text-sm font-medium text-[#1A1A16]">{s.salary ? formatPKR(s.salary) : "—"}</td>
                     <td className="px-5 py-3 text-right">
@@ -342,6 +350,9 @@ export default function StaffPage() {
                     <div className="space-y-1.5">
                       {member.phone && <p className="text-xs text-[#4A4A44] flex items-center gap-1.5"><Phone className="w-3 h-3 text-[#7A7A72]" />{member.phone}</p>}
                       {member.email && <p className="text-xs text-[#4A4A44] flex items-center gap-1.5 truncate"><Mail className="w-3 h-3 text-[#7A7A72] flex-shrink-0" /><span className="truncate">{member.email}</span></p>}
+                      {member.device_user_id && (
+                        <p className="text-xs font-mono font-semibold text-[#F06418] flex items-center gap-1.5"><Fingerprint className="w-3 h-3" />{member.device_user_id}</p>
+                      )}
                     </div>
                     <div className="flex items-center justify-between mt-4 pt-3 border-t border-[#E4E4DE]">
                       <div>
