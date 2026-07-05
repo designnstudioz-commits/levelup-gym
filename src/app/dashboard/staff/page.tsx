@@ -128,6 +128,17 @@ export default function StaffPage() {
     if (!form.full_name.trim()) { toast.error("Full name is required"); return; }
     setSaving(true);
     const supabase = createClient();
+
+    // Reserve the next available device ID (5000+, never colliding with
+    // member PINs) the moment a staff member is added — same convention as
+    // the single-staff "Assign ID" action, just automatic here.
+    const { data: existingIds } = await supabase.from("staff_members").select("device_user_id").gte("device_user_id", "5000").is("deleted_at", null);
+    let nextDeviceId = 5000;
+    for (const row of existingIds ?? []) {
+      const n = parseInt(row.device_user_id ?? "", 10);
+      if (!isNaN(n) && n >= nextDeviceId) nextDeviceId = n + 1;
+    }
+
     const { error } = await supabase.from("staff_members").insert({
       full_name: form.full_name.trim(),
       role: form.role,
@@ -139,16 +150,17 @@ export default function StaffPage() {
       joining_date: form.joining_date || null,
       bio: form.bio || null,
       status: "active",
+      device_user_id: String(nextDeviceId),
     });
     if (error) { toast.error("Failed to add staff member"); setSaving(false); return; }
 
     await supabase.from("activity_logs").insert({
       action: "added_staff",
       entity_type: "staff_member",
-      description: `Added ${form.role} ${form.full_name}`,
+      description: `Added ${form.role} ${form.full_name} (device ID ${nextDeviceId})`,
     });
 
-    toast.success(`${form.role} ${form.full_name} added!`);
+    toast.success(`${form.role} ${form.full_name} added — device ID ${nextDeviceId}`);
     setAddModal(false);
     setForm(defaultForm);
     setSaving(false);
