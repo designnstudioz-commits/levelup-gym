@@ -34,6 +34,9 @@ const ROLE_COLORS: Record<string, string> = {
   Receptionist: "bg-blue-50 text-blue-700 border-blue-200",
   Manager: "bg-purple-50 text-purple-700 border-purple-200",
   Nutritionist: "bg-green-50 text-green-700 border-green-200",
+  "Software Developer": "bg-indigo-50 text-indigo-700 border-indigo-200",
+  Designer: "bg-pink-50 text-pink-700 border-pink-200",
+  Freelancer: "bg-amber-50 text-amber-700 border-amber-200",
   Other: "bg-gray-100 text-gray-600 border-gray-200",
 };
 
@@ -406,6 +409,9 @@ export default function StaffDetailPage() {
                     <option value="Receptionist">Receptionist</option>
                     <option value="Manager">Manager</option>
                     <option value="Nutritionist">Nutritionist</option>
+                    <option value="Software Developer">Software Developer</option>
+                    <option value="Designer">Designer</option>
+                    <option value="Freelancer">Freelancer</option>
                     <option value="Other">Other</option>
                   </Select>
                   <Select

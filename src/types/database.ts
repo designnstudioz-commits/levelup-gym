@@ -5,7 +5,7 @@ export type SubmissionStatus = "pending" | "approved" | "rejected";
 export type PackageType = "Individual" | "Family" | "Couple" | "Daily";
 export type PaymentMethod = "Cash" | "Bank" | "Card" | "EasyPaisa" | "JazzCash";
 export type SystemRole = "owner" | "manager" | "receptionist" | "trainer" | "viewer";
-export type StaffRole = "Trainer" | "Receptionist" | "Manager" | "Nutritionist" | "Other";
+export type StaffRole = "Trainer" | "Receptionist" | "Manager" | "Nutritionist" | "Software Developer" | "Designer" | "Freelancer" | "Other";
 export type PunchType = "in" | "out" | "unknown";
 export type SmsStatus = "queued" | "sent" | "failed";
 
