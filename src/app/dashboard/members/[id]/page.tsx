@@ -1288,8 +1288,14 @@ export default function MemberDetailPage() {
                     expiry_date: newJoiningDate ? addMonthsToDateStr(newJoiningDate, durationMonths) : f.expiry_date,
                   }));
                 }} />
-              <Input label="Expiry Date" type="date" value={profileForm.expiry_date}
-                onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))} />
+              <Input
+                label="Expiry Date"
+                type="date"
+                value={profileForm.expiry_date}
+                readOnly
+                disabled
+                hint="Auto-calculated from joining date + package duration"
+              />
               <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
                 onChange={(e) => setProfileForm((f) => ({ ...f, admission_fee: e.target.value }))} />
             </div>
