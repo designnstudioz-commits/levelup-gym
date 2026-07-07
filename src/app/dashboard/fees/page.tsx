@@ -24,7 +24,7 @@ import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 
 // ── Types ────────────────────────────────────────────────────────────
-type Tab = "overview" | "transactions" | "outstanding" | "analytics";
+type Tab = "overview" | "transactions" | "outstanding" | "renewals" | "analytics";
 type DateRange = "thisMonth" | "lastMonth" | "3months" | "alltime" | "custom";
 
 interface PaymentRow extends FeePayment {
@@ -257,6 +257,16 @@ export default function FeesPage() {
   const paidMemberIds = new Set(recentPayments30.map((p) => p.member_id));
   const expired       = members.filter((m) => m.expiry_date && m.expiry_date < todayStr);
   const unpaidActive  = members.filter((m) => (!m.expiry_date || m.expiry_date >= todayStr) && !paidMemberIds.has(m.id));
+  // Renewals reminders — two heads-up windows before a membership lapses,
+  // mutually exclusive so each member shows in exactly one bucket.
+  const dueSoon3 = members.filter((m) => {
+    const days = daysUntilExpiry(m.expiry_date);
+    return days !== null && days >= 0 && days <= 3;
+  });
+  const dueSoon7 = members.filter((m) => {
+    const days = daysUntilExpiry(m.expiry_date);
+    return days !== null && days > 3 && days <= 7;
+  });
   const todayPayments = payments.filter((p) => p.payment_date === todayStr);
   const totalRevenue  = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
   const todayRevenue  = todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0);
@@ -276,6 +286,7 @@ export default function FeesPage() {
     { key: "overview",     label: "Overview" },
     { key: "transactions", label: "Transactions", badge: payments.length },
     { key: "outstanding",  label: "Outstanding Dues", badge: expired.length + unpaidActive.length },
+    { key: "renewals",    label: "Renewals", badge: dueSoon3.length + dueSoon7.length },
     { key: "analytics",   label: "Analytics" },
   ];
 
@@ -320,6 +331,7 @@ export default function FeesPage() {
         {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} />}
         {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
+        {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
         {tab === "analytics"   && <AnalyticsTab payments={payments} />}
       </div>
 
@@ -995,7 +1007,89 @@ function OutstandingTab({ expired, unpaidActive, loading, onCollect }: {
   );
 }
 
-// ── Tab 4: Analytics ─────────────────────────────────────────────────
+// ── Tab 4: Renewals ──────────────────────────────────────────────────
+function RenewalsTab({ dueSoon3, dueSoon7, loading, onCollect }: {
+  dueSoon3: MemberWithPackage[]; dueSoon7: MemberWithPackage[];
+  loading: boolean; onCollect: (m: MemberWithPackage) => void;
+}) {
+  function RenewalRow({ m, urgent }: { m: MemberWithPackage; urgent: boolean }) {
+    const days = daysUntilExpiry(m.expiry_date);
+    const pkg = (m as any).packages;
+    return (
+      <div className="flex items-center gap-3 px-5 py-3 hover:bg-[#F8F8F6] transition-colors">
+        <div className={`w-2 h-2 rounded-full flex-shrink-0 ${urgent ? "bg-[#F06418]" : "bg-blue-500"}`} />
+        <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
+          {m.full_name.charAt(0)}
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-[#1A1A16] truncate">{m.full_name}</p>
+          <p className="text-xs text-[#7A7A72]">
+            {m.membership_no}
+            {pkg?.name && <span> · {pkg.name}</span>}
+            {days !== null && (
+              <span className={`font-medium ${urgent ? "text-[#C04E10]" : "text-blue-600"}`}> · Expires in {days}d</span>
+            )}
+          </p>
+        </div>
+        <span className="text-sm font-bold text-[#1A1A16] flex-shrink-0">{formatPKR(pkg?.monthly_fee ?? m.monthly_fee)}</span>
+        <button onClick={() => onCollect(m)}
+          className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FEF0E8] text-[#F06418] border border-[#FDDCC8] hover:bg-[#F06418] hover:text-white transition-colors flex-shrink-0"
+        >
+          Collect
+        </button>
+        <Link href={`/dashboard/members/${m.id}`}>
+          <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </Link>
+      </div>
+    );
+  }
+
+  if (loading) return <div className="py-12 text-center text-sm text-[#7A7A72]">Loading...</div>;
+
+  if (dueSoon3.length + dueSoon7.length === 0) {
+    return (
+      <div className="py-16 text-center">
+        <div className="w-14 h-14 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+          <CheckCircle className="w-7 h-7 text-green-600" />
+        </div>
+        <p className="text-base font-semibold text-[#1A1A16]">No renewals due soon!</p>
+        <p className="text-sm text-[#7A7A72] mt-1">No memberships expiring in the next 7 days.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {dueSoon3.length > 0 && (
+        <Card padding={false}>
+          <div className="px-5 py-3 border-b border-[#E4E4DE] bg-[#FEF0E8] flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-[#F06418]" />
+            <h3 className="text-sm font-semibold text-[#C04E10]">Expiring in 3 Days ({dueSoon3.length})</h3>
+          </div>
+          <div className="divide-y divide-[#E4E4DE]">
+            {dueSoon3.map((m) => <RenewalRow key={m.id} m={m} urgent={true} />)}
+          </div>
+        </Card>
+      )}
+
+      {dueSoon7.length > 0 && (
+        <Card padding={false}>
+          <div className="px-5 py-3 border-b border-[#E4E4DE] bg-blue-50 flex items-center gap-2">
+            <div className="w-2.5 h-2.5 rounded-full bg-blue-500" />
+            <h3 className="text-sm font-semibold text-blue-800">Expiring in 4–7 Days ({dueSoon7.length})</h3>
+          </div>
+          <div className="divide-y divide-[#E4E4DE]">
+            {dueSoon7.map((m) => <RenewalRow key={m.id} m={m} urgent={false} />)}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+
+// ── Tab 5: Analytics ─────────────────────────────────────────────────
 function AnalyticsTab({ payments }: { payments: PaymentRow[] }) {
   const supabase = createClient();
   const [monthlyData, setMonthlyData] = useState<{ month: string; total: number }[]>([]);
