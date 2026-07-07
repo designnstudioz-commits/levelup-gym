@@ -87,12 +87,32 @@ export const RECURRING_FEE_TYPES = ["membership", "trainer", "nutritionist", "ph
 /** Computes a member's new expiry date after a recurring-dues payment.
  *  If their current expiry hasn't lapsed yet, the new cycle extends from
  *  it so paying early doesn't cost them the remaining days. Otherwise the
- *  cycle restarts from the payment date. */
+ *  cycle restarts from the payment date.
+ *
+ *  isFirstPayment must be true for a member's very first recurring payment —
+ *  that payment just settles the cycle already granted at registration, so
+ *  it must not push expiry into a second, not-yet-earned cycle. It still
+ *  extends normally if paid after the granted cycle has already lapsed
+ *  (a genuinely late first payment starting a fresh cycle).
+ *
+ *  joiningDateFallback covers the case where currentExpiry was never set
+ *  (registration should always set it now, but this is a safety net): on a
+ *  first payment, base off the member's actual joining date rather than the
+ *  payment date, so a late-collected first payment doesn't silently make
+ *  expiry track the payment date instead of when the member actually joined. */
 export function extendExpiryDate(
   currentExpiry: string | null | undefined,
   paymentDate: string,
-  durationMonths: number
+  durationMonths: number,
+  isFirstPayment: boolean = false,
+  joiningDateFallback?: string | null
 ): string {
+  if (isFirstPayment && currentExpiry && currentExpiry >= paymentDate) {
+    return currentExpiry;
+  }
+  if (isFirstPayment && !currentExpiry && joiningDateFallback) {
+    return addMonthsToDateStr(joiningDateFallback, durationMonths);
+  }
   const base = currentExpiry && currentExpiry >= paymentDate ? currentExpiry : paymentDate;
   return addMonthsToDateStr(base, durationMonths);
 }

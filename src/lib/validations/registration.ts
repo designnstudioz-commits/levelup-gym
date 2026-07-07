@@ -71,6 +71,14 @@ export const step3Schema = z.object({
   handled_by: z.string().optional(),
 });
 
+// Staff registrations create a member directly (skipping the approval
+// queue), so joining_date must be set — otherwise expiry_date is left null
+// at creation, and whatever fee payment comes in first silently becomes the
+// basis for expiry instead of the member's actual joining date.
+export const step3StaffSchema = step3Schema.extend({
+  joining_date: z.string().min(1, "Joining date is required"),
+});
+
 export const step4Schema = z.object({
   terms_agreed: z.literal(true, { error: "You must agree to the terms" }),
 });

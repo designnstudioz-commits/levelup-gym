@@ -19,7 +19,7 @@ interface Step3Props {
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
 
 export function Step3Services({ form, mode, currentUser }: Step3Props) {
-  const { register, watch, setValue } = form;
+  const { register, watch, setValue, formState: { errors } } = form;
   const [packages, setPackages] = useState<Package[]>([]);
 
   const joiningDate        = watch("joining_date");
@@ -40,13 +40,20 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     }
   }, [mode, currentUser, setValue]);
 
-  // Auto-calculate expiry from joining date
+  // Auto-calculate expiry from joining date + the longest selected package's
+  // duration, so combining a short add-on with a longer plan doesn't cut the
+  // member short. Recomputes whenever either input changes; the field itself
+  // is read-only (see below) so staff can't hand-edit it out of sync.
   useEffect(() => {
     if (joiningDate) {
-      const expiry = format(addMonths(new Date(joiningDate), 1), "yyyy-MM-dd");
+      const durationMonths = selectedPackageIds.reduce((max, id) => {
+        const pkg = packages.find((p) => p.id === id);
+        return Math.max(max, pkg?.duration_months ?? 1);
+      }, 1);
+      const expiry = format(addMonths(new Date(joiningDate), durationMonths), "yyyy-MM-dd");
       setValue("expiry_date", expiry);
     }
-  }, [joiningDate, setValue]);
+  }, [joiningDate, selectedPackageIds, packages, setValue]);
 
   // Recalculate total monthly fee whenever selected packages change
   useEffect(() => {
@@ -204,8 +211,21 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
         <div />
 
-        <Input label="Joining Date" type="date" {...register("joining_date")} />
-        <Input label="Expiry Date"  type="date" {...register("expiry_date")} />
+        <Input
+          label="Joining Date"
+          type="date"
+          required
+          error={errors.joining_date?.message}
+          {...register("joining_date")}
+        />
+        <Input
+          label="Expiry Date"
+          type="date"
+          {...register("expiry_date")}
+          readOnly
+          disabled
+          hint="Auto-calculated from joining date + package duration"
+        />
       </div>
     </div>
   );

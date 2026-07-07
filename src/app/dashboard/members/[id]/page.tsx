@@ -503,10 +503,22 @@ export default function MemberDetailPage() {
     // packages billed that way) pushes out the expiry date. If the current
     // cycle hasn't lapsed yet, extend from it so paying early doesn't cost
     // the member their remaining days; otherwise the cycle restarts from
-    // the payment date.
+    // the payment date. A member's very first recurring payment is excluded
+    // from this: it settles the cycle already granted at registration, not
+    // a new one.
     if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
+      // Counted after the insert above, so this includes the payment we
+      // just recorded — a count of 1 means it was this member's first ever.
+      const { count: totalRecurringPayments } = await supabase
+        .from("fee_payments")
+        .select("*", { count: "exact", head: true })
+        .eq("member_id", id)
+        .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
+        .is("deleted_at", null);
+
       const durationMonths = (member as any)?.packages?.duration_months || 1;
-      const newExpiry = extendExpiryDate(member?.expiry_date, paymentDate, durationMonths);
+      const isFirstPayment = (totalRecurringPayments ?? 0) <= 1;
+      const newExpiry = extendExpiryDate(member?.expiry_date, paymentDate, durationMonths, isFirstPayment, member?.joining_date);
       await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
     }
 

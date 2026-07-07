@@ -20,6 +20,7 @@ import {
   step1Schema,
   step2Schema,
   step3Schema,
+  step3StaffSchema,
   type FullRegistrationData,
 } from "@/lib/validations/registration";
 import type { SystemUser } from "@/types/database";
@@ -30,7 +31,6 @@ interface RegistrationFormProps {
 }
 
 const STEP_LABELS = ["Personal", "Health", "Services", "Review"];
-const stepSchemas = [step1Schema, step2Schema, step3Schema];
 
 export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
   const router = useRouter();
@@ -50,6 +50,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
   });
 
   async function handleNext() {
+    const stepSchemas = [step1Schema, step2Schema, mode === "staff" ? step3StaffSchema : step3Schema];
     const schema = stepSchemas[currentStep - 1];
     if (schema) {
       const values = form.getValues();
