@@ -69,14 +69,6 @@ export async function POST(req: NextRequest) {
       name = member.full_name;
     }
 
-    // Get next command_id for this device (sequential per device)
-    const { count } = await supabase
-      .from("device_commands")
-      .select("*", { count: "exact", head: true })
-      .eq("device_serial", device_serial);
-
-    const commandId = (count ?? 0) + 1;
-
     // ZKTeco ADMS user push command (tab-separated fields)
     // PIN = user ID on device, Pri = privilege (0=normal), Grp = group (1=default)
     const truncatedName = name.substring(0, 24); // device name field limit
@@ -93,20 +85,41 @@ export async function POST(req: NextRequest) {
       `ViceCard=`,
     ].join("\t");
 
-    const { error } = await supabase.from("device_commands").insert({
-      device_serial,
-      command_id: commandId,
-      command,
-      command_type: "push_user",
-      // No staff_id column on device_commands — member_id stays null for
-      // staff-originated pushes rather than adding a new column for this.
-      member_id: member_id ?? null,
-      status: "pending",
-    });
+    // command_id is sequential per device (count()+1) with no way to reserve
+    // it atomically — a unique constraint on (device_serial, command_id)
+    // catches a collision from a concurrent push instead of silently
+    // corrupting command/ack tracking, and we just retry with a fresh count.
+    let commandId: number | null = null;
+    let insertError: { code?: string; message: string } | null = null;
 
-    if (error) {
-      console.error("[PushUser] Insert error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const { count } = await supabase
+        .from("device_commands")
+        .select("*", { count: "exact", head: true })
+        .eq("device_serial", device_serial);
+
+      commandId = (count ?? 0) + 1;
+
+      const { error } = await supabase.from("device_commands").insert({
+        device_serial,
+        command_id: commandId,
+        command,
+        command_type: "push_user",
+        // No staff_id column on device_commands — member_id stays null for
+        // staff-originated pushes rather than adding a new column for this.
+        member_id: member_id ?? null,
+        status: "pending",
+      });
+
+      if (!error) { insertError = null; break; }
+      insertError = error;
+      if (error.code !== "23505") break; // not a unique-violation — don't retry
+      console.warn(`[PushUser] command_id ${commandId} collided for ${device_serial}, retrying (attempt ${attempt + 1})`);
+    }
+
+    if (insertError) {
+      console.error("[PushUser] Insert error:", insertError);
+      return NextResponse.json({ error: insertError.message }, { status: 500 });
     }
 
     console.log(`[PushUser] Queued command ${commandId} for ${name} → ${device_serial} (UserID=${uid})`);
