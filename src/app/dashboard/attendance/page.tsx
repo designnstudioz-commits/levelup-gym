@@ -9,6 +9,7 @@ import {
   MapPin, Edit3, Check, Plus,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Button } from "@/components/ui/Button";
@@ -17,7 +18,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
-import { formatDateTime } from "@/lib/utils";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
+import { formatDateTime, isDeviceOnline } from "@/lib/utils";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { Device } from "@/types/database";
@@ -60,6 +62,7 @@ const DEVICE_COLORS = [
 ];
 
 export default function AttendancePage() {
+  const currentUser = useCurrentUser();
   const [records, setRecords]         = useState<AttendanceRow[]>([]);
   const [unverified, setUnverified]   = useState<UnverifiedRow[]>([]);
   const [devices, setDevices]         = useState<Device[]>([]);
@@ -161,7 +164,7 @@ export default function AttendancePage() {
   const deviceStats = devices.map((d) => ({
     device: d,
     count: records.filter((r) => r.device_id === d.serial_no).length,
-    online: d.last_seen ? (Date.now() - new Date(d.last_seen).getTime()) < 2 * 60 * 1000 : false,
+    online: isDeviceOnline(d.last_seen),
   }));
 
   // Stats cards respect device filter but not search/punch-type (so KPIs reflect selected device)
@@ -196,6 +199,7 @@ export default function AttendancePage() {
       ip_address: deviceForm.ip_address || null,
     }).eq("id", editDevice.id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_device", entity_type: "device",
       description: `Updated device "${deviceForm.name}" (${editDevice.serial_no})`,
     });
@@ -615,21 +619,33 @@ export default function AttendancePage() {
 
 // ── Attendance Table ──────────────────────────────────────────────────
 function AttendanceTable({ records, getDevice }: { records: AttendanceRow[]; getDevice: (s: string | null) => Device | undefined }) {
+  const [sortKey, setSortKey] = useState("punch_time");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
+
+  function getSortValue(r: AttendanceRow, key: string): string | number | null {
+    switch (key) {
+      case "person": return (r.member ?? r.staff)?.full_name ?? null;
+      default:       return (r as any)[key] ?? null;
+    }
+  }
+  const sorted = [...records].sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
+
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
       <table className="w-full">
         <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
           <tr>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member / Staff</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Time (PKT)</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Type</th>
+            <SortableTh label="Member / Staff" sortKey="person" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
+            <SortableTh label="Time (PKT)" sortKey="punch_time" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+            <SortableTh label="Type" sortKey="punch_type" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
             <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
             <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Device / Door</th>
             <th className="px-5 py-3" />
           </tr>
         </thead>
         <tbody className="divide-y divide-[#E4E4DE]">
-          {records.map((r) => {
+          {sorted.map((r) => {
             const person = r.member ?? r.staff;
             const isIn = r.punch_type === "in";
             const pkg = (r.member as any)?.packages;

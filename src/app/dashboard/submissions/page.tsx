@@ -16,12 +16,14 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { formatDate, timeAgo, formatPKR, generateMembershipNo } from "@/lib/utils";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import type { Submission } from "@/types/database";
 
 type SubmissionWithPackage = Submission & {
@@ -45,10 +47,14 @@ const REJECT_PRESETS = [
 
 export default function SubmissionsPage() {
   const router = useRouter();
+  const currentUser = useCurrentUser();
   const [submissions, setSubmissions] = useState<SubmissionWithPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
   const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("created_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
   const [viewSubmission, setViewSubmission] = useState<SubmissionWithPackage | null>(null);
   const [rejectModal, setRejectModal] = useState<SubmissionWithPackage | null>(null);
   const [rejectReason, setRejectReason] = useState("");
@@ -78,6 +84,13 @@ export default function SubmissionsPage() {
     fetchSubmissions();
   }, [fetchSubmissions]);
 
+  function getSortValue(s: SubmissionWithPackage, key: string): string | number | null {
+    switch (key) {
+      case "package": return s.packages?.name ?? null;
+      default:        return (s as any)[key] ?? null;
+    }
+  }
+
   const filtered = submissions.filter((s) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -89,7 +102,7 @@ export default function SubmissionsPage() {
       s.cnic?.includes(q) ||
       refNo.includes(q)
     );
-  });
+  }).sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
 
   async function handleApprove(sub: SubmissionWithPackage) {
     setProcessing(sub.id);
@@ -145,6 +158,7 @@ export default function SubmissionsPage() {
 
       // Log activity
       await supabase.from("activity_logs").insert({
+        user_id: currentUser?.id ?? null,
         action: "approved_submission",
         entity_type: "submission",
         entity_id: sub.id,
@@ -187,6 +201,7 @@ export default function SubmissionsPage() {
         .eq("id", rejectModal.id);
 
       await supabase.from("activity_logs").insert({
+        user_id: currentUser?.id ?? null,
         action: "rejected_submission",
         entity_type: "submission",
         entity_id: rejectModal.id,
@@ -250,6 +265,7 @@ export default function SubmissionsPage() {
       for (const id of selectedArray) {
         await supabase.from("submissions").update({ deleted_at: new Date().toISOString() }).eq("id", id);
         await supabase.from("activity_logs").insert({
+          user_id: currentUser?.id ?? null,
           action: "deleted_submission",
           entity_type: "submission",
           entity_id: id,
@@ -364,12 +380,12 @@ export default function SubmissionsPage() {
                         className="w-4 h-4 rounded border border-[#E4E4DE] cursor-pointer accent-[#F06418]"
                       />
                     </th>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Member</th>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
+                    <SortableTh label="Member" sortKey="full_name" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                    <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                    <SortableTh label="Package" sortKey="package" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                     <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Services</th>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Submitted</th>
-                    <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Status</th>
+                    <SortableTh label="Submitted" sortKey="created_at" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                    <SortableTh label="Status" sortKey="status" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                     <th className="text-right text-xs font-semibold text-[#7A7A72] px-5 py-3">Actions</th>
                   </tr>
                 </thead>

@@ -8,6 +8,7 @@ import {
   Phone, Mail, ArrowRight, X, Fingerprint, Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
@@ -17,6 +18,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { formatPKR, formatCnic, formatPhone } from "@/lib/utils";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import type { StaffMember, StaffRole } from "@/types/database";
 
@@ -59,6 +61,7 @@ export default function StaffPage() {
 
   const router = useRouter();
   const searchParams = useSearchParams();
+  const currentUser = useCurrentUser();
   const [staff, setStaff] = useState<StaffWithCount[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode]     = useState<ViewMode>("grid");
@@ -67,6 +70,9 @@ export default function StaffPage() {
   const [addModal, setAddModal]     = useState(false);
   const [form, setForm] = useState(defaultForm);
   const [saving, setSaving] = useState(false);
+  const [sortKey, setSortKey] = useState("full_name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
 
   // Bulk device push — mirrors the members list's bulk-enroll feature, but
   // staff already have a device_user_id (auto-assigned on creation, or via
@@ -134,7 +140,7 @@ export default function StaffPage() {
       s.email?.toLowerCase().includes(search.toLowerCase()) ||
       s.specialization?.toLowerCase().includes(search.toLowerCase());
     return matchRole && matchSearch;
-  });
+  }).sort((a, b) => compareValues(a[sortKey as keyof StaffWithCount], b[sortKey as keyof StaffWithCount], sortDir));
 
   const trainers = staff.filter((s) => s.role === "Trainer");
   const totalMembers = trainers.reduce((sum, t) => sum + t.member_count, 0);
@@ -189,6 +195,7 @@ export default function StaffPage() {
           const { error: updateError } = await supabase.from("staff_members").update({ device_user_id: deviceUserId }).eq("id", staffId);
           if (updateError) { failedCount++; setPushProgress((p) => p ? { ...p, done: p.done + 1 } : p); continue; }
           await supabase.from("activity_logs").insert({
+            user_id: currentUser?.id ?? null,
             action: "updated_staff_device_id",
             entity_type: "staff_member",
             entity_id: staffId,
@@ -248,6 +255,7 @@ export default function StaffPage() {
     if (error) { toast.error("Failed to add staff member"); setSaving(false); return; }
 
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "added_staff",
       entity_type: "staff_member",
       description: `Added ${form.role} ${form.full_name} (device ID ${nextDeviceId})`,
@@ -384,13 +392,13 @@ export default function StaffPage() {
                   <th className="px-4 py-3 w-8">
                     <input type="checkbox" className="accent-[#F06418]" checked={allFilteredSelected} onChange={toggleSelectAll} />
                   </th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Staff Member</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Role</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Specialization</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Members</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Device ID</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Salary</th>
+                  <SortableTh label="Staff Member" sortKey="full_name" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
+                  <SortableTh label="Role" sortKey="role" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Specialization" sortKey="specialization" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Members" sortKey="member_count" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Device ID" sortKey="device_user_id" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Salary" sortKey="salary" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <th className="px-5 py-3" />
                 </tr>
               </thead>

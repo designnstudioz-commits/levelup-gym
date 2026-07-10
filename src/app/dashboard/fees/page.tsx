@@ -11,6 +11,7 @@ import {
   ArrowRight, Clock, Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -19,6 +20,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
@@ -57,6 +59,7 @@ const TYPE_COLORS: Record<string, string> = {
 // ── Main Page ────────────────────────────────────────────────────────
 export default function FeesPage() {
   const router = useRouter();
+  const currentUser = useCurrentUser();
   const [tab, setTab] = useState<Tab>("overview");
 
   // Shared data
@@ -235,6 +238,7 @@ export default function FeesPage() {
       }
 
       await supabase.from("activity_logs").insert({
+        user_id: currentUser?.id ?? null,
         action: "paid_fee", entity_type: "member", entity_id: selectedMember.id,
         description: `${selectedMember.full_name} paid ${formatPKR(finalAmount)} (${feeType}) — ${receiptNo}`,
         metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, receipt_no: receiptNo },
@@ -669,6 +673,18 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
 }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [sortKey, setSortKey] = useState("payment_date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
+
+  function getSortValue(p: PaymentRow, key: string): string | number | null {
+    switch (key) {
+      case "member":  return (p as any).member?.full_name ?? null;
+      case "month":   return p.month_covered ?? p.payment_date ?? null;
+      default:        return (p as any)[key] ?? null;
+    }
+  }
+  const sortedPayments = [...payments].sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
 
   async function handleDelete() {
     if (!deleteId) return;
@@ -781,19 +797,19 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
             <table className="w-full">
               <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
                 <tr>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3 whitespace-nowrap">Member</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Receipt No</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">For Month</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Payment Type</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Amount</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Method</th>
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Paid On</th>
+                  <SortableTh label="Member" sortKey="member" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
+                  <SortableTh label="Receipt No" sortKey="receipt_no" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="For Month" sortKey="month" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Payment Type" sortKey="payment_type" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Method" sortKey="payment_method" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Paid On" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Note</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4DE]">
-                {payments.map((p) => {
+                {sortedPayments.map((p) => {
                   const mem = (p as any).member;
                   const hasDiscount = p.note?.includes("Discount:");
                   // Extract user note (after the discount part if present)

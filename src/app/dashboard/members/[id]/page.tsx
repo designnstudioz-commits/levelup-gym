@@ -11,6 +11,7 @@ import {
   Send, Clock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -129,6 +130,7 @@ function buildReceiptHtml(r: {
 export default function MemberDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const currentUser = useCurrentUser();
 
   const [member, setMember] = useState<Member & { packages?: PackageType | null; trainer?: StaffMember | null } | null>(null);
   const [packages, setPackages] = useState<PackageType[]>([]);
@@ -271,6 +273,7 @@ export default function MemberDetailPage() {
     if (error) { toast.error(error.message); setSaving(false); return; }
 
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "edited_member",
       entity_type: "member",
       entity_id: id,
@@ -395,6 +398,7 @@ export default function MemberDetailPage() {
       services: newServices,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_package",
       entity_type: "member",
       entity_id: id,
@@ -414,6 +418,7 @@ export default function MemberDetailPage() {
     const trainer = trainers.find((t) => t.id === selectedTrainer);
     await supabase.from("members").update({ trainer_id: selectedTrainer || null }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_trainer",
       entity_type: "member",
       entity_id: id,
@@ -430,6 +435,7 @@ export default function MemberDetailPage() {
     const supabase = createClient();
     await supabase.from("members").update({ services: selectedServices }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_services",
       entity_type: "member",
       entity_id: id,
@@ -523,6 +529,7 @@ export default function MemberDetailPage() {
     }
 
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "paid_fee",
       entity_type: "member",
       entity_id: id,
@@ -583,6 +590,7 @@ export default function MemberDetailPage() {
     }).eq("id", id);
 
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: isReactivation ? "reactivated_member" : "renewed_membership",
       entity_type: "member",
       entity_id: id,
@@ -610,6 +618,7 @@ export default function MemberDetailPage() {
       freeze_reason: freezeReason || null,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "froze_membership",
       entity_type: "member",
       entity_id: id,
@@ -631,6 +640,7 @@ export default function MemberDetailPage() {
       freeze_reason: null,
     }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "unfroze_membership",
       entity_type: "member",
       entity_id: id,
@@ -646,6 +656,7 @@ export default function MemberDetailPage() {
     const supabase = createClient();
     await supabase.from("members").update({ status: "archived", deleted_at: new Date().toISOString() }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "archived_member",
       entity_type: "member",
       entity_id: id,

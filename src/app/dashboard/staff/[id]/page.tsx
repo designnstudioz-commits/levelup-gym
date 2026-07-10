@@ -10,6 +10,7 @@ import {
   UserCheck, Clock, CheckCircle, XCircle, Fingerprint, Send, Loader2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -43,6 +44,7 @@ const ROLE_COLORS: Record<string, string> = {
 export default function StaffDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const currentUser = useCurrentUser();
 
   const [staff, setStaff] = useState<StaffMember | null>(null);
   const [assignedMembers, setAssignedMembers] = useState<MemberWithPackage[]>([]);
@@ -139,6 +141,7 @@ export default function StaffDetailPage() {
     const { error } = await supabase.from("staff_members").update({ device_user_id: val || null }).eq("id", id);
     if (error) { toast.error("Failed to save device ID"); setSavingDeviceId(false); return; }
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_staff_device_id",
       entity_type: "staff_member",
       entity_id: id,
@@ -187,6 +190,7 @@ export default function StaffDetailPage() {
     if (error) { toast.error("Failed to save"); setSaving(false); return; }
 
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_staff",
       entity_type: "staff_member",
       entity_id: id,
@@ -208,6 +212,7 @@ export default function StaffDetailPage() {
     const supabase = createClient();
     await supabase.from("staff_members").update({ status: newStatus }).eq("id", id);
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "updated_staff_status",
       entity_type: "staff_member",
       entity_id: id,

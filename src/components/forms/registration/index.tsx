@@ -132,6 +132,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
 
         // Log the activity
         await supabase.from("activity_logs").insert({
+          user_id: currentUser?.id ?? null,
           action: "added_member",
           entity_type: "member",
           entity_id: data.id,

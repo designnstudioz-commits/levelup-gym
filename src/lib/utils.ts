@@ -117,6 +117,14 @@ export function extendExpiryDate(
   return addMonthsToDateStr(base, durationMonths);
 }
 
+/** A device counts as online if it's checked in (via the ADMS heartbeat)
+ *  within the last 2 minutes — matches the device's own ~30s poll cycle
+ *  with headroom for a missed beat or two. */
+export function isDeviceOnline(lastSeen: string | null | undefined): boolean {
+  if (!lastSeen) return false;
+  return Date.now() - new Date(lastSeen).getTime() < 2 * 60 * 1000;
+}
+
 export function daysUntilExpiry(expiryDate: string | null | undefined): number | null {
   if (!expiryDate) return null;
   try {

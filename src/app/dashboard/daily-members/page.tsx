@@ -10,6 +10,7 @@ import {
   Zap, ChevronDown,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -18,6 +19,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDate, formatPKR, generateMembershipNo, formatPhone } from "@/lib/utils";
 import type { DailyMember, Package, StaffMember } from "@/types/database";
 import { addMonths } from "date-fns";
@@ -45,6 +47,7 @@ const emptyForm = {
 // ── Page ────────────────────────────────────────────────────────────
 export default function DailyMembersPage() {
   const router = useRouter();
+  const currentUser = useCurrentUser();
 
   const [visitors, setVisitors]   = useState<DailyMember[]>([]);
   const [loading, setLoading]     = useState(true);
@@ -146,6 +149,7 @@ export default function DailyMembersPage() {
       visit_date: format(new Date(), "yyyy-MM-dd"),
     });
     await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
       action: "logged_daily_visitor",
       entity_type: "daily_member",
       description: `Logged walk-in: ${form.full_name} (${form.purpose})${form.fee_paid ? ` — paid ${formatPKR(Number(form.fee_paid))}` : ""}`,
@@ -190,6 +194,7 @@ export default function DailyMembersPage() {
 
       // Log
       await supabase.from("activity_logs").insert({
+        user_id: currentUser?.id ?? null,
         action: "converted_daily_member",
         entity_type: "member",
         entity_id: newMember.id,
@@ -557,22 +562,27 @@ function ListView({ visitors, onView, onConvert, onDelete }: {
   onConvert: (v: DailyMember) => void;
   onDelete: (v: DailyMember) => void;
 }) {
+  const [sortKey, setSortKey] = useState("visit_date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
+  const sorted = [...visitors].sort((a, b) => compareValues((a as any)[sortKey] ?? null, (b as any)[sortKey] ?? null, sortDir));
+
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
       <table className="w-full">
         <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
           <tr>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Visitor</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Purpose</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Fee Paid</th>
-            <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Date</th>
+            <SortableTh label="Visitor" sortKey="full_name" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
+            <SortableTh label="Purpose" sortKey="purpose" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+            <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+            <SortableTh label="Fee Paid" sortKey="fee_paid" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+            <SortableTh label="Date" sortKey="visit_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
             <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Status</th>
             <th className="text-right text-xs font-semibold text-[#7A7A72] px-5 py-3">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-[#E4E4DE]">
-          {visitors.map((v) => (
+          {sorted.map((v) => (
             <tr key={v.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onView(v)}>
               <td className="px-5 py-3">
                 <div className="flex items-center gap-2.5">

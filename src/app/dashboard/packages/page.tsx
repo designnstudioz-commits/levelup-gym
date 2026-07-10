@@ -8,6 +8,7 @@ import {
   SlidersHorizontal, X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
@@ -91,6 +92,7 @@ const emptyForm = {
 
 export default function PackagesPage() {
   useRoleGuard(["owner", "manager"]);
+  const currentUser = useCurrentUser();
 
   const [packages, setPackages]         = useState<PackageWithCount[]>([]);
   const [loading, setLoading]           = useState(true);
@@ -210,11 +212,11 @@ export default function PackagesPage() {
 
     if (editTarget) {
       await supabase.from("packages").update(payload).eq("id", editTarget.id);
-      await supabase.from("activity_logs").insert({ action: "updated_package", entity_type: "package", entity_id: editTarget.id, description: `Updated package "${form.name}"` });
+      await supabase.from("activity_logs").insert({ user_id: currentUser?.id ?? null, action: "updated_package", entity_type: "package", entity_id: editTarget.id, description: `Updated package "${form.name}"` });
       toast.success("Package updated");
     } else {
       await supabase.from("packages").insert(payload);
-      await supabase.from("activity_logs").insert({ action: "added_package", entity_type: "package", description: `Added package "${form.name}" at ${formatPKR(Number(form.monthly_fee))}/mo` });
+      await supabase.from("activity_logs").insert({ user_id: currentUser?.id ?? null, action: "added_package", entity_type: "package", description: `Added package "${form.name}" at ${formatPKR(Number(form.monthly_fee))}/mo` });
       toast.success("Package created");
     }
     setAddModal(false); setSaving(false); fetchPackages();

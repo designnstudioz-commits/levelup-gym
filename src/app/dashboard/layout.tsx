@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Sidebar } from "@/components/layout/Sidebar";
+import { CurrentUserProvider } from "@/contexts/CurrentUserContext";
+import { DeviceStatusBanner } from "@/components/layout/DeviceStatusBanner";
 
 export default async function DashboardLayout({
   children,
@@ -38,7 +40,10 @@ export default async function DashboardLayout({
         userRole={systemUser?.role ?? "viewer"}
       />
       <main className="flex-1 overflow-y-auto flex flex-col">
-        {children}
+        <CurrentUserProvider value={systemUser ? { id: systemUser.id, full_name: systemUser.full_name, role: systemUser.role } : null}>
+          <DeviceStatusBanner />
+          {children}
+        </CurrentUserProvider>
       </main>
     </div>
   );

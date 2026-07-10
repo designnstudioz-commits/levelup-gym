@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
+import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, fetchAllRows } from "@/lib/utils";
 import type { Member } from "@/types/database";
 
@@ -23,12 +24,19 @@ type MemberWithJoins = Member & {
 };
 
 type StatusFilter = "all" | "active" | "inactive" | "frozen" | "archived";
-type SortKey =
-  | "newest" | "oldest"
-  | "name_asc" | "name_desc"
-  | "membership_asc"
-  | "join_newest" | "join_oldest"
-  | "expiry_asc" | "expiry_desc";
+// Dropdown presets map onto the same flat (sortKey, sortDir) state that
+// drives the clickable column headers, so both controls stay in sync.
+const SORT_PRESETS: Record<string, { key: string; dir: "asc" | "desc" }> = {
+  newest:         { key: "created_at",    dir: "desc" },
+  oldest:         { key: "created_at",    dir: "asc" },
+  name_asc:       { key: "full_name",     dir: "asc" },
+  name_desc:      { key: "full_name",     dir: "desc" },
+  membership_asc: { key: "membership_no", dir: "asc" },
+  join_newest:    { key: "joining_date",  dir: "desc" },
+  join_oldest:    { key: "joining_date",  dir: "asc" },
+  expiry_asc:     { key: "expiry_date",   dir: "asc" },
+  expiry_desc:    { key: "expiry_date",   dir: "desc" },
+};
 
 const PAGE_SIZE = 50;
 
@@ -67,7 +75,9 @@ export default function MembersPage() {
   const [search, setSearch]             = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
   const [genderFilter, setGenderFilter] = useState<"all" | "Male" | "Female">("all");
-  const [sortKey, setSortKey]           = useState<SortKey>("newest");
+  const [sortKey, setSortKey]           = useState("created_at");
+  const [sortDir, setSortDir]           = useState<"asc" | "desc">("desc");
+  const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [newOnly, setNewOnly]           = useState(false);
   const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
@@ -198,20 +208,15 @@ export default function MembersPage() {
         m.cnic?.includes(q)
       );
     })
-    .sort((a, b) => {
-      switch (sortKey) {
-        case "newest":         return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-        case "oldest":         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
-        case "name_asc":       return a.full_name.localeCompare(b.full_name);
-        case "name_desc":      return b.full_name.localeCompare(a.full_name);
-        case "membership_asc": return (a.membership_no ?? "").localeCompare(b.membership_no ?? "");
-        case "join_newest":    return (b.joining_date ?? "").localeCompare(a.joining_date ?? "");
-        case "join_oldest":    return (a.joining_date ?? "").localeCompare(b.joining_date ?? "");
-        case "expiry_asc":     return (a.expiry_date ?? "").localeCompare(b.expiry_date ?? "");
-        case "expiry_desc":    return (b.expiry_date ?? "").localeCompare(a.expiry_date ?? "");
-        default:               return 0;
-      }
-    });
+    .sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
+
+  function getSortValue(m: MemberWithJoins, key: string): string | number | null {
+    switch (key) {
+      case "package": return (m as any).packages?.name ?? null;
+      case "trainer": return (m as any).trainer?.full_name ?? null;
+      default:        return (m as any)[key] ?? null;
+    }
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage   = Math.min(page, totalPages);
@@ -378,9 +383,15 @@ export default function MembersPage() {
 
           {/* Row 2: sort + collapsed filters */}
           <div className="flex flex-wrap items-center gap-2">
-            <select value={sortKey} onChange={(e) => setSortKey(e.target.value as SortKey)}
+            <select
+              value={Object.keys(SORT_PRESETS).find((k) => SORT_PRESETS[k].key === sortKey && SORT_PRESETS[k].dir === sortDir) ?? ""}
+              onChange={(e) => {
+                const preset = SORT_PRESETS[e.target.value];
+                if (preset) { setSortKey(preset.key); setSortDir(preset.dir); }
+              }}
               className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]"
             >
+              <option value="" disabled>Custom (column sort)</option>
               <optgroup label="Date Added">
                 <option value="newest">Newest Added</option>
                 <option value="oldest">Oldest Added</option>
@@ -504,7 +515,8 @@ export default function MembersPage() {
           </div>
         ) : viewMode === "list" ? (
           <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} isFeeCurrent={isFeeCurrent}
-            selectedIds={selectedIds} onToggleSelect={toggleSelect} allSelected={allFilteredSelected} onToggleSelectAll={toggleSelectAll} />
+            selectedIds={selectedIds} onToggleSelect={toggleSelect} allSelected={allFilteredSelected} onToggleSelectAll={toggleSelectAll}
+            sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
         ) : viewMode === "grid" ? (
           <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} isFeeCurrent={isFeeCurrent}
             selectedIds={selectedIds} onToggleSelect={toggleSelect} />
@@ -610,9 +622,10 @@ function PageNumbers({ current, total, onSelect }: { current: number; total: num
 }
 
 // ── List (Table) View ────────────────────────────────────────────────
-function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggleSelect, allSelected, onToggleSelectAll }: {
+function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggleSelect, allSelected, onToggleSelectAll, sortKey, sortDir, onSort }: {
   members: MemberWithJoins[]; onNavigate: (id: string) => void; isFeeCurrent: (m: MemberWithJoins) => boolean;
   selectedIds: Set<string>; onToggleSelect: (id: string) => void; allSelected: boolean; onToggleSelectAll: () => void;
+  sortKey: string; sortDir: "asc" | "desc"; onSort: (key: string) => void;
 }) {
   return (
     <div className="bg-white border border-[#E4E4DE] rounded-xl overflow-hidden">
@@ -623,12 +636,12 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
               <th className="px-4 py-3 w-8">
                 <input type="checkbox" className="accent-[#F06418]" checked={allSelected} onChange={onToggleSelectAll} />
               </th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member</th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Membership No</th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Trainer</th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Phone</th>
-              <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Expiry</th>
+              <SortableTh label="Member" sortKey="full_name" currentKey={sortKey} direction={sortDir} onSort={onSort} className="px-5" />
+              <SortableTh label="Membership No" sortKey="membership_no" currentKey={sortKey} direction={sortDir} onSort={onSort} />
+              <SortableTh label="Package" sortKey="package" currentKey={sortKey} direction={sortDir} onSort={onSort} />
+              <SortableTh label="Trainer" sortKey="trainer" currentKey={sortKey} direction={sortDir} onSort={onSort} />
+              <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} direction={sortDir} onSort={onSort} />
+              <SortableTh label="Expiry" sortKey="expiry_date" currentKey={sortKey} direction={sortDir} onSort={onSort} />
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Fee</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Status</th>
               <th className="px-5 py-3" />
