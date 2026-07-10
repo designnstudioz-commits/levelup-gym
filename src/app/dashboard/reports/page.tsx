@@ -62,7 +62,10 @@ function periodBounds(period: Period, customFrom: string, customTo: string): { f
 function groupByMonth(rows: { date: string; amount?: number; count?: number }[], key: "amount" | "count" = "amount") {
   const map: Record<string, number> = {};
   rows.forEach((r) => {
-    const label = format(parseISO(r.date), "MMM yy");
+    if (!r.date) return;
+    const parsed = parseISO(r.date);
+    if (isNaN(parsed.getTime())) return; // skip malformed dates rather than crashing the whole report
+    const label = format(parsed, "MMM yy");
     map[label] = (map[label] || 0) + (key === "amount" ? (r.amount ?? 0) : (r.count ?? 1));
   });
   return Object.entries(map).map(([label, value]) => ({ label, value }));
@@ -296,7 +299,10 @@ function OverviewReport({ data, from, to }: { data: any; from: string; to: strin
   // Last 12 months revenue for sparkline
   const revenueByMonth: Record<string, number> = {};
   payments.forEach((p: any) => {
-    const label = format(parseISO(p.payment_date), "MMM");
+    if (!p.payment_date) return;
+    const parsed = parseISO(p.payment_date);
+    if (isNaN(parsed.getTime())) return;
+    const label = format(parsed, "MMM");
     revenueByMonth[label] = (revenueByMonth[label] || 0) + (p.amount ?? 0);
   });
   const sparkData = Object.entries(revenueByMonth).map(([label, value]) => ({ label, value }));
@@ -402,7 +408,10 @@ function RevenueReport({ data, from, to }: { data: any; from: string; to: string
   // Revenue by day
   const byDay: Record<string, number> = {};
   payments.forEach((p: any) => {
-    const d = format(parseISO(p.payment_date), "dd MMM");
+    if (!p.payment_date) return;
+    const parsed = parseISO(p.payment_date);
+    if (isNaN(parsed.getTime())) return;
+    const d = format(parsed, "dd MMM");
     byDay[d] = (byDay[d] || 0) + (p.amount ?? 0);
   });
   const dayData = Object.entries(byDay).map(([label, value]) => ({ label, value }));
@@ -554,10 +563,11 @@ function MembershipReport({ data }: { data: any }) {
   // Joined by month
   const joinedByMonth: Record<string, number> = {};
   members.forEach((m: any) => {
-    if (m.joining_date) {
-      const label = format(parseISO(m.joining_date), "MMM yy");
-      joinedByMonth[label] = (joinedByMonth[label] || 0) + 1;
-    }
+    if (!m.joining_date) return;
+    const parsed = parseISO(m.joining_date);
+    if (isNaN(parsed.getTime())) return; // skip malformed dates rather than crashing the whole report
+    const label = format(parsed, "MMM yy");
+    joinedByMonth[label] = (joinedByMonth[label] || 0) + 1;
   });
   const joinData = Object.entries(joinedByMonth).slice(-12).map(([label, value]) => ({ label, value }));
 
@@ -798,7 +808,10 @@ function SubmissionsReport({ data }: { data: any }) {
   // By month
   const byMonth: Record<string, { submitted: number; approved: number; rejected: number }> = {};
   submissions.forEach((s: any) => {
-    const label = format(parseISO(s.created_at), "MMM yy");
+    if (!s.created_at) return;
+    const parsed = parseISO(s.created_at);
+    if (isNaN(parsed.getTime())) return;
+    const label = format(parsed, "MMM yy");
     if (!byMonth[label]) byMonth[label] = { submitted: 0, approved: 0, rejected: 0 };
     byMonth[label].submitted++;
     if (s.status === "approved") byMonth[label].approved++;
@@ -989,7 +1002,8 @@ function TrainersReport({ data }: { data: any }) {
 // ── 7. Daily Summary ─────────────────────────────────────────────────
 function DailySummaryReport({ data }: { data: any }) {
   const { payments = [], attendances = [], members = [], submissions = [], dailyMembers = [], today } = data;
-  const todayStr = today ?? format(new Date(), "yyyy-MM-dd");
+  const [selectedDate, setSelectedDate] = useState(today ?? format(new Date(), "yyyy-MM-dd"));
+  const todayStr = selectedDate;
 
   const todayPayments  = payments.filter((p: any) => p.payment_date === todayStr);
   const todayCheckins  = attendances.filter((a: any) => a.punch_type === "in" && format(new Date(a.punch_time), "yyyy-MM-dd") === todayStr);
@@ -1003,8 +1017,20 @@ function DailySummaryReport({ data }: { data: any }) {
       <div className="report-section text-center mb-2">
         <p className="text-lg font-bold text-[#7A7A72] uppercase tracking-widest">Daily Summary</p>
         <p className="text-3xl font-bold text-[#1A1A16]" style={{ fontFamily: "var(--font-barlow-condensed)" }}>
-          {format(new Date(), "EEEE, dd MMMM yyyy")}
+          {format(parseISO(todayStr), "EEEE, dd MMMM yyyy")}
         </p>
+        <div className="mt-3 no-print">
+          <input
+            type="date"
+            value={selectedDate}
+            max={format(new Date(), "yyyy-MM-dd")}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="text-sm px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+          />
+          <p className="text-xs text-[#7A7A72] mt-1.5">
+            Payments, check-ins and walk-ins only show if this date falls within the report period selected above (New Members always works for any date)
+          </p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 report-section">
@@ -1058,17 +1084,35 @@ function DailySummaryReport({ data }: { data: any }) {
         </ChartCard>
       </div>
 
-      {todayJoined.length > 0 && (
-        <ChartCard title={`New Members Today (${todayJoined.length})`}>
-          <div className="flex flex-wrap gap-2">
-            {todayJoined.map((m: any) => (
-              <span key={m.id} className="text-xs bg-green-50 text-green-700 border border-green-200 px-2.5 py-1 rounded-full font-medium">
-                ✓ {m.full_name} — {m.membership_no}
-              </span>
-            ))}
-          </div>
-        </ChartCard>
-      )}
+      <ChartCard title={`New Members (${todayJoined.length})`}>
+        {todayJoined.length === 0 ? <p className="text-sm text-[#7A7A72] py-4 text-center">No new members on this date</p> : (
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-[#E4E4DE]">
+              {["Member", "Membership No", "Package", "Paid"].map((h) => (
+                <th key={h} className="text-left text-xs font-semibold text-[#7A7A72] pb-2 pr-3">{h}</th>
+              ))}
+            </tr></thead>
+            <tbody className="divide-y divide-[#F0F0EE]">
+              {todayJoined.map((m: any) => {
+                const paid = todayPayments.some((p: any) => p.member_id === m.id);
+                return (
+                  <tr key={m.id}>
+                    <td className="py-1.5 pr-3 font-medium text-[#1A1A16] text-xs">{m.full_name}</td>
+                    <td className="py-1.5 pr-3 text-xs font-mono text-[#F06418]">{m.membership_no}</td>
+                    <td className="py-1.5 pr-3 text-xs text-[#4A4A44]">{m.packages?.name ?? "—"}</td>
+                    <td className="py-1.5 pr-3">
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${paid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${paid ? "bg-green-500" : "bg-red-500"}`} />
+                        {paid ? "Paid" : "Pending"}
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </ChartCard>
     </div>
   );
 }
