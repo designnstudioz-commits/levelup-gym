@@ -515,16 +515,23 @@ export default function MemberDetailPage() {
     if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
       // Counted after the insert above, so this includes the payment we
       // just recorded — a count of 1 means it was this member's first ever.
-      const { count: totalRecurringPayments } = await supabase
-        .from("fee_payments")
-        .select("*", { count: "exact", head: true })
-        .eq("member_id", id)
-        .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
-        .is("deleted_at", null);
+      // Re-fetch expiry/joining fresh rather than trusting the component's
+      // `member` state — if another action (e.g. a renewal, or a second
+      // rapid payment) just updated this same member, stale state here
+      // would silently compute the new expiry off outdated data.
+      const [{ count: totalRecurringPayments }, { data: freshMember }] = await Promise.all([
+        supabase
+          .from("fee_payments")
+          .select("*", { count: "exact", head: true })
+          .eq("member_id", id)
+          .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
+          .is("deleted_at", null),
+        supabase.from("members").select("expiry_date, joining_date").eq("id", id).single(),
+      ]);
 
       const durationMonths = (member as any)?.packages?.duration_months || 1;
       const isFirstPayment = (totalRecurringPayments ?? 0) <= 1;
-      const newExpiry = extendExpiryDate(member?.expiry_date, paymentDate, durationMonths, isFirstPayment, member?.joining_date);
+      const newExpiry = extendExpiryDate(freshMember?.expiry_date, paymentDate, durationMonths, isFirstPayment, freshMember?.joining_date);
       await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
     }
 
