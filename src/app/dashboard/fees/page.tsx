@@ -60,6 +60,10 @@ const TYPE_COLORS: Record<string, string> = {
 export default function FeesPage() {
   const router = useRouter();
   const currentUser = useCurrentUser();
+  // Receptionists can collect fees and see individual transaction amounts
+  // (needed for their job), but aggregate revenue figures — totals, method/type
+  // breakdowns, the Analytics tab — are hidden from them.
+  const hideRevenue = currentUser?.role === "receptionist";
   const [tab, setTab] = useState<Tab>("overview");
 
   // Shared data
@@ -297,7 +301,8 @@ export default function FeesPage() {
     { key: "transactions", label: "Transactions", badge: payments.length },
     { key: "outstanding",  label: "Outstanding Dues", badge: expired.length + unpaidActive.length },
     { key: "renewals",    label: "Renewals", badge: dueSoon3.length + dueSoon7.length },
-    { key: "analytics",   label: "Analytics" },
+    // Analytics is entirely revenue breakdowns — not shown to receptionists.
+    ...(hideRevenue ? [] : [{ key: "analytics" as Tab, label: "Analytics" }]),
   ];
 
   return (
@@ -315,8 +320,12 @@ export default function FeesPage() {
       <div className="flex-1 p-6 space-y-5">
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatsCard title="Revenue (This Period)" value={formatPKR(totalRevenue)} icon={Banknote} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" />
-          <StatsCard title="Collected Today" value={formatPKR(todayRevenue)} icon={CheckCircle} iconColor="text-green-600" iconBg="bg-green-50" />
+          {!hideRevenue && (
+            <>
+              <StatsCard title="Revenue (This Period)" value={formatPKR(totalRevenue)} icon={Banknote} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" />
+              <StatsCard title="Collected Today" value={formatPKR(todayRevenue)} icon={CheckCircle} iconColor="text-green-600" iconBg="bg-green-50" />
+            </>
+          )}
           <StatsCard title="Expired Members" value={expired.length} icon={AlertTriangle} iconColor="text-red-600" iconBg="bg-red-50" />
           <StatsCard title="Unpaid This Month" value={unpaidActive.length} icon={Clock} iconColor="text-amber-600" iconBg="bg-amber-50" />
         </div>
@@ -338,11 +347,11 @@ export default function FeesPage() {
         </div>
 
         {/* ── Tab content ───────────────────────────────────────── */}
-        {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} />}
-        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} />}
+        {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} hideRevenue={hideRevenue} />}
+        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} hideRevenue={hideRevenue} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
         {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
-        {tab === "analytics"   && <AnalyticsTab payments={payments} />}
+        {tab === "analytics" && !hideRevenue && <AnalyticsTab payments={payments} />}
       </div>
 
       {/* ── Quick Collect Modal ──────────────────────────────────── */}
@@ -512,12 +521,13 @@ export default function FeesPage() {
 }
 
 // ── Tab 1: Overview ──────────────────────────────────────────────────
-function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, onCollect, onSelectMember, onRefresh }: {
+function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, onCollect, onSelectMember, onRefresh, hideRevenue }: {
   payments: PaymentRow[]; todayPayments: PaymentRow[];
   expired: MemberWithPackage[]; unpaidActive: MemberWithPackage[];
   loading: boolean; onCollect: () => void;
   onSelectMember: (m: MemberWithPackage) => void;
   onRefresh: () => void;
+  hideRevenue: boolean;
 }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -546,9 +556,11 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
         <Card padding={false}>
           <div className="px-5 py-4 border-b border-[#E4E4DE] flex items-center justify-between">
             <h3 className="text-sm font-semibold text-[#1A1A16]">Today's Collections</h3>
-            <span className="text-base font-bold text-[#F06418]">
-              {formatPKR(todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0))}
-            </span>
+            {!hideRevenue && (
+              <span className="text-base font-bold text-[#F06418]">
+                {formatPKR(todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0))}
+              </span>
+            )}
           </div>
           {loading ? (
             <div className="py-8 text-center text-sm text-[#7A7A72]">Loading...</div>
@@ -667,7 +679,7 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
 }
 
 // ── Tab 2: Transactions ──────────────────────────────────────────────
-function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo, search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, onRefresh }: {
+function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo, search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, onRefresh, hideRevenue }: {
   payments: PaymentRow[]; totalRevenue: number; loading: boolean;
   dateRange: DateRange; setDateRange: (v: DateRange) => void;
   customFrom: string; setCustomFrom: (v: string) => void;
@@ -676,6 +688,7 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
   typeFilter: string; setTypeFilter: (v: string) => void;
   methodFilter: string; setMethodFilter: (v: string) => void;
   onRefresh: () => void;
+  hideRevenue: boolean;
 }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -774,12 +787,14 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
             {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <span className="text-xs text-[#7A7A72]">{payments.length} records</span>
-          <span className="ml-auto text-sm font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
+          {!hideRevenue && (
+            <span className="ml-auto text-sm font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
+          )}
         </div>
       </div>
 
       {/* ── Summary chips ── */}
-      {byMethod.length > 0 && (
+      {!hideRevenue && byMethod.length > 0 && (
         <div className="flex flex-wrap gap-2">
           {byMethod.map((m) => (
             <div key={m.method} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${METHOD_BADGE[m.method] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
@@ -903,14 +918,16 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
           {/* Footer totals */}
           <div className="px-5 py-3 border-t border-[#E4E4DE] bg-[#F8F8F6] flex flex-wrap items-center justify-between gap-3">
             <span className="text-sm text-[#7A7A72]">{payments.length} transaction{payments.length !== 1 ? "s" : ""}</span>
-            <div className="flex items-center gap-4 flex-wrap">
-              {byMethod.map((m) => (
-                <span key={m.method} className="text-xs text-[#7A7A72]">
-                  {m.method}: <span className="font-semibold text-[#1A1A16]">{formatPKR(m.total)}</span>
-                </span>
-              ))}
-              <span className="text-base font-bold text-[#1A1A16] border-l border-[#E4E4DE] pl-4">Total: {formatPKR(grandTotal)}</span>
-            </div>
+            {!hideRevenue && (
+              <div className="flex items-center gap-4 flex-wrap">
+                {byMethod.map((m) => (
+                  <span key={m.method} className="text-xs text-[#7A7A72]">
+                    {m.method}: <span className="font-semibold text-[#1A1A16]">{formatPKR(m.total)}</span>
+                  </span>
+                ))}
+                <span className="text-base font-bold text-[#1A1A16] border-l border-[#E4E4DE] pl-4">Total: {formatPKR(grandTotal)}</span>
+              </div>
+            )}
           </div>
         </div>
       )}

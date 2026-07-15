@@ -27,6 +27,15 @@ export default async function DashboardPage() {
 
   if (!user) redirect("/login");
 
+  const { data: systemUser } = await supabase
+    .from("system_users")
+    .select("role")
+    .eq("email", user.email!)
+    .eq("status", "active")
+    .is("deleted_at", null)
+    .maybeSingle();
+  const isReceptionist = systemUser?.role === "receptionist";
+
   const today = new Date().toISOString().split("T")[0];
   const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
 
@@ -115,13 +124,15 @@ export default async function DashboardPage() {
             iconColor="text-green-600"
             iconBg="bg-green-50"
           />
-          <StatsCard
-            title="Monthly Revenue"
-            value={formatPKR(monthlyRevenue)}
-            icon={CreditCard}
-            iconColor="text-blue-600"
-            iconBg="bg-blue-50"
-          />
+          {!isReceptionist && (
+            <StatsCard
+              title="Monthly Revenue"
+              value={formatPKR(monthlyRevenue)}
+              icon={CreditCard}
+              iconColor="text-blue-600"
+              iconBg="bg-blue-50"
+            />
+          )}
           <StatsCard
             title="Pending Submissions"
             value={pendingSubmissionsCount ?? 0}

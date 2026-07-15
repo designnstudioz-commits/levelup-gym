@@ -244,7 +244,9 @@ export default function DailyMembersPage() {
         {/* Stats */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard title={`Visitors (${DATE_LABELS[dateRange]})`} value={visitors.length} icon={Users} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" />
-          <StatsCard title="Revenue" value={formatPKR(todayRevenue)} icon={CreditCard} iconColor="text-green-600" iconBg="bg-green-50" />
+          {currentUser?.role !== "receptionist" && (
+            <StatsCard title="Revenue" value={formatPKR(todayRevenue)} icon={CreditCard} iconColor="text-green-600" iconBg="bg-green-50" />
+          )}
           <StatsCard title="Converted to Members" value={convertedCount} icon={CheckCircle2} iconColor="text-blue-600" iconBg="bg-blue-50" />
           <StatsCard title="Conversion Rate" value={`${conversionRate}%`} icon={TrendingUp} iconColor="text-purple-600" iconBg="bg-purple-50" />
         </div>
