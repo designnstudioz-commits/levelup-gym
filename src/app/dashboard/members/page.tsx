@@ -80,7 +80,9 @@ export default function MembersPage() {
   const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
   const [expiringOnly, setExpiringOnly] = useState(false);
   const [newOnly, setNewOnly]           = useState(false);
-  const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("all");
+  // Active tab defaults to Paid-only (paid/unpaid is only a meaningful
+  // distinction for currently-active members) — other tabs default to All.
+  const [feeFilter, setFeeFilter]       = useState<"all" | "paid" | "pending">("paid");
   const [filtersOpen, setFiltersOpen]   = useState(false);
   const filtersRef = useRef<HTMLDivElement>(null);
 
@@ -94,6 +96,13 @@ export default function MembersPage() {
 
   // Reset to page 1 whenever any filter changes
   useEffect(() => { setPage(1); }, [search, statusFilter, genderFilter, sortKey, expiringOnly, newOnly, feeFilter]);
+
+  // Fee Status has a different sensible default per tab — reset it whenever
+  // the status tab itself changes (not on every feeFilter change, so a
+  // manual Paid/Pending pick while staying on the same tab isn't clobbered).
+  useEffect(() => {
+    setFeeFilter(statusFilter === "active" ? "paid" : "all");
+  }, [statusFilter]);
 
   // Close the filters popover on outside click
   useEffect(() => {
@@ -222,11 +231,14 @@ export default function MembersPage() {
   const safePage   = Math.min(page, totalPages);
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  const hasActiveFilters = genderFilter !== "all" || expiringOnly || newOnly || !!search || feeFilter !== "all";
+  // The tab's own default feeFilter ("paid" on Active, "all" elsewhere)
+  // shouldn't count as a manually-applied filter.
+  const feeFilterDefault = statusFilter === "active" ? "paid" : "all";
+  const hasActiveFilters = genderFilter !== "all" || expiringOnly || newOnly || !!search || feeFilter !== feeFilterDefault;
   // Count of filters tucked inside the "Filters" popover (excludes search,
   // which has its own always-visible box)
-  const secondaryFilterCount = [genderFilter !== "all", expiringOnly, newOnly, feeFilter !== "all"].filter(Boolean).length;
-  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setNewOnly(false); setFeeFilter("all"); }
+  const secondaryFilterCount = [genderFilter !== "all", expiringOnly, newOnly, feeFilter !== feeFilterDefault].filter(Boolean).length;
+  function clearFilters() { setSearch(""); setGenderFilter("all"); setExpiringOnly(false); setNewOnly(false); setFeeFilter(feeFilterDefault); }
 
   // Selection tracks against the full filtered set (not just the current
   // page), so "select all" genuinely means every member matching the
