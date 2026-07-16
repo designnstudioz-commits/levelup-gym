@@ -2,7 +2,6 @@
 
 import { UseFormReturn } from "react-hook-form";
 import { Input } from "@/components/ui/Input";
-import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/utils";
 import type { FullRegistrationData } from "@/lib/validations/registration";
 import type { Package, SystemUser } from "@/types/database";
@@ -15,8 +14,6 @@ interface Step3Props {
   mode: "public" | "staff";
   currentUser?: SystemUser | null;
 }
-
-const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
 
 export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const { register, watch, setValue, formState: { errors } } = form;
@@ -42,8 +39,9 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
   // Auto-calculate expiry from joining date + the longest selected package's
   // duration, so combining a short add-on with a longer plan doesn't cut the
-  // member short. Recomputes whenever either input changes; the field itself
-  // is read-only (see below) so staff can't hand-edit it out of sync.
+  // member short. Recomputes whenever either input changes; staff can still
+  // hand-edit the result afterward, but doing so again after changing the
+  // joining date or package selection will recompute over it.
   useEffect(() => {
     if (joiningDate) {
       const durationMonths = selectedPackageIds.reduce((max, id) => {
@@ -203,14 +201,6 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
       {/* Enrollment details */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[#E4E4DE]">
-        <Select label="Payment Method" placeholder="Select method" {...register("payment_method")}>
-          {PAYMENT_METHODS.map((m) => (
-            <option key={m} value={m}>{m}</option>
-          ))}
-        </Select>
-
-        <div />
-
         <Input
           label="Joining Date"
           type="date"
@@ -222,9 +212,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
           label="Expiry Date"
           type="date"
           {...register("expiry_date")}
-          readOnly
-          disabled
-          hint="Auto-calculated from joining date + package duration"
+          hint="Auto-calculated from joining date + package duration — adjust if needed"
         />
       </div>
     </div>

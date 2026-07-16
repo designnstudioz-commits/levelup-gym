@@ -128,7 +128,6 @@ export function Step4Review({ form, mode }: Step4Props) {
                   label="Monthly Fee"
                   value={data.monthly_fee ? `Rs ${Number(data.monthly_fee).toLocaleString()}` : undefined}
                 />
-                <ReviewField label="Payment Method" value={data.payment_method} />
               </>
             )}
           </div>
