@@ -1310,8 +1310,7 @@ export default function MemberDetailPage() {
                 label="Expiry Date"
                 type="date"
                 value={profileForm.expiry_date}
-                readOnly
-                disabled
+                onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))}
                 hint="Auto-calculated from joining date + package duration"
               />
               <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
