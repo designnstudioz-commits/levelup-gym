@@ -169,6 +169,7 @@ export default function SubmissionsPage() {
       toast.success(`${sub.full_name} approved! Membership: ${membershipNo}`);
       setViewSubmission(null);
       fetchSubmissions();
+      router.refresh(); // updates the sidebar's pending-submissions badge
       // Navigate to new member profile
       if (newMember?.id) {
         router.push(`/dashboard/members/${newMember.id}`);
@@ -212,6 +213,7 @@ export default function SubmissionsPage() {
       setRejectModal(null);
       setRejectReason("");
       fetchSubmissions();
+      router.refresh(); // updates the sidebar's pending-submissions badge
     } catch {
       toast.error("Failed to reject. Please try again.");
     } finally {
@@ -277,6 +279,7 @@ export default function SubmissionsPage() {
       setSelected(new Set());
       setBulkDeleteModal(false);
       fetchSubmissions();
+      router.refresh(); // a deleted submission may have been pending — keep the sidebar badge in sync
     } catch (err) {
       console.error(err);
       toast.error("Failed to delete. Please try again.");
