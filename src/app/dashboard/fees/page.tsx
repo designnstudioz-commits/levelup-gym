@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { format, subDays, startOfMonth, endOfMonth, startOfWeek, subMonths } from "date-fns";
 import { toast } from "sonner";
 import {
@@ -59,12 +59,14 @@ const TYPE_COLORS: Record<string, string> = {
 // ── Main Page ────────────────────────────────────────────────────────
 export default function FeesPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const currentUser = useCurrentUser();
   // Receptionists can collect fees and see individual transaction amounts
   // (needed for their job), but aggregate revenue figures — totals, method/type
   // breakdowns, the Analytics tab — are hidden from them.
   const hideRevenue = currentUser?.role === "receptionist";
-  const [tab, setTab] = useState<Tab>("overview");
+  const initialTab = (searchParams.get("tab") as Tab | null) ?? "overview";
+  const [tab, setTab] = useState<Tab>(initialTab);
 
   // Shared data
   const [payments, setPayments]           = useState<PaymentRow[]>([]);
