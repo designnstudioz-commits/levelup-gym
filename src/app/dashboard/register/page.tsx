@@ -15,7 +15,7 @@ export default async function DashboardRegisterPage() {
   const { data: systemUser } = await supabase
     .from("system_users")
     .select("*")
-    .eq("email", user.email!)
+    .eq("email", user.email!.toLowerCase())
     .eq("status", "active")
     .is("deleted_at", null)
     .single();

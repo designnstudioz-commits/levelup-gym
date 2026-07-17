@@ -51,7 +51,7 @@ export default async function DashboardPage() {
   const { data: systemUser } = await supabase
     .from("system_users")
     .select("role")
-    .eq("email", user.email!)
+    .eq("email", user.email!.toLowerCase())
     .eq("status", "active")
     .is("deleted_at", null)
     .maybeSingle();

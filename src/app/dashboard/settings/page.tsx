@@ -11,7 +11,7 @@ export default async function SettingsPage() {
   const { data: systemUser } = await supabase
     .from("system_users")
     .select("id, role, full_name")
-    .eq("email", user.email!)
+    .eq("email", user.email!.toLowerCase())
     .eq("status", "active")
     .is("deleted_at", null)
     .maybeSingle();

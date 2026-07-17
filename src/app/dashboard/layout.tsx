@@ -25,7 +25,7 @@ export default async function DashboardLayout({
     supabase
       .from("system_users")
       .select("id, full_name, role, status")
-      .eq("email", user.email!)
+      .eq("email", user.email!.toLowerCase())
       .eq("status", "active")
       .is("deleted_at", null)
       .maybeSingle(),

@@ -18,7 +18,7 @@ export async function POST(req: NextRequest) {
     const { data: caller } = await supabase
       .from("system_users")
       .select("id, role")
-      .eq("email", user.email!)
+      .eq("email", user.email!.toLowerCase())
       .eq("status", "active")
       .is("deleted_at", null)
       .maybeSingle();

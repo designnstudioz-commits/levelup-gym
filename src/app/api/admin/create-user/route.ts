@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
     const { data: caller } = await supabase
       .from("system_users")
       .select("id, role")
-      .eq("email", user.email!)
+      .eq("email", user.email!.toLowerCase())
       .eq("status", "active")
       .is("deleted_at", null)
       .maybeSingle();
@@ -29,7 +29,11 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    const { email, password, full_name, role, staff_id } = body;
+    const { password, full_name, role, staff_id } = body;
+    // Supabase Auth normalizes emails to lowercase internally — system_users
+    // must match exactly, or every case-sensitive email lookup in the app
+    // (role checks, useRoleGuard, etc.) silently fails for this user.
+    const email: string | undefined = body.email?.trim().toLowerCase();
 
     if (!email || !password || !full_name || !role) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
