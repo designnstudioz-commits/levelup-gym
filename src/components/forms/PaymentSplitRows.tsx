@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { Plus, X, AlertTriangle } from "lucide-react";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
@@ -70,6 +71,20 @@ export function PaymentSplitRows({
   const target = splitTarget(fullAmount, partial);
   const splitTotal = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const mismatch = lines.length > 1 && Math.abs(splitTotal - target) > 0.5;
+
+  // With only one payment method, there's nothing to split — the amount can
+  // only ever be the full target, so auto-fill it instead of relying on
+  // staff to type it in (a forgotten/mismatched amount here was a common
+  // source of the "split amounts must add up" error at submit). Re-syncs
+  // whenever the target changes (fee edited, discount applied, partial
+  // toggled) but leaves it alone once a second method is added — that's a
+  // real split the receptionist has to divide manually.
+  useEffect(() => {
+    if (lines.length === 1 && target > 0 && (Number(lines[0].amount) || 0) !== target) {
+      onLinesChange([{ ...lines[0], amount: String(target) }]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, lines.length]);
 
   function updateLine(i: number, patch: Partial<PaymentLine>) {
     onLinesChange(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
