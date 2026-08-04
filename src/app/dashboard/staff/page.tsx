@@ -64,7 +64,7 @@ export default function StaffPage() {
   const currentUser = useCurrentUser();
   const [staff, setStaff] = useState<StaffWithCount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode]     = useState<ViewMode>("grid");
+  const [viewMode, setViewMode]     = useState<ViewMode>("list");
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all");
   const [search, setSearch]         = useState("");
   const [addModal, setAddModal]     = useState(false);
