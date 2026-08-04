@@ -105,9 +105,8 @@ export async function POST(req: NextRequest) {
         command_id: commandId,
         command,
         command_type: "push_user",
-        // No staff_id column on device_commands — member_id stays null for
-        // staff-originated pushes rather than adding a new column for this.
         member_id: member_id ?? null,
+        staff_id: staff_id ?? null,
         status: "pending",
       });
 

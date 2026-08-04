@@ -335,6 +335,7 @@ export interface DeviceCommand {
   command_type: string;
   status: "pending" | "sent" | "acked" | "failed";
   member_id: string | null;
+  staff_id: string | null;
   created_by: string | null;
   sent_at: string | null;
   acked_at: string | null;

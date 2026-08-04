@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -23,12 +23,20 @@ import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/
 import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
 type MemberWithPackage = Member & { packages?: { name: string; monthly_fee: number } | null };
+type CmdStatus = "pending" | "sent" | "acked" | "failed";
 
 const SPECIALIZATIONS = [
   "Strength & Conditioning", "CrossFit & HIIT", "MMA & Combat Sports",
   "Bodybuilding & Nutrition", "Cardio & Weight Loss", "Functional Fitness",
   "Yoga & Flexibility", "Zumba & Dance Fitness", "Table Tennis Coaching", "General Fitness",
 ];
+
+const DEVICE_STATUS_CONFIG: Record<CmdStatus, { label: string; cls: string }> = {
+  pending: { label: "Queued", cls: "text-amber-600 bg-amber-50 border-amber-200" },
+  sent:    { label: "Sent",   cls: "text-blue-600 bg-blue-50 border-blue-200" },
+  acked:   { label: "Done ✓", cls: "text-green-600 bg-green-50 border-green-200" },
+  failed:  { label: "Failed", cls: "text-red-600 bg-red-50 border-red-200" },
+};
 
 const ROLE_COLORS: Record<string, string> = {
   Trainer: "bg-[#FEF0E8] text-[#C04E10] border-[#FDDCC8]",
@@ -66,13 +74,16 @@ export default function StaffDetailPage() {
   // Device enrollment — staff use a single device_user_id column (not the
   // per-device device_enrollments table members use), reserved to 5000+ so
   // it never collides with member PINs (derived from membership numbers,
-  // starting at 1).
+  // starting at 1). Push status is still tracked per device though, via
+  // device_commands.staff_id (falling back to matching the command's
+  // PIN=<uid> text for historical rows pushed before that column existed).
   const [devices, setDevices] = useState<{ serial_no: string; name: string | null }[]>([]);
   const [editingDeviceId, setEditingDeviceId] = useState(false);
   const [deviceIdInput, setDeviceIdInput] = useState("");
   const [savingDeviceId, setSavingDeviceId] = useState(false);
-  const [pushDevice, setPushDevice] = useState("");
-  const [pushing, setPushing] = useState(false);
+  const [pushingDevice, setPushingDevice] = useState<string | null>(null);
+  const [deviceCmdStatus, setDeviceCmdStatus] = useState<Record<string, { status: CmdStatus; created_at: string }>>({});
+  const devicePollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Edit form state
   const [editForm, setEditForm] = useState({
@@ -147,6 +158,56 @@ export default function StaffDetailPage() {
     createClient().from("devices").select("serial_no, name").order("name").then(({ data }) => setDevices(data ?? []));
   }, []);
 
+  // Latest push status per device for this staff member's device_user_id —
+  // matches device_commands.staff_id (set going forward), falling back to
+  // a PIN=<uid> text match on the command for rows pushed before that
+  // column existed. Returns the map so startDevicePolling can decide
+  // whether to keep polling without waiting on a state update to land.
+  const fetchDeviceStatus = useCallback(async (uid: string | null | undefined): Promise<Record<string, { status: CmdStatus; created_at: string }>> => {
+    if (!uid) { setDeviceCmdStatus({}); return {}; }
+    const supabase = createClient();
+    const [{ data: byStaffId }, { data: byPin }] = await Promise.all([
+      supabase.from("device_commands").select("device_serial, status, created_at")
+        .eq("staff_id", id).eq("command_type", "push_user")
+        .order("created_at", { ascending: false }),
+      supabase.from("device_commands").select("device_serial, status, created_at")
+        .is("staff_id", null).eq("command_type", "push_user")
+        .like("command", `%PIN=${uid}\t%`)
+        .order("created_at", { ascending: false }),
+    ]);
+    const map: Record<string, { status: CmdStatus; created_at: string }> = {};
+    for (const c of [...(byStaffId ?? []), ...(byPin ?? [])]) {
+      if (!map[c.device_serial] || c.created_at > map[c.device_serial].created_at) {
+        map[c.device_serial] = { status: c.status, created_at: c.created_at };
+      }
+    }
+    setDeviceCmdStatus(map);
+    return map;
+  }, [id]);
+
+  useEffect(() => {
+    fetchDeviceStatus(staff?.device_user_id);
+  }, [staff?.device_user_id, fetchDeviceStatus]);
+
+  // Poll every 5s while any device push is still pending/sent, same pattern
+  // as the member profile's device enrollment field — stops on its own once
+  // every push has been acked (or failed).
+  function startDevicePolling() {
+    if (devicePollRef.current) return;
+    devicePollRef.current = setInterval(async () => {
+      const map = await fetchDeviceStatus(staff?.device_user_id);
+      const hasActive = Object.values(map).some((c) => c.status === "pending" || c.status === "sent");
+      if (!hasActive) {
+        clearInterval(devicePollRef.current!);
+        devicePollRef.current = null;
+      }
+    }, 5000);
+  }
+
+  useEffect(() => {
+    return () => { if (devicePollRef.current) clearInterval(devicePollRef.current); };
+  }, []);
+
   async function suggestNextDeviceId(): Promise<string> {
     const supabase = createClient();
     const { data } = await supabase.from("staff_members").select("device_user_id").gte("device_user_id", "5000").is("deleted_at", null);
@@ -186,22 +247,26 @@ export default function StaffDetailPage() {
     fetchStaff();
   }
 
-  async function pushStaffToDevice() {
-    if (!pushDevice) { toast.error("Select a device"); return; }
-    setPushing(true);
+  async function pushStaffToDevice(deviceSerial: string) {
+    setPushingDevice(deviceSerial);
     try {
       const res = await fetch("/api/devices/push-user", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ staff_id: id, device_serial: pushDevice }),
+        body: JSON.stringify({ staff_id: id, device_serial: deviceSerial }),
       });
       const data = await res.json();
-      if (!res.ok) toast.error(data.error ?? "Push failed");
-      else toast.success("Queued — device will pick it up within ~30 seconds");
+      if (!res.ok) {
+        toast.error(data.error ?? "Push failed");
+      } else {
+        toast.success("Queued — device will pick it up within ~30 seconds");
+        await fetchDeviceStatus(staff?.device_user_id);
+        startDevicePolling();
+      }
     } catch {
       toast.error("Push failed");
     }
-    setPushing(false);
+    setPushingDevice(null);
   }
 
   async function handleSave() {
@@ -427,8 +492,7 @@ export default function StaffDetailPage() {
   return (
     <div className="flex flex-col flex-1">
       <DashboardHeader
-        title={staff.full_name}
-        subtitle={staff.specialization ?? staff.role ?? "Staff"}
+        title="Staff Profile"
         action={
           <div className="flex items-center gap-2">
             <Link href="/dashboard/staff">
@@ -809,19 +873,38 @@ export default function StaffDetailPage() {
                 </div>
               ) : staff.device_user_id ? (
                 <div>
-                  <p className="text-base font-semibold text-[#1A1A16] font-mono">{staff.device_user_id}</p>
-                  <div className="flex items-center gap-2 mt-3">
-                    <select value={pushDevice} onChange={(e) => setPushDevice(e.target.value)}
-                      className="flex-1 text-sm px-3 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                    >
-                      <option value="">Select device...</option>
-                      {devices.map((d) => (
-                        <option key={d.serial_no} value={d.serial_no}>{d.name ?? d.serial_no}</option>
-                      ))}
-                    </select>
-                    <Button size="sm" onClick={pushStaffToDevice} loading={pushing} disabled={!pushDevice}>
-                      {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />} Push
-                    </Button>
+                  <p className="text-base font-semibold text-[#1A1A16] font-mono mb-3">{staff.device_user_id}</p>
+                  <div className="space-y-2">
+                    {devices.map((d) => {
+                      const cmd = deviceCmdStatus[d.serial_no];
+                      const cfg = cmd ? DEVICE_STATUS_CONFIG[cmd.status] : null;
+                      const isPushing = pushingDevice === d.serial_no;
+                      return (
+                        <div key={d.serial_no} className="flex items-center justify-between rounded-lg border border-[#E4E4DE] bg-[#F8F8F6] px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-[#1A1A16]">{d.name ?? d.serial_no}</span>
+                            {cfg ? (
+                              <span className={`inline-flex items-center text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${cfg.cls}`}>
+                                {cfg.label}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-[#7A7A72]">Not pushed</span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => pushStaffToDevice(d.serial_no)}
+                            disabled={isPushing}
+                            className="text-xs text-[#F06418] hover:underline flex items-center gap-1 disabled:opacity-50 flex-shrink-0"
+                          >
+                            {isPushing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                            {cmd?.status === "acked" ? "Re-push" : "Push"}
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {devices.length === 0 && (
+                      <p className="text-xs text-[#7A7A72]">No devices registered yet.</p>
+                    )}
                   </div>
                 </div>
               ) : (
