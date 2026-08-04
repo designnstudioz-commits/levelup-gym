@@ -727,6 +727,7 @@ export default function StaffDetailPage() {
                         <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">Package Fee</th>
                         {staff.role === "Trainer" && <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Commission</th>}
                         {staff.role === "Trainer" && <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">This Month</th>}
+                        {staff.role === "Trainer" && <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">Last Month</th>}
                         <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Expiry</th>
                         <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Status</th>
                       </tr>
@@ -735,6 +736,7 @@ export default function StaffDetailPage() {
                       {assignedMembers.map((m) => {
                         const { label: statusLabel, variant: statusVariant } = getMemberStatusDisplay(m.status, m.expiry_date);
                         const thisMonthCommission = commissionForMember(m.id, monthStart);
+                        const lastMonthCommission = commissionForMember(m.id, lastMonthStart, lastMonthEnd);
                         const hasCommissionValue = (commissionInputs[m.id] ?? "").trim() !== "" || (commissionAmountInputs[m.id] ?? "").trim() !== "";
                         return (
                         <tr
@@ -814,6 +816,15 @@ export default function StaffDetailPage() {
                             <td className="px-4 py-3 text-right whitespace-nowrap">
                               {thisMonthCommission > 0 ? (
                                 <span className="text-xs font-semibold text-[#C04E10]">{formatPKR(thisMonthCommission)}</span>
+                              ) : (
+                                <span className="text-xs text-[#7A7A72]">—</span>
+                              )}
+                            </td>
+                          )}
+                          {staff.role === "Trainer" && (
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              {lastMonthCommission > 0 ? (
+                                <span className="text-xs font-semibold text-[#4A4A44]">{formatPKR(lastMonthCommission)}</span>
                               ) : (
                                 <span className="text-xs text-[#7A7A72]">—</span>
                               )}
