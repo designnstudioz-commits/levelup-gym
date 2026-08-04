@@ -847,18 +847,6 @@ export default function StaffDetailPage() {
                     {staff.salary ? formatPKR(staff.salary * 12) : "—"}
                   </p>
                 </div>
-                <div className="bg-[#F8F8F6] rounded-lg p-3">
-                  <p className="text-xs text-[#7A7A72]">Joining Date</p>
-                  <p className="text-base font-bold text-[#1A1A16] mt-1">
-                    {staff.joining_date ? formatDate(staff.joining_date) : "—"}
-                  </p>
-                </div>
-                <div className="bg-[#F8F8F6] rounded-lg p-3">
-                  <p className="text-xs text-[#7A7A72]">Experience</p>
-                  <p className="text-base font-bold text-[#1A1A16] mt-1">
-                    {staff.joining_date ? experienceText : "—"}
-                  </p>
-                </div>
                 {staff.role === "Trainer" && (
                   <>
                     <div className="bg-[#FEF0E8] rounded-lg p-3">
