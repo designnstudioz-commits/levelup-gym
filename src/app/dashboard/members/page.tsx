@@ -53,21 +53,11 @@ function todayStr(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Adds `months` to a "YYYY-MM-DD" date string using local date components only
- *  (never toISOString/UTC parsing — that's what caused fees to flip to Pending
- *  around month boundaries before). */
-function addMonthsToDateStr(dateStr: string, months: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(y, m - 1 + months, d);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
-
 export default function MembersPage() {
   const router = useRouter();
   const [members, setMembers]   = useState<MemberWithJoins[]>([]);
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [lastMembershipPayment, setLastMembershipPayment] = useState<Map<string, string>>(new Map());
   const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null; deleted_at: string | null }[]>([]);
   const [page, setPage] = useState(1);
 
@@ -118,11 +108,8 @@ export default function MembersPage() {
     setLoading(true);
     const supabase = createClient();
 
-    // Look back 13 months so even annual packages have their last payment in range.
-    const cutoff = addMonthsToDateStr(todayStr(), -13);
-
     try {
-      const [data, feeData, countData] = await Promise.all([
+      const [data, countData] = await Promise.all([
         fetchAllRows<MemberWithJoins>((from, to) => {
           let q = supabase
             .from("members")
@@ -140,21 +127,6 @@ export default function MembersPage() {
           if (genderFilter !== "all") q = q.eq("gender", genderFilter);
           return q.range(from, to) as any;
         }),
-        fetchAllRows<{ member_id: string; payment_date: string }>((from, to) =>
-          supabase
-            .from("fee_payments")
-            // Recurring-dues payment types only — "admission" and "other" are
-            // one-off charges and don't cover a billing cycle. Staff don't
-            // always pick "membership" in the dropdown (e.g. Personal
-            // Training packages are often logged as "trainer"), so any of
-            // these count.
-            .select("member_id, payment_date")
-            .in("payment_type", ["membership", "trainer", "nutritionist", "physiotherapy"])
-            .is("deleted_at", null)
-            .gte("payment_date", cutoff)
-            .order("payment_date", { ascending: false })
-            .range(from, to) as any
-        ),
         // No deleted_at filter here — this feeds the status-tab counts, and
         // the "Archived" tab's count needs to include the deleted_at-set
         // rows too.
@@ -165,32 +137,25 @@ export default function MembersPage() {
 
       setMembers(data);
       setAllCounts(countData);
-
-      // Most recent recurring-dues payment per member (payment_date is
-      // sorted desc, so the first time we see a member_id is their latest).
-      const lastPaid = new Map<string, string>();
-      for (const f of feeData) {
-        if (!lastPaid.has(f.member_id)) lastPaid.set(f.member_id, f.payment_date);
-      }
-      setLastMembershipPayment(lastPaid);
     } catch (err) {
       console.error("Failed to fetch members:", err);
     }
     setLoading(false);
   }, [statusFilter, genderFilter]);
 
-  /** A member's fee is current if their last recurring-dues payment still
-   *  covers today, based on their OWN package's billing cycle — not the
-   *  shared calendar month. A member who joins/pays on June 30 for a
-   *  1-month package is covered through ~July 30, so they must not flip to
-   *  "Pending" the instant the calendar rolls into July. */
+  /** A member's fee is current if their stored expiry_date hasn't passed yet.
+   *  expiry_date is the single source of truth kept in sync on every fee
+   *  collection by extendExpiryDate() (registration, member-profile Collect
+   *  Fee, Fees page Quick Collect) — deriving this separately from raw
+   *  payment_date history caused it to disagree with the Status/Expiry badge
+   *  whenever a member's first-ever recurring payment was made late (after
+   *  joining_date, still within the same billing period): it would credit a
+   *  fresh period starting from the late payment date instead of recognizing
+   *  the period had already started at joining_date. */
   const isFeeCurrent = useCallback((m: MemberWithJoins): boolean => {
-    const lastPaid = lastMembershipPayment.get(m.id);
-    if (!lastPaid) return false;
-    const durationMonths = (m as any).packages?.duration_months || 1;
-    const dueDate = addMonthsToDateStr(lastPaid, durationMonths);
-    return dueDate >= todayStr();
-  }, [lastMembershipPayment]);
+    if (!m.expiry_date) return false;
+    return m.expiry_date >= todayStr();
+  }, []);
 
   useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
