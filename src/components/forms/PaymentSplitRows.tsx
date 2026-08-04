@@ -72,19 +72,25 @@ export function PaymentSplitRows({
   const splitTotal = lines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
   const mismatch = lines.length > 1 && Math.abs(splitTotal - target) > 0.5;
 
-  // With only one payment method, there's nothing to split — the amount can
-  // only ever be the full target, so auto-fill it instead of relying on
-  // staff to type it in (a forgotten/mismatched amount here was a common
-  // source of the "split amounts must add up" error at submit). Re-syncs
-  // whenever the target changes (fee edited, discount applied, partial
-  // toggled) but leaves it alone once a second method is added — that's a
-  // real split the receptionist has to divide manually.
+  // The last row always mirrors the remaining balance instead of requiring
+  // staff to calculate and type it themselves — with one line that's the
+  // whole amount; with several, it's whatever's left after the earlier
+  // ones. Recalculates live off othersSum (a single stable number, not the
+  // lines array itself) so editing an earlier row immediately updates the
+  // last one, adding a row re-splits the remainder into it, and removing a
+  // row folds its amount back into whatever's now last. Earlier rows are
+  // never touched — only the last one auto-adjusts.
+  const lastIndex = lines.length - 1;
+  const othersSum = lines.slice(0, lastIndex).reduce((s, l) => s + (Number(l.amount) || 0), 0);
   useEffect(() => {
-    if (lines.length === 1 && target > 0 && (Number(lines[0].amount) || 0) !== target) {
-      onLinesChange([{ ...lines[0], amount: String(target) }]);
+    if (lines.length === 0) return;
+    const remainder = Math.max(target - othersSum, 0);
+    const currentLast = Number(lines[lastIndex]?.amount) || 0;
+    if (currentLast !== remainder) {
+      onLinesChange(lines.map((l, i) => (i === lastIndex ? { ...l, amount: String(remainder) } : l)));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [target, lines.length]);
+  }, [target, lines.length, othersSum]);
 
   function updateLine(i: number, patch: Partial<PaymentLine>) {
     onLinesChange(lines.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
