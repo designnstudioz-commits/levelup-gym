@@ -186,10 +186,17 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     return packageSelections.find((s) => s.package_id === pkgId) ?? { package_id: pkgId, discount_type: "none", discount_value: undefined };
   }
 
+  // Reads/writes via form.getValues() rather than the render-time
+  // `packageSelections` closure — the discount-type buttons below fire two
+  // updates back-to-back in one click handler (type, then value reset), and
+  // setValue() doesn't update the closure until the next render, so the
+  // second call would otherwise clobber the first with stale data.
+  // getValues() always reflects the latest setValue() synchronously.
   function updatePackageSelection(pkgId: string, patch: Partial<Pick<PackageSelection, "discount_type" | "discount_value">>) {
-    const sel = selectionFor(pkgId);
+    const current = form.getValues("package_selections") ?? [];
+    const sel = current.find((s) => s.package_id === pkgId) ?? { package_id: pkgId, discount_type: "none" as const, discount_value: undefined };
     setValue("package_selections", [
-      ...packageSelections.filter((s) => s.package_id !== pkgId),
+      ...current.filter((s) => s.package_id !== pkgId),
       { ...sel, ...patch },
     ]);
   }
