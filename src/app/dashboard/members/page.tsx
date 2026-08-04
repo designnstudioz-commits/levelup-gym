@@ -73,7 +73,7 @@ export default function MembersPage() {
 
   // Filters
   const [search, setSearch]             = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("active");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [genderFilter, setGenderFilter] = useState<"all" | "Male" | "Female">("all");
   const [sortKey, setSortKey]           = useState("created_at");
   const [sortDir, setSortDir]           = useState<"asc" | "desc">("desc");
@@ -339,11 +339,11 @@ export default function MembersPage() {
   }, [allCounts, statusFilter]);
 
   const STATUS_TABS: { key: StatusFilter; label: string; count: number }[] = [
+    { key: "all",      label: "All",      count: statusCounts.all },
     { key: "active",   label: "Active",   count: statusCounts.active },
     { key: "inactive", label: "Inactive", count: statusCounts.inactive },
     { key: "frozen",   label: "Frozen",   count: statusCounts.frozen },
     { key: "archived", label: "Archived", count: statusCounts.archived },
-    { key: "all",      label: "All",      count: statusCounts.all },
   ];
 
   const rangeStart = filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1;

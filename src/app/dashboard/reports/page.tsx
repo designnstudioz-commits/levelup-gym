@@ -1012,6 +1012,27 @@ function DailySummaryReport({ data }: { data: any }) {
   const todayRevenue   = todayPayments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
   const walkInRevenue  = todayWalkIns.reduce((s: number, d: any) => s + (d.fee_paid ?? 0), 0);
 
+  // Whether each new member has EVER paid — not just whether they have a
+  // payment dated the exact same day as their joining_date. Staff sometimes
+  // record the payment a day off from joining_date (e.g. paid on
+  // registration day, joining_date set to the next day), and `payments`
+  // itself is scoped to the selected report period above, not all-time — so
+  // this runs its own period-independent, per-member query, matching the
+  // "New Members always works for any date" behavior already used for
+  // todayJoined itself.
+  const [paidMemberIds, setPaidMemberIds] = useState<Set<string>>(new Set());
+  const todayJoinedIds = todayJoined.map((m: any) => m.id).join(",");
+  useEffect(() => {
+    if (!todayJoinedIds) { setPaidMemberIds(new Set()); return; }
+    const supabase = createClient();
+    supabase
+      .from("fee_payments")
+      .select("member_id")
+      .is("deleted_at", null)
+      .in("member_id", todayJoinedIds.split(","))
+      .then(({ data }) => setPaidMemberIds(new Set((data ?? []).map((p: any) => p.member_id))));
+  }, [todayJoinedIds]);
+
   return (
     <div className="space-y-5">
       <div className="report-section text-center mb-2">
@@ -1094,7 +1115,7 @@ function DailySummaryReport({ data }: { data: any }) {
             </tr></thead>
             <tbody className="divide-y divide-[#F0F0EE]">
               {todayJoined.map((m: any) => {
-                const paid = todayPayments.some((p: any) => p.member_id === m.id);
+                const paid = paidMemberIds.has(m.id);
                 return (
                   <tr key={m.id}>
                     <td className="py-1.5 pr-3 font-medium text-[#1A1A16] text-xs">{m.full_name}</td>

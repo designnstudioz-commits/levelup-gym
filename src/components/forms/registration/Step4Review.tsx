@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { UseFormReturn } from "react-hook-form";
-import { cn } from "@/lib/utils";
+import { cn, calculateDiscount, formatPKR, isPTPackage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { FullRegistrationData } from "@/lib/validations/registration";
 import type { Package } from "@/types/database";
@@ -29,6 +29,45 @@ function ReviewField({ label, value }: { label: string; value?: string | number 
     <div className="py-2 border-b border-[#E4E4DE] last:border-0">
       <p className="text-xs text-[#7A7A72] font-medium">{label}</p>
       <p className="text-sm text-[#1A1A16] font-medium mt-0.5">{value}</p>
+    </div>
+  );
+}
+
+function FeeBreakdownRow({
+  label, badge, original, discountType, discountValue, lines, partial,
+}: {
+  label: string;
+  badge?: React.ReactNode;
+  original: number;
+  discountType: "none" | "percent" | "amount" | undefined;
+  discountValue: number | undefined;
+  lines?: { method: string; amount: string }[];
+  partial?: { isPartial: boolean; amountReceivedNow: string; balanceDueDate: string };
+}) {
+  if (!original) return null;
+  const { discountAmount, finalAmount } = calculateDiscount(original, discountType, discountValue);
+  const methodsText = (lines ?? [])
+    .filter((l) => l.method && Number(l.amount) > 0)
+    .map((l) => (lines!.length > 1 ? `${l.method} ${formatPKR(Number(l.amount))}` : l.method))
+    .join(", ");
+  return (
+    <div className="py-2 border-b border-[#E4E4DE] last:border-0 sm:col-span-2">
+      <p className="text-xs text-[#7A7A72] font-medium flex items-center gap-1.5">{label}{badge}</p>
+      {discountAmount > 0 ? (
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-xs text-[#7A7A72] line-through">{formatPKR(original)}</span>
+          <span className="text-xs text-[#F06418]">− {formatPKR(discountAmount)}</span>
+          <span className="text-sm text-[#1A1A16] font-bold">= {formatPKR(finalAmount)}</span>
+        </div>
+      ) : (
+        <p className="text-sm text-[#1A1A16] font-medium mt-0.5">{formatPKR(original)}</p>
+      )}
+      {methodsText && <p className="text-xs text-[#7A7A72] mt-0.5">via {methodsText}</p>}
+      {partial?.isPartial && (
+        <p className="text-xs text-amber-700 mt-0.5">
+          Partial: collecting {formatPKR(Number(partial.amountReceivedNow) || 0)} now, balance {formatPKR(Math.max(finalAmount - (Number(partial.amountReceivedNow) || 0), 0))} due {partial.balanceDueDate || "—"}
+        </p>
+      )}
     </div>
   );
 }
@@ -68,6 +107,17 @@ export function Step4Review({ form, mode }: Step4Props) {
   const packageNames = selectedPackageIds
     .map((id) => packages.find((pkg) => pkg.id === id)?.name)
     .filter(Boolean) as string[];
+
+  // Package Payment total = sum of each selected package's own independent
+  // discount, mirroring Step3Services — not one discount over the summed
+  // total.
+  const packageSelections = data.package_selections ?? [];
+  const packagesFinalTotal = selectedPackageIds.reduce((sum, id) => {
+    const pkg = packages.find((p) => p.id === id);
+    if (!pkg) return sum;
+    const sel = packageSelections.find((s) => s.package_id === id);
+    return sum + calculateDiscount(pkg.monthly_fee, sel?.discount_type, sel?.discount_value).finalAmount;
+  }, 0);
 
   return (
     <div className="space-y-6">
@@ -120,17 +170,63 @@ export function Step4Review({ form, mode }: Step4Props) {
               <>
                 <ReviewField label="Joining Date" value={data.joining_date} />
                 <ReviewField label="Expiry Date" value={data.expiry_date} />
-                <ReviewField
+                <FeeBreakdownRow
                   label="Admission Fee"
-                  value={data.admission_fee ? `Rs ${Number(data.admission_fee).toLocaleString()}` : undefined}
+                  original={Number(data.admission_fee) || 0}
+                  discountType={data.admission_discount_type}
+                  discountValue={data.admission_discount_value}
+                  lines={data.admission_payment_lines}
+                  partial={data.admission_partial}
                 />
-                <ReviewField
-                  label="Monthly Fee"
-                  value={data.monthly_fee ? `Rs ${Number(data.monthly_fee).toLocaleString()}` : undefined}
-                />
+                {selectedPackageIds.map((id) => {
+                  const pkg = packages.find((p) => p.id === id);
+                  if (!pkg) return null;
+                  const sel = packageSelections.find((s) => s.package_id === id);
+                  return (
+                    <FeeBreakdownRow
+                      key={id}
+                      label={pkg.name}
+                      badge={isPTPackage(pkg) ? (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8]">PT</span>
+                      ) : undefined}
+                      original={pkg.monthly_fee}
+                      discountType={sel?.discount_type}
+                      discountValue={sel?.discount_value}
+                    />
+                  );
+                })}
+                {packagesFinalTotal > 0 && (data.membership_payment_lines?.length || data.membership_partial?.isPartial) && (
+                  <div className="py-2 border-b border-[#E4E4DE] last:border-0 sm:col-span-2">
+                    <p className="text-xs text-[#7A7A72] font-medium">Package Payment</p>
+                    {(() => {
+                      const lines = data.membership_payment_lines ?? [];
+                      const methodsText = lines
+                        .filter((l) => l.method && Number(l.amount) > 0)
+                        .map((l) => (lines.length > 1 ? `${l.method} ${formatPKR(Number(l.amount))}` : l.method))
+                        .join(", ");
+                      return methodsText ? <p className="text-xs text-[#7A7A72] mt-0.5">via {methodsText}</p> : null;
+                    })()}
+                    {data.membership_partial?.isPartial && (
+                      <p className="text-xs text-amber-700 mt-0.5">
+                        Partial: collecting {formatPKR(Number(data.membership_partial.amountReceivedNow) || 0)} now, balance {formatPKR(Math.max(packagesFinalTotal - (Number(data.membership_partial.amountReceivedNow) || 0), 0))} due {data.membership_partial.balanceDueDate || "—"}
+                      </p>
+                    )}
+                  </div>
+                )}
               </>
             )}
           </div>
+          {mode === "staff" && (Number(data.admission_fee) > 0 || packagesFinalTotal > 0) && (
+            <div className="flex items-center justify-between pt-3 mt-1 border-t border-[#E4E4DE]">
+              <span className="text-sm font-semibold text-[#1A1A16]">Grand Total Collecting</span>
+              <span className="text-lg font-bold text-[#F06418]">
+                {formatPKR(
+                  calculateDiscount(Number(data.admission_fee) || 0, data.admission_discount_type, data.admission_discount_value).finalAmount +
+                  packagesFinalTotal
+                )}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

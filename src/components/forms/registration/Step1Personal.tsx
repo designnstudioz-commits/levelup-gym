@@ -8,10 +8,16 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
 import { formatCnic, formatPhone } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 interface Step1Props {
   form: UseFormReturn<FullRegistrationData>;
+  mode: "public" | "staff";
 }
+
+const FAMILY_RELATIONSHIPS = ["Spouse", "Child", "Parent", "Sibling", "Other"];
+
+type ActiveMemberOption = { id: string; full_name: string; phone: string; membership_no: string };
 
 const REFERRAL_OPTIONS = [
   "Social Media (Instagram/Facebook)",
@@ -22,7 +28,7 @@ const REFERRAL_OPTIONS = [
   "Other",
 ];
 
-export function Step1Personal({ form }: Step1Props) {
+export function Step1Personal({ form, mode }: Step1Props) {
   const { register, formState: { errors }, setValue, watch } = form;
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -31,6 +37,44 @@ export function Step1Personal({ form }: Step1Props) {
   const uploadRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Family membership — staff mode only. Reuses the fees/page.tsx member-
+  // search interaction pattern (fetch active members once, filter
+  // client-side as-you-type) but matches on name/phone rather than
+  // membership-number prefix, since a receptionist linking a family member
+  // is more likely to know the primary member's name than their number.
+  const isFamilyMember = watch("is_family_member");
+  const [activeMembers, setActiveMembers] = useState<ActiveMemberOption[]>([]);
+  const [familySearch, setFamilySearch] = useState("");
+  const [familyResults, setFamilyResults] = useState<ActiveMemberOption[]>([]);
+  const [selectedPrimary, setSelectedPrimary] = useState<ActiveMemberOption | null>(null);
+
+  useEffect(() => {
+    if (!isFamilyMember || activeMembers.length > 0) return;
+    createClient()
+      .from("members")
+      .select("id, full_name, phone, membership_no")
+      .eq("status", "active")
+      .is("deleted_at", null)
+      .then(({ data }) => setActiveMembers(data ?? []));
+  }, [isFamilyMember, activeMembers.length]);
+
+  useEffect(() => {
+    const q = familySearch.trim().toLowerCase();
+    if (!q) { setFamilyResults([]); return; }
+    setFamilyResults(
+      activeMembers
+        .filter((m) => m.full_name.toLowerCase().includes(q) || m.phone.includes(q))
+        .slice(0, 8)
+    );
+  }, [familySearch, activeMembers]);
+
+  function selectPrimaryMember(m: ActiveMemberOption) {
+    setSelectedPrimary(m);
+    setValue("family_primary_member_id", m.id, { shouldValidate: true });
+    setFamilySearch("");
+    setFamilyResults([]);
+  }
 
   function handleDobChange(e: React.ChangeEvent<HTMLInputElement>) {
     const dob = new Date(e.target.value);
@@ -351,6 +395,104 @@ export function Step1Personal({ form }: Step1Props) {
           </div>
         </div>
       </div>
+
+      {/* Family membership — staff mode only. Checking this does NOT apply
+          any discount or change pricing here; it just links the member and
+          submits with status "pending_family_approval" for an Owner/Manager
+          to decide pricing later on /dashboard/family-approvals. */}
+      {mode === "staff" && (
+        <div>
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              className="accent-[#F06418] w-4 h-4"
+              checked={!!isFamilyMember}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setValue("is_family_member", checked, { shouldValidate: true });
+                if (!checked) {
+                  setValue("family_primary_member_id", undefined);
+                  setValue("family_relationship", undefined);
+                  setValue("family_notes", undefined);
+                  setSelectedPrimary(null);
+                  setFamilySearch("");
+                }
+              }}
+            />
+            <span className="text-sm font-semibold text-[#1A1A16]">Register as Family Member</span>
+          </label>
+
+          {isFamilyMember && (
+            <div className="mt-3 rounded-xl border border-[#E4E4DE] bg-[#F8F8F6] p-4 space-y-3">
+              <div className="relative">
+                <Input
+                  label="Search Existing Primary Member"
+                  required
+                  placeholder="Search by name or phone..."
+                  value={familySearch}
+                  onChange={(e) => setFamilySearch(e.target.value)}
+                />
+                {familyResults.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-white border border-[#E4E4DE] rounded-lg shadow-lg max-h-56 overflow-y-auto">
+                    {familyResults.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => selectPrimaryMember(m)}
+                        className="w-full text-left px-3 py-2 hover:bg-[#FEF0E8] text-sm"
+                      >
+                        <span className="font-medium text-[#1A1A16]">{m.full_name}</span>
+                        <span className="text-xs text-[#7A7A72] ml-2">{m.phone} · {m.membership_no}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {selectedPrimary && (
+                <div className="text-xs text-[#4A4A44] bg-[#FEF0E8] rounded-lg px-3 py-2 flex items-center justify-between">
+                  <span>Linked to <strong>{selectedPrimary.full_name}</strong> ({selectedPrimary.membership_no})</span>
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedPrimary(null); setValue("family_primary_member_id", undefined, { shouldValidate: true }); }}
+                    className="text-red-600 text-xs font-medium hover:underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+              {errors.family_relationship && !selectedPrimary && (
+                <p className="text-xs text-red-600">Select the primary member above</p>
+              )}
+
+              <Select
+                label="Relationship to Primary Member"
+                required
+                value={watch("family_relationship") ?? ""}
+                onChange={(e) => setValue("family_relationship", e.target.value, { shouldValidate: true })}
+                error={selectedPrimary ? errors.family_relationship?.message : undefined}
+              >
+                <option value="">Select relationship</option>
+                {FAMILY_RELATIONSHIPS.map((r) => <option key={r} value={r}>{r}</option>)}
+              </Select>
+
+              <div>
+                <label className="text-sm font-medium text-[#1A1A16] block mb-1.5">Notes (optional)</label>
+                <textarea
+                  rows={2}
+                  className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white resize-none focus:outline-none focus:ring-2 focus:ring-[#F06418] focus:border-[#F06418]"
+                  value={watch("family_notes") ?? ""}
+                  onChange={(e) => setValue("family_notes", e.target.value)}
+                />
+              </div>
+
+              <p className="text-xs text-[#7A7A72]">
+                This does not change pricing — the member is registered at full price and an Owner/Manager will review pricing for this family registration afterward.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Contact */}
       <div>

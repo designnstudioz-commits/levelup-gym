@@ -23,6 +23,7 @@ import {
   UserCheck,
   ChevronLeft,
   ChevronRight,
+  HeartHandshake,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
 
@@ -48,6 +49,7 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],
   "/dashboard/fees":        ["owner", "manager", "receptionist"],
   "/dashboard/packages":    ["owner", "manager"],
+  "/dashboard/family-approvals": ["owner", "manager"],
   "/dashboard/staff":       ["owner", "manager"],
   "/dashboard/reports":     ["owner", "manager"],
   "/dashboard/sms":         ["owner", "manager", "receptionist"],
@@ -124,6 +126,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
     { label: "Attendance",     href: "/dashboard/attendance",  icon: CalendarCheck },
     { label: "Fees & Payments",href: "/dashboard/fees",        icon: CreditCard    },
     { label: "Packages",       href: "/dashboard/packages",    icon: Package       },
+    { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
     {
       label: "Staff & Trainers",
       href: "/dashboard/staff",
@@ -163,7 +166,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
   return (
     <aside
       className={cn(
-        "bg-[#1A1A1A] flex flex-col h-full flex-shrink-0 relative transition-all duration-300 ease-in-out",
+        "no-print bg-[#1A1A1A] flex flex-col h-full flex-shrink-0 relative transition-all duration-300 ease-in-out",
         collapsed ? "w-16" : "w-60"
       )}
     >

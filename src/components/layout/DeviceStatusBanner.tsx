@@ -26,7 +26,7 @@ export function DeviceStatusBanner() {
   if (offlineDevices.length === 0) return null;
 
   return (
-    <div className="sticky top-0 z-20 bg-red-50 border-b border-red-200 px-4 py-2 flex flex-wrap items-center gap-2">
+    <div className="no-print sticky top-0 z-20 bg-red-50 border-b border-red-200 px-4 py-2 flex flex-wrap items-center gap-2">
       <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
       {offlineDevices.map((d) => (
         <span key={d.id} className="text-xs font-medium text-red-700">

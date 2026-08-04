@@ -21,9 +21,10 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
+import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
 
 // ── Types ────────────────────────────────────────────────────────────
 type Tab = "overview" | "transactions" | "outstanding" | "renewals" | "analytics";
@@ -92,7 +93,8 @@ export default function FeesPage() {
   const [selectedMember, setSelectedMember]   = useState<MemberWithPackage | null>(null);
   const [feeAmount, setFeeAmount]             = useState("");
   const [feeType, setFeeType]                 = useState("membership");
-  const [feeMethod, setFeeMethod]             = useState("Cash");
+  const [feeLines, setFeeLines]               = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
+  const [feePartial, setFeePartial]           = useState<PartialPaymentState>(emptyPartialState);
   const [feeNote, setFeeNote]                 = useState("");
   const [discountType, setDiscountType]       = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue]     = useState("");
@@ -107,6 +109,7 @@ export default function FeesPage() {
   const finalAmount    = Math.max(originalAmount - discountAmount, 0);
   const discountPct    = discountType === "percent" ? Number(discountValue) || 0 :
     originalAmount > 0 ? Math.round((discountAmount / originalAmount) * 100) : 0;
+  const collectingNow  = splitTarget(finalAmount, feePartial);
 
   // ── Date bounds ─────────────────────────────────────────────────
   function getTxBounds() {
@@ -181,6 +184,8 @@ export default function FeesPage() {
     setFeeType("membership");
     setDiscountType("none");
     setDiscountValue("");
+    setFeeLines([{ method: "Cash", amount: "" }]);
+    setFeePartial(emptyPartialState);
     // Check if already paid membership this month
     const now = new Date();
     const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
@@ -199,6 +204,8 @@ export default function FeesPage() {
   async function handleCollect() {
     if (!selectedMember) { toast.error("Select a member first"); return; }
     if (!feeAmount || originalAmount <= 0) { toast.error("Enter a valid amount"); return; }
+    const splitError = validatePaymentSplit(finalAmount, feeLines, feePartial);
+    if (splitError) { toast.error(splitError); return; }
     setCollectSaving(true);
     try {
       const supabase = createClient();
@@ -208,17 +215,26 @@ export default function FeesPage() {
         : null;
       const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
       const today = format(new Date(), "yyyy-MM-dd");
+      const collected = splitTarget(finalAmount, feePartial);
+      const balanceDue = feePartial.isPartial ? Math.max(finalAmount - collected, 0) : 0;
 
-      const { data: newPayment, error } = await supabase.from("fee_payments").insert({
+      // One row per payment method, all sharing one receipt_no. Only the
+      // first row carries balance_due, so summing it per member never
+      // double-counts a single split transaction.
+      const rows = feeLines.map((line, i) => ({
         member_id: selectedMember.id,
-        amount: finalAmount,
+        amount: Number(line.amount),
         payment_type: feeType as any,
-        payment_method: feeMethod as any,
+        payment_method: line.method as any,
         payment_date: today,
         month_covered: feeType === "membership" ? today : null,
         receipt_no: receiptNo,
         note: fullNote,
-      }).select("id").single();
+        balance_due: i === 0 ? balanceDue : 0,
+        balance_due_date: i === 0 && balanceDue > 0 ? feePartial.balanceDueDate : null,
+      }));
+
+      const { data: newPayments, error } = await supabase.from("fee_payments").insert(rows).select("id");
 
       if (error) throw error;
 
@@ -226,17 +242,20 @@ export default function FeesPage() {
       // current cycle if it hasn't lapsed yet, so paying early doesn't cost
       // the member their remaining days. A member's very first recurring
       // payment is excluded from this: it settles the cycle already granted
-      // at registration, not a new one.
+      // at registration, not a new one. A partial payment still extends
+      // expiry fully — the balance owed is a bookkeeping flag, not a hold
+      // on service.
       if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
-        // Counted after the insert above, so this includes the payment we
-        // just recorded — a count of 1 means it was this member's first ever.
-        // Re-fetch expiry/joining fresh rather than trusting selectedMember
-        // state — if another action just updated this same member, stale
-        // state here would silently compute the new expiry off outdated data.
-        const [{ count: totalRecurringPayments }, { data: freshMember }] = await Promise.all([
+        // Counted as distinct transactions (by receipt_no), not raw rows —
+        // this payment may have just inserted 2+ rows if split across
+        // methods. Re-fetch expiry/joining fresh rather than trusting
+        // selectedMember state — if another action just updated this same
+        // member, stale state here would silently compute the new expiry
+        // off outdated data.
+        const [{ data: recurringRows }, { data: freshMember }] = await Promise.all([
           supabase
             .from("fee_payments")
-            .select("*", { count: "exact", head: true })
+            .select("id, receipt_no")
             .eq("member_id", selectedMember.id)
             .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
             .is("deleted_at", null),
@@ -244,7 +263,7 @@ export default function FeesPage() {
         ]);
 
         const durationMonths = selectedMember.packages?.duration_months || 1;
-        const isFirstPayment = (totalRecurringPayments ?? 0) <= 1;
+        const isFirstPayment = countLogicalPayments(recurringRows ?? []) <= 1;
         const newExpiry = extendExpiryDate(freshMember?.expiry_date, today, durationMonths, isFirstPayment, freshMember?.joining_date);
         await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", selectedMember.id);
       }
@@ -252,17 +271,18 @@ export default function FeesPage() {
       await supabase.from("activity_logs").insert({
         user_id: currentUser?.id ?? null,
         action: "paid_fee", entity_type: "member", entity_id: selectedMember.id,
-        description: `${selectedMember.full_name} paid ${formatPKR(finalAmount)} (${feeType}) — ${receiptNo}`,
-        metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, receipt_no: receiptNo },
+        description: `${selectedMember.full_name} paid ${formatPKR(collected)} (${feeType}) — ${receiptNo}${balanceDue > 0 ? ` — ${formatPKR(balanceDue)} balance due` : ""}`,
+        metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected, balanceDue, receipt_no: receiptNo },
       });
 
       toast.success(`Payment recorded — ${receiptNo}`);
       setCollectModal(false);
       setSelectedMember(null); setMemberSearch(""); setFeeAmount(""); setFeeNote("");
       setDiscountType("none"); setDiscountValue("");
+      setFeeLines([{ method: "Cash", amount: "" }]); setFeePartial(emptyPartialState);
       setCollectSaving(false);
       fetchAll();
-      router.push(`/dashboard/fees/receipt/${newPayment.id}`);
+      router.push(`/dashboard/fees/receipt/${newPayments[0].id}`);
     } catch (err) {
       console.error(err); toast.error("Failed to record payment"); setCollectSaving(false);
     }
@@ -494,17 +514,25 @@ export default function FeesPage() {
                 )}
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Select label="Payment Method" value={feeMethod} onChange={(e) => setFeeMethod(e.target.value)}>
-                  {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-                </Select>
-                <Input label="Note (optional)" placeholder="e.g. June 2026" value={feeNote} onChange={(e) => setFeeNote(e.target.value)} />
-              </div>
+              <PaymentSplitRows
+                fullAmount={finalAmount || originalAmount}
+                lines={feeLines}
+                onLinesChange={setFeeLines}
+                partial={feePartial}
+                onPartialChange={setFeePartial}
+              />
+
+              <Input label="Note (optional)" placeholder="e.g. June 2026" value={feeNote} onChange={(e) => setFeeNote(e.target.value)} />
 
               <div className="mt-3 bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-4 py-3 flex items-center justify-between">
-                <span className="text-sm text-[#4A4A44]">Collecting:</span>
-                <span className="text-xl font-bold text-[#1A1A16]">{formatPKR(finalAmount || originalAmount)}</span>
+                <span className="text-sm text-[#4A4A44]">{feePartial.isPartial ? "Collecting now:" : "Collecting:"}</span>
+                <span className="text-xl font-bold text-[#1A1A16]">{formatPKR(collectingNow || finalAmount || originalAmount)}</span>
               </div>
+              {feePartial.isPartial && Number(feePartial.amountReceivedNow) > 0 && (
+                <p className="text-xs text-amber-700 -mt-2">
+                  Balance of {formatPKR(Math.max((finalAmount || originalAmount) - Number(feePartial.amountReceivedNow), 0))} will be marked pending.
+                </p>
+              )}
             </div>
           )}
 

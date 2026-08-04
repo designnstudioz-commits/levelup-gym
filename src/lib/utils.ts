@@ -77,12 +77,74 @@ export function addMonthsToDateStr(dateStr: string, months: number): string {
   return format(addMonths(new Date(dateStr), months), "yyyy-MM-dd");
 }
 
+/** PT (Personal Training) packages are exclusive — a member can only have
+ *  one — and require a trainer to be assigned. There's no dedicated schema
+ *  column for this; every PT package is named "Personal Training — <Tier>",
+ *  so name-prefix matching is the identification method (confirmed
+ *  decision — adding a schema column was the alternative, not chosen). */
+export function isPTPackage(pkg: { name: string }): boolean {
+  return pkg.name.startsWith("Personal Training");
+}
+
 /** Fee types that count as a member's recurring dues (as opposed to
  *  one-off charges like admission fees). Paying any of these is what
  *  keeps a member's status current — staff don't always pick "membership"
  *  in the dropdown (e.g. Personal Training packages are often logged as
  *  "trainer"). */
 export const RECURRING_FEE_TYPES = ["membership", "trainer", "nutritionist", "physiotherapy"] as const;
+
+/** Counts distinct logical payment *transactions*, not raw fee_payments
+ *  rows — a single collection split across multiple payment methods now
+ *  produces multiple rows sharing one receipt_no. Used for isFirstPayment
+ *  detection: counting raw rows would make a split first payment look like
+ *  2+ payments and silently double-extend expiry. Falls back to the row's
+ *  own id for older/imported rows with no receipt_no, so those still count
+ *  as their own separate transaction rather than collapsing together under
+ *  a shared `null`. */
+export function countLogicalPayments(rows: { id: string; receipt_no: string | null }[]): number {
+  return new Set(rows.map((r) => r.receipt_no ?? r.id)).size;
+}
+
+/** Flat cut the gym takes off every Personal Training payment before the
+ *  trainer's commission applies — a fixed business constant (every row of
+ *  the old package-tier rate chart used this same Rs 10,000 regardless of
+ *  tier), not tied to any specific package. Shared by the staff profile's
+ *  commission section and the salary slip so both compute identically. */
+export const PT_GYM_FEE_PORTION = 10000;
+
+/** fee_payments.payment_type values that count toward a trainer's
+ *  commission basis — actual collected recurring dues plus any ad hoc
+ *  trainer session fees. Admission fees don't count (one-off joining fee,
+ *  not a trainer service). */
+export const COMMISSION_ELIGIBLE_TYPES = ["membership", "trainer"];
+
+/** A trainer's manually-set commission for one assigned member, for a given
+ *  period — either a percentage of (payment − flat gym cut), or a flat Rs
+ *  amount per qualifying payment. `periodEnd` is optional (omit for an
+ *  open-ended "from periodStart to now" range, e.g. "this month" viewed
+ *  live); pass it when computing a past, closed period (e.g. a salary slip
+ *  for a prior month) so later payments aren't pulled in. */
+export function calculateTrainerCommission(
+  rate: { commission_type: "percent" | "fixed"; commission_percent: number; commission_amount: number | null } | undefined,
+  payments: { id: string; amount: number; payment_date: string; receipt_no: string | null }[],
+  periodStart: string | null,
+  periodEnd: string | null = null
+): number {
+  if (!rate) return 0;
+  const rows = payments.filter(
+    (p) => (!periodStart || p.payment_date >= periodStart) && (!periodEnd || p.payment_date <= periodEnd)
+  );
+
+  if (rate.commission_type === "fixed") {
+    const amount = Number(rate.commission_amount);
+    if (!(amount > 0)) return 0;
+    return countLogicalPayments(rows) * amount;
+  }
+
+  const percent = Number(rate.commission_percent);
+  if (!(percent > 0)) return 0;
+  return rows.reduce((sum, p) => sum + Math.max((p.amount ?? 0) - PT_GYM_FEE_PORTION, 0) * (percent / 100), 0);
+}
 
 /** Computes a member's new expiry date after a recurring-dues payment.
  *  If their current expiry hasn't lapsed yet, the new cycle extends from
@@ -138,6 +200,7 @@ export function getMemberStatusDisplay(status: string, expiryDate?: string | nul
   label: string;
   variant: "active" | "inactive" | "expiring" | "frozen" | "archived" | "pending";
 } {
+  if (status === "pending_family_approval") return { label: "Pending Family Approval", variant: "pending" };
   if (status === "frozen") return { label: "Frozen", variant: "frozen" };
   if (status === "archived") return { label: "Archived", variant: "archived" };
   if (status === "inactive") return { label: "Inactive", variant: "inactive" };
@@ -211,4 +274,19 @@ export async function generateMembershipNo(
 
 export function cn(...classes: (string | undefined | null | false)[]): string {
   return classes.filter(Boolean).join(" ");
+}
+
+/** Applies a discount to an amount — same formula used by the Collect Fee
+ *  flows on the Fees page and member profile (kept independent here rather
+ *  than refactoring those call sites, to avoid touching working code). */
+export function calculateDiscount(
+  original: number,
+  type: "none" | "percent" | "amount" | undefined,
+  value: number | string | undefined
+): { discountAmount: number; finalAmount: number } {
+  const v = Number(value) || 0;
+  const discountAmount =
+    type === "percent" ? Math.round((original * v) / 100) :
+    type === "amount"  ? Math.min(v, original) : 0;
+  return { discountAmount, finalAmount: Math.max(original - discountAmount, 0) };
 }

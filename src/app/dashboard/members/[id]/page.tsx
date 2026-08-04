@@ -19,9 +19,10 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
 import Link from "next/link";
+import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
 
 const SERVICES = [
   "Gym", "Cardio", "Personal Training", "CrossFit", "MMA",
@@ -44,7 +45,8 @@ const SERVICE_ICONS: Record<string, string> = {
 function buildReceiptHtml(r: {
   memberName: string; memberNo: string; packageName: string;
   amount: number; originalAmount: number; discountAmount: number;
-  type: string; method: string; date: string; note: string | null; receiptNo: string;
+  type: string; lines: { method: string; amount: number }[]; date: string; note: string | null; receiptNo: string;
+  balanceDue?: number; balanceDueDate?: string | null;
 }): string {
   const typeLabel: Record<string, string> = {
     membership: "Monthly Membership", admission: "Admission Fee",
@@ -62,6 +64,12 @@ function buildReceiptHtml(r: {
   const pkgRow = r.packageName !== "—" ? `
     <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Package</td>
         <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.packageName}</td></tr>` : "";
+  const methodRows = r.lines.map((l) => `
+    <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Method${r.lines.length > 1 ? ` (${l.method})` : ""}</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.lines.length > 1 ? `${new Intl.NumberFormat("en-PK").format(l.amount)} Rs` : l.method}</td></tr>`).join("");
+  const balanceRow = r.balanceDue && r.balanceDue > 0 ? `
+    <tr><td style="padding:4px 0;color:#C04E10;font-size:13px;font-weight:700;">Balance Due${r.balanceDueDate ? ` (by ${r.balanceDueDate})` : ""}</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:700;color:#C04E10;">${new Intl.NumberFormat("en-PK").format(r.balanceDue)} Rs</td></tr>` : "";
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
   <title>Receipt ${r.receiptNo}</title>
@@ -110,13 +118,12 @@ function buildReceiptHtml(r: {
       <table>
         <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Type</td>
             <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${typeLabel[r.type] ?? r.type}</td></tr>
-        <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Method</td>
-            <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.method}</td></tr>
-        ${noteRow}${discountRow}
+        ${methodRows}${noteRow}${discountRow}
         <tr class="total-row">
           <td>Total Paid</td>
           <td style="text-align:right;">Rs ${new Intl.NumberFormat("en-PK").format(r.amount)}</td>
         </tr>
+        ${balanceRow}
       </table>
     </div>
     <div class="ftr">
@@ -151,8 +158,8 @@ export default function MemberDetailPage() {
   const [receiptData, setReceiptData] = useState<{
     memberName: string; memberNo: string; packageName: string;
     amount: number; originalAmount: number; discountAmount: number;
-    type: string; method: string; date: string; note: string | null;
-    receiptNo: string;
+    type: string; lines: { method: string; amount: number }[]; date: string; note: string | null;
+    receiptNo: string; balanceDue?: number; balanceDueDate?: string | null;
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -293,7 +300,8 @@ export default function MemberDetailPage() {
   const [expiryDate, setExpiryDate] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
   const [feeType, setFeeType] = useState("membership");
-  const [feeMethod, setFeeMethod] = useState("Cash");
+  const [feeLines, setFeeLines] = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
+  const [feePartial, setFeePartial] = useState<PartialPaymentState>(emptyPartialState);
   const [feeNote, setFeeNote] = useState("");
   const [discountType, setDiscountType] = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue] = useState("");
@@ -302,12 +310,21 @@ export default function MemberDetailPage() {
   const [allStaff, setAllStaff] = useState<StaffMember[]>([]);
   const [alreadyPaidWarning, setAlreadyPaidWarning] = useState(false);
 
+  // Pay Balance — settles outstanding balance_due from earlier partial
+  // payments. Separate from the main Collect Fee flow: no discount, no
+  // commission, no expiry extension (already happened at the original
+  // partial payment).
+  const [payBalanceModal, setPayBalanceModal] = useState(false);
+  const [balanceLines, setBalanceLines] = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
+  const [payingBalance, setPayingBalance] = useState(false);
+
   async function openFeeModal() {
     // Pre-fill with package monthly fee (prefer package record, fall back to member field)
     const prefill = (member as any)?.packages?.monthly_fee ?? member?.monthly_fee;
     setFeeAmount(prefill ? String(prefill) : "");
     setFeeType("membership");
-    setFeeMethod("Cash");
+    setFeeLines([{ method: "Cash", amount: "" }]);
+    setFeePartial(emptyPartialState);
     setFeeNote("");
     setDiscountType("none");
     setDiscountValue("");
@@ -462,17 +479,20 @@ export default function MemberDetailPage() {
       : originalAmount > 0
       ? Math.round((discountAmount / originalAmount) * 100)
       : 0;
+  const collectingNow = splitTarget(finalAmount, feePartial);
 
-  // Commission computed values (must be after finalAmount)
-  const COMMISSION_TYPES = ["trainer", "nutritionist", "physiotherapy"];
-  const showCommission = COMMISSION_TYPES.includes(feeType);
-  const commissionAmount = showCommission && commissionRate
-    ? Math.round(finalAmount * (Number(commissionRate) / 100))
-    : 0;
+  // showCommission/commissionAmount are computed further down (after the
+  // loading/not-found guards). recordFee() below closes over them by
+  // reference, so it still sees the correct values by the time it's called.
 
   async function recordFee() {
     if (!feeAmount || originalAmount <= 0) {
       toast.error("Enter a valid amount");
+      return;
+    }
+    const splitError = validatePaymentSplit(finalAmount, feeLines, feePartial);
+    if (splitError) {
+      toast.error(splitError);
       return;
     }
     setSaving(true);
@@ -486,19 +506,29 @@ export default function MemberDetailPage() {
     const receiptNo = await generateReceiptNo();
     const today = new Date();
     const paymentDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const collectedNow = splitTarget(finalAmount, feePartial);
+    const balanceDue = feePartial.isPartial ? Math.max(finalAmount - collectedNow, 0) : 0;
 
-    const { error: feeError } = await supabase.from("fee_payments").insert({
+    // One row per payment method, all sharing one receipt_no. Only the
+    // first row carries balance_due/commission — every other row gets them
+    // null/0 so summing either across a member's payments never
+    // double-counts a single split transaction.
+    const rows = feeLines.map((line, i) => ({
       member_id: id,
-      amount: finalAmount,
+      amount: Number(line.amount),
       payment_type: feeType as any,
-      payment_method: feeMethod as any,
+      payment_method: line.method as any,
       payment_date: paymentDate,
       receipt_no: receiptNo,
       note: fullNote,
-      commission_staff_id: showCommission && commissionStaffId ? commissionStaffId : null,
-      commission_rate: showCommission && commissionRate ? Number(commissionRate) : null,
-      commission_amount: showCommission && commissionAmount > 0 ? commissionAmount : null,
-    });
+      balance_due: i === 0 ? balanceDue : 0,
+      balance_due_date: i === 0 && balanceDue > 0 ? feePartial.balanceDueDate : null,
+      commission_staff_id: i === 0 && showCommission && commissionStaffId ? commissionStaffId : null,
+      commission_rate: i === 0 && showCommission && commissionRate ? Number(commissionRate) : null,
+      commission_amount: i === 0 && showCommission && commissionAmount > 0 ? commissionAmount : null,
+    }));
+
+    const { error: feeError } = await supabase.from("fee_payments").insert(rows);
     if (feeError) {
       toast.error("Failed to save payment. Please try again.");
       setSaving(false);
@@ -511,18 +541,19 @@ export default function MemberDetailPage() {
     // the member their remaining days; otherwise the cycle restarts from
     // the payment date. A member's very first recurring payment is excluded
     // from this: it settles the cycle already granted at registration, not
-    // a new one.
+    // a new one. A partial payment still extends expiry fully — the balance
+    // owed is purely a bookkeeping flag, not a hold on service.
     if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
-      // Counted after the insert above, so this includes the payment we
-      // just recorded — a count of 1 means it was this member's first ever.
+      // Counted as distinct transactions (by receipt_no), not raw rows —
+      // this payment may have just inserted 2+ rows if split across methods.
       // Re-fetch expiry/joining fresh rather than trusting the component's
       // `member` state — if another action (e.g. a renewal, or a second
       // rapid payment) just updated this same member, stale state here
       // would silently compute the new expiry off outdated data.
-      const [{ count: totalRecurringPayments }, { data: freshMember }] = await Promise.all([
+      const [{ data: recurringRows }, { data: freshMember }] = await Promise.all([
         supabase
           .from("fee_payments")
-          .select("*", { count: "exact", head: true })
+          .select("id, receipt_no")
           .eq("member_id", id)
           .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
           .is("deleted_at", null),
@@ -530,7 +561,7 @@ export default function MemberDetailPage() {
       ]);
 
       const durationMonths = (member as any)?.packages?.duration_months || 1;
-      const isFirstPayment = (totalRecurringPayments ?? 0) <= 1;
+      const isFirstPayment = countLogicalPayments(recurringRows ?? []) <= 1;
       const newExpiry = extendExpiryDate(freshMember?.expiry_date, paymentDate, durationMonths, isFirstPayment, freshMember?.joining_date);
       await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
     }
@@ -540,33 +571,120 @@ export default function MemberDetailPage() {
       action: "paid_fee",
       entity_type: "member",
       entity_id: id,
-      description: `${member?.full_name} paid ${formatPKR(finalAmount)} (${feeType})${discountAmount > 0 ? ` — discount ${formatPKR(discountAmount)}` : ""}`,
-      metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, type: feeType, method: feeMethod },
+      description: `${member?.full_name} paid ${formatPKR(collectedNow)} (${feeType})${discountAmount > 0 ? ` — discount ${formatPKR(discountAmount)}` : ""}${balanceDue > 0 ? ` — Rs ${balanceDue} balance due` : ""}`,
+      metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected: collectedNow, balanceDue, type: feeType, methods: feeLines },
     });
     // Build receipt data and open receipt modal
     setReceiptData({
       memberName:     member?.full_name ?? "",
       memberNo:       member?.membership_no ?? "",
       packageName:    (member as any)?.packages?.name ?? "—",
-      amount:         finalAmount,
+      amount:         collectedNow,
       originalAmount,
       discountAmount,
       type:           feeType,
-      method:         feeMethod,
+      lines:          feeLines.map((l) => ({ method: l.method, amount: Number(l.amount) })),
       date:           new Date().toLocaleDateString("en-PK", { day: "2-digit", month: "short", year: "numeric" }),
       note:           feeNote || null,
       receiptNo,
+      balanceDue,
+      balanceDueDate: balanceDue > 0 ? feePartial.balanceDueDate : null,
     });
 
-    toast.success(`Fee of ${formatPKR(finalAmount)} recorded`);
+    toast.success(`Fee of ${formatPKR(collectedNow)} recorded${balanceDue > 0 ? ` — Rs ${formatPKR(balanceDue)} balance due` : ""}`);
     setFeeModal(false);
     setFeeAmount("");
     setFeeNote("");
     setDiscountType("none");
     setDiscountValue("");
+    setFeeLines([{ method: "Cash", amount: "" }]);
+    setFeePartial(emptyPartialState);
     setSaving(false);
     fetchMember();
     setReceiptModal(true);
+  }
+
+  function openPayBalanceModal() {
+    setBalanceLines([{ method: "Cash", amount: totalBalanceDue > 0 ? String(totalBalanceDue) : "" }]);
+    setPayBalanceModal(true);
+  }
+
+  async function payBalance() {
+    if (balanceLines.some((l) => !l.amount || Number(l.amount) <= 0)) {
+      toast.error("Enter a valid amount for every payment method");
+      return;
+    }
+    const totalPaying = balanceLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
+    if (totalPaying > totalBalanceDue) {
+      toast.error("Amount exceeds the outstanding balance");
+      return;
+    }
+    setPayingBalance(true);
+    const supabase = createClient();
+
+    // Settle the oldest outstanding balance(s) first — a member usually has
+    // only one, but this handles multiple partial payments correctly.
+    const unsettled = payments
+      .filter((p) => (p.balance_due ?? 0) > 0)
+      .sort((a, b) => a.payment_date.localeCompare(b.payment_date));
+    if (unsettled.length === 0) {
+      toast.error("No outstanding balance found");
+      setPayingBalance(false);
+      return;
+    }
+
+    let remaining = totalPaying;
+    const receiptNos: string[] = [];
+    for (const row of unsettled) {
+      if (remaining <= 0) break;
+      const settleAmount = Math.min(remaining, row.balance_due);
+      const newBalance = Math.max(row.balance_due - settleAmount, 0);
+      await supabase.from("fee_payments").update({
+        balance_due: newBalance,
+        balance_due_date: newBalance > 0 ? row.balance_due_date : null,
+      }).eq("id", row.id);
+      if (row.receipt_no) receiptNos.push(row.receipt_no);
+      remaining -= settleAmount;
+    }
+
+    const today = new Date();
+    const paymentDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const receiptNo = await generateReceiptNo();
+    const primaryType = unsettled[0].payment_type ?? "membership";
+
+    const rows = balanceLines.map((line) => ({
+      member_id: id,
+      amount: Number(line.amount),
+      payment_type: primaryType as any,
+      payment_method: line.method as any,
+      payment_date: paymentDate,
+      receipt_no: receiptNo,
+      note: `Balance payment for receipt${receiptNos.length > 1 ? "s" : ""} ${receiptNos.join(", ")}`,
+      balance_due: 0,
+      balance_due_date: null,
+    }));
+
+    const { error } = await supabase.from("fee_payments").insert(rows);
+    if (error) {
+      toast.error("Failed to record balance payment");
+      setPayingBalance(false);
+      return;
+    }
+
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "paid_balance",
+      entity_type: "member",
+      entity_id: id,
+      description: `${member?.full_name} paid ${formatPKR(totalPaying)} toward outstanding balance`,
+      metadata: { amount: totalPaying, receiptNos },
+    });
+
+    toast.success(`Balance payment of ${formatPKR(totalPaying)} recorded`);
+    setPayBalanceModal(false);
+    setBalanceLines([{ method: "Cash", amount: "" }]);
+    setPayingBalance(false);
+    fetchMember();
   }
 
   async function renewMembership() {
@@ -709,11 +827,28 @@ export default function MemberDetailPage() {
   const currentPackage = (member as any).packages as PackageType | null;
   // All assigned packages for display — package_ids if set, else falls back
   // to the single package_id join (members that predate package_ids).
-  const assignedPackages: PackageType[] = (member.package_ids?.length ? member.package_ids : (member.package_id ? [member.package_id] : []))
+  const memberPackageIds = member.package_ids?.length ? member.package_ids : (member.package_id ? [member.package_id] : []);
+  const assignedPackages: PackageType[] = memberPackageIds
     .map((pid) => packages.find((p) => p.id === pid) ?? (pid === member.package_id ? currentPackage : null))
     .filter((p): p is PackageType => !!p);
   const currentTrainer = (member as any).trainer as StaffMember | null;
   const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
+  // Only ever set on the first row of a split-payment group, so this is
+  // never double-counted across the member's payment history.
+  const totalBalanceDue = payments.reduce((sum, p) => sum + (p.balance_due ?? 0), 0);
+  const oldestBalanceDueDate = payments
+    .filter((p) => (p.balance_due ?? 0) > 0 && p.balance_due_date)
+    .map((p) => p.balance_due_date as string)
+    .sort()[0] ?? null;
+
+  // Commission computed values (must be after finalAmount) — manual entry
+  // only. PT commission is now set per (trainer, member) on the trainer's
+  // own Staff page, independent of package/tier, not calculated here.
+  const COMMISSION_TYPES = ["trainer", "nutritionist", "physiotherapy"];
+  const showCommission = COMMISSION_TYPES.includes(feeType);
+  const commissionAmount = showCommission && commissionRate
+    ? Math.round(finalAmount * (Number(commissionRate) / 100))
+    : 0;
 
   return (
     <div className="flex flex-col flex-1">
@@ -762,6 +897,11 @@ export default function MemberDetailPage() {
               <div className="flex gap-2 mt-2 flex-wrap justify-center">
                 <Badge variant={statusVariant}>{statusLabel}</Badge>
                 {member.gender && <Badge variant="default">{member.gender}</Badge>}
+                {totalBalanceDue > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300">
+                    <Clock className="w-3 h-3" /> Pending Fees
+                  </span>
+                )}
               </div>
             </div>
 
@@ -894,6 +1034,24 @@ export default function MemberDetailPage() {
                   {payments.length} records
                 </p>
               </div>
+              {totalBalanceDue > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 sm:col-span-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-amber-700 font-medium">Balance Due</p>
+                      <p className="text-base font-bold text-amber-800 mt-1">
+                        {formatPKR(totalBalanceDue)}
+                        {oldestBalanceDueDate && (
+                          <span className="text-xs font-normal text-amber-700 ml-1.5">by {formatDate(oldestBalanceDueDate)}</span>
+                        )}
+                      </p>
+                    </div>
+                    <Button size="sm" onClick={openPayBalanceModal}>
+                      <CreditCard className="w-3.5 h-3.5" /> Pay Balance
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Package */}
@@ -1148,6 +1306,11 @@ export default function MemberDetailPage() {
                         {hasDiscount && (
                           <span className="inline-flex items-center gap-1 text-[10px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-semibold">
                             <Tag className="w-2.5 h-2.5" /> Discounted
+                          </span>
+                        )}
+                        {(p.balance_due ?? 0) > 0 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] bg-amber-100 text-amber-700 border border-amber-300 px-1.5 py-0.5 rounded-full font-semibold">
+                            <Clock className="w-2.5 h-2.5" /> {formatPKR(p.balance_due)} pending{p.balance_due_date ? ` by ${formatDate(p.balance_due_date)}` : ""}
                           </span>
                         )}
                       </div>
@@ -1492,30 +1655,36 @@ export default function MemberDetailPage() {
             </div>
           )}
 
-          {/* Payment method + note */}
-          <div className="grid grid-cols-2 gap-3">
-            <Select label="Payment Method" value={feeMethod} onChange={(e) => setFeeMethod(e.target.value)}>
-              {["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"].map((m) => (
-                <option key={m} value={m}>{m}</option>
-              ))}
-            </Select>
-            <Input
-              label="Note (optional)"
-              placeholder="e.g. June 2026 fee"
-              value={feeNote}
-              onChange={(e) => setFeeNote(e.target.value)}
-            />
-          </div>
+          {/* Payment methods (split across Cash/Bank/etc.) + partial payment */}
+          <PaymentSplitRows
+            fullAmount={finalAmount || originalAmount}
+            lines={feeLines}
+            onLinesChange={setFeeLines}
+            partial={feePartial}
+            onPartialChange={setFeePartial}
+          />
+
+          <Input
+            label="Note (optional)"
+            placeholder="e.g. June 2026 fee"
+            value={feeNote}
+            onChange={(e) => setFeeNote(e.target.value)}
+          />
 
           {/* Final summary before submit */}
           <div className={`rounded-lg px-4 py-3 flex items-center justify-between ${finalAmount < originalAmount && discountAmount > 0 ? "bg-green-50 border border-green-200" : "bg-[#F8F8F6] border border-[#E4E4DE]"}`}>
             <span className="text-sm font-medium text-[#4A4A44]">
-              {discountAmount > 0 ? "Final amount to collect:" : "Amount to collect:"}
+              {feePartial.isPartial ? "Collecting now:" : discountAmount > 0 ? "Final amount to collect:" : "Amount to collect:"}
             </span>
             <span className="text-xl font-bold text-[#1A1A16]">
-              {formatPKR(finalAmount || originalAmount)}
+              {formatPKR(collectingNow || finalAmount || originalAmount)}
             </span>
           </div>
+          {feePartial.isPartial && Number(feePartial.amountReceivedNow) > 0 && (
+            <p className="text-xs text-amber-700 -mt-2">
+              Balance of {formatPKR(Math.max((finalAmount || originalAmount) - Number(feePartial.amountReceivedNow), 0))} will be marked pending.
+            </p>
+          )}
 
           <div className="flex gap-3">
             <Button variant="secondary" onClick={() => { setFeeModal(false); setDiscountType("none"); setDiscountValue(""); }} className="flex-1">
@@ -1523,7 +1692,7 @@ export default function MemberDetailPage() {
             </Button>
             <Button onClick={recordFee} loading={saving} className="flex-1">
               <CreditCard className="w-4 h-4" />
-              Collect {formatPKR(finalAmount || originalAmount)}
+              Collect {formatPKR(collectingNow || finalAmount || originalAmount)}
             </Button>
           </div>
         </div>
@@ -1558,6 +1727,33 @@ export default function MemberDetailPage() {
           <div className="flex gap-3 pt-2">
             <Button variant="secondary" onClick={() => setFreezeModal(false)} className="flex-1">Cancel</Button>
             <Button onClick={freezeMembership} loading={saving} className="flex-1"><Snowflake className="w-4 h-4" /> Freeze</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Pay Balance Modal */}
+      <Modal open={payBalanceModal} onClose={() => setPayBalanceModal(false)} title="Pay Balance" size="sm">
+        <div className="p-5 space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 flex items-center justify-between">
+            <span className="text-sm text-amber-700 font-medium">Outstanding Balance</span>
+            <span className="text-lg font-bold text-amber-800">{formatPKR(totalBalanceDue)}</span>
+          </div>
+          <PaymentSplitRows
+            fullAmount={totalBalanceDue}
+            lines={balanceLines}
+            onLinesChange={setBalanceLines}
+            partial={emptyPartialState}
+            onPartialChange={() => {}}
+            allowPartial={false}
+          />
+          <p className="text-xs text-[#7A7A72]">
+            Paying less than the full balance keeps the remainder pending — no need to mark it partial again.
+          </p>
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setPayBalanceModal(false)} className="flex-1">Cancel</Button>
+            <Button onClick={payBalance} loading={payingBalance} className="flex-1">
+              <CreditCard className="w-4 h-4" /> Record Payment
+            </Button>
           </div>
         </div>
       </Modal>
@@ -1609,10 +1805,12 @@ export default function MemberDetailPage() {
                   <span className="text-[#7A7A72]">Payment Type</span>
                   <span className="capitalize font-medium">{receiptData.type}</span>
                 </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-[#7A7A72]">Payment Method</span>
-                  <span className="font-medium">{receiptData.method}</span>
-                </div>
+                {receiptData.lines.map((l, i) => (
+                  <div className="flex justify-between text-sm" key={i}>
+                    <span className="text-[#7A7A72]">Payment Method{receiptData.lines.length > 1 ? ` (${l.method})` : ""}</span>
+                    <span className="font-medium">{receiptData.lines.length > 1 ? formatPKR(l.amount) : l.method}</span>
+                  </div>
+                ))}
                 {receiptData.discountAmount > 0 && (
                   <>
                     <div className="flex justify-between text-sm">
@@ -1640,6 +1838,14 @@ export default function MemberDetailPage() {
                   {formatPKR(receiptData.amount)}
                 </span>
               </div>
+              {receiptData.balanceDue != null && receiptData.balanceDue > 0 && (
+                <div className="px-5 pb-4 -mt-2 flex justify-between items-center">
+                  <span className="text-xs font-semibold text-[#C04E10]">
+                    Balance Due{receiptData.balanceDueDate ? ` (by ${formatDate(receiptData.balanceDueDate)})` : ""}
+                  </span>
+                  <span className="text-sm font-bold text-[#C04E10]">{formatPKR(receiptData.balanceDue)}</span>
+                </div>
+              )}
 
               {/* Footer */}
               <div className="bg-[#FEF0E8] px-5 py-3 text-center border-t border-[#FDDCC8]">
@@ -1694,6 +1900,7 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   const [editValue, setEditValue] = useState("");
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const [nextIds, setNextIds] = useState<Record<string, number>>({});
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1819,12 +2026,34 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   async function removeEnrollment(serial: string) {
     const existing = enrollmentFor(serial);
     if (!existing) return;
-    await supabase.from("device_enrollments")
-      .update({ deleted_at: new Date().toISOString() })
-      .eq("id", existing.id);
-    toast.success("Enrollment removed");
-    await load();
-    onSaved();
+    setRemoving(serial);
+    try {
+      // Queue the device-side delete first, while we still know the PIN —
+      // soft-deleting the enrollment row below would remove our only record
+      // of it. If this fails (e.g. network error), we still remove our
+      // record below rather than blocking on a device we can't reach right
+      // now — worst case the user just lingers on that machine until it's
+      // cleaned up manually or re-enrolled and removed again later.
+      const res = await fetch("/api/devices/delete-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: memberId, device_serial: serial, device_user_id: existing.device_user_id }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        toast.error(data.error ?? "Could not queue device removal — enrollment record removed anyway");
+      }
+
+      await supabase.from("device_enrollments")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", existing.id);
+      toast.success("Enrollment removed — device will delete this user within ~30 seconds");
+      setLastCmds((prev) => { const next = { ...prev }; delete next[serial]; return next; });
+      await load();
+      onSaved();
+    } finally {
+      setRemoving(null);
+    }
   }
 
   async function pushToDevice(serial: string) {
@@ -1917,8 +2146,13 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
                       </button>
                       {enr && (
                         <button onClick={() => removeEnrollment(dev.serial_no)}
-                          className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5">
-                          <X className="w-2.5 h-2.5" /> Remove
+                          disabled={removing === dev.serial_no}
+                          className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5 disabled:opacity-50">
+                          {removing === dev.serial_no
+                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                            : <X className="w-2.5 h-2.5" />
+                          }
+                          {removing === dev.serial_no ? "Removing…" : "Remove"}
                         </button>
                       )}
                     </div>

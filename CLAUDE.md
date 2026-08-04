@@ -194,12 +194,24 @@ CREATE TABLE members (
   monthly_fee     NUMERIC(10,2),
   training_fee    NUMERIC(10,2),
   -- Status
-  status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'archived', 'frozen')),
+  status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'archived', 'frozen', 'pending_family_approval')),
   frozen_until    DATE,
   freeze_reason   TEXT,
   -- Biometric
   thumb_registered BOOLEAN DEFAULT FALSE,
   barcode         TEXT UNIQUE,
+  -- Family membership (added 2026-08-04) — set when registered via
+  -- "Register as Family Member". Payment is collected in full at
+  -- registration regardless; status starts as 'pending_family_approval'
+  -- until an Owner/Manager reviews it on /dashboard/family-approvals and
+  -- records a pricing decision here (no refund/ledger system — just a note).
+  family_primary_member_id UUID REFERENCES members(id),
+  family_relationship      TEXT,
+  family_notes             TEXT,
+  family_pricing_decision  TEXT CHECK (family_pricing_decision IN ('free', 'discounted', 'full')),
+  family_pricing_note      TEXT,
+  family_approved_by       UUID REFERENCES system_users(id),
+  family_approved_at       TIMESTAMPTZ,
   -- Meta
   comment         TEXT,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
@@ -254,6 +266,10 @@ CREATE TABLE system_users (
 );
 
 -- Fee payments
+-- NOTE: this table has accumulated more columns via later migrations than
+-- shown below (receipt_no, balance_due, balance_due_date, commission_*) —
+-- this block only reflects the original schema plus package_breakdown
+-- (added 2026-08-04). Check supabase/migrations/ for the full live shape.
 CREATE TABLE fee_payments (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   member_id       UUID REFERENCES members(id) NOT NULL,
@@ -264,6 +280,10 @@ CREATE TABLE fee_payments (
   month_covered   DATE,          -- which month this payment covers
   collected_by    UUID REFERENCES system_users(id),
   note            TEXT,
+  -- Package Payment's per-package discount breakdown (registration flow) —
+  -- set only on the first row of a split-payment-method group. Shape:
+  -- [{ name, original, discount_type, discount_value, discount_amount, final }, ...]
+  package_breakdown JSONB,
   created_at      TIMESTAMPTZ DEFAULT NOW(),
   deleted_at      TIMESTAMPTZ
 );
@@ -357,6 +377,8 @@ CREATE TABLE sms_log (
 | View dashboard | ✓ | ✓ | ✓ | ✗ | ✓ |
 | Add members | ✓ | ✓ | ✓ | ✗ | ✗ |
 | Approve submissions | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Approve family members (set pricing) | ✓ | ✓ | ✗ | ✗ | ✗ |
+| Set trainer commission (% or fixed Rs) | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Collect fees | ✓ | ✓ | ✓ | ✗ | ✗ |
 | View reports | ✓ | ✓ | ✗ | ✗ | ✗ |
 | Edit packages | ✓ | ✓ | ✗ | ✗ | ✗ |
@@ -467,4 +489,4 @@ CREATE TABLE sms_log (
 
 ---
 
-*Last updated: June 2026 — Faisal Munir (DesignnStudio)*
+*Last updated: August 2026 — Faisal Munir (DesignnStudio)*

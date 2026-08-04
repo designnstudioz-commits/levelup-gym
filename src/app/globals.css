@@ -50,3 +50,15 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #b0b0b0;
 }
+
+/* Global print rule — every dashboard page shares one layout (Sidebar +
+   DeviceStatusBanner, see src/app/dashboard/layout.tsx), so without this,
+   printing any receipt/slip page (fee receipts, registration receipts,
+   salary slips) would also print the sidebar and offline-device banner
+   around it. Both are tagged .no-print directly; individual pages can also
+   use this class for their own on-screen-only controls. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

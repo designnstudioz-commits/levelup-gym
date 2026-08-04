@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import {
   ArrowLeft, User, Phone, Mail, CreditCard, Calendar,
   Edit3, Check, X, Dumbbell, Users, Banknote,
-  UserCheck, Clock, CheckCircle, XCircle, Fingerprint, Send, Loader2,
+  UserCheck, Clock, CheckCircle, XCircle, Fingerprint, Send, Loader2, Printer,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -18,11 +18,11 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { StatsCard } from "@/components/ui/StatsCard";
-import { formatDate, formatPKR } from "@/lib/utils";
-import type { StaffMember, Member, StaffRole } from "@/types/database";
-import { differenceInMonths } from "date-fns";
+import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/types/database";
+import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
-type MemberWithPackage = Member & { packages?: { name: string } | null };
+type MemberWithPackage = Member & { packages?: { name: string; monthly_fee: number } | null };
 
 const SPECIALIZATIONS = [
   "Strength & Conditioning", "CrossFit & HIIT", "MMA & Combat Sports",
@@ -48,7 +48,17 @@ export default function StaffDetailPage() {
 
   const [staff, setStaff] = useState<StaffMember | null>(null);
   const [assignedMembers, setAssignedMembers] = useState<MemberWithPackage[]>([]);
-  const [totalTrainerFees, setTotalTrainerFees] = useState(0);
+  // Manually-set commission % per assigned member (independent of package).
+  const [commissionRates, setCommissionRates] = useState<TrainerMemberCommission[]>([]);
+  // This member's actual collected membership/trainer fee_payments — the
+  // basis the manual %/fixed-amount is applied against. id + receipt_no are
+  // needed to dedupe a split (Cash+Bank) payment into one logical
+  // transaction via countLogicalPayments() for the fixed-amount mode.
+  const [memberPayments, setMemberPayments] = useState<{ id: string; member_id: string; amount: number; payment_date: string; receipt_no: string | null }[]>([]);
+  const [commissionInputs, setCommissionInputs] = useState<Record<string, string>>({});
+  const [commissionTypeInputs, setCommissionTypeInputs] = useState<Record<string, "percent" | "fixed">>({});
+  const [commissionAmountInputs, setCommissionAmountInputs] = useState<Record<string, string>>({});
+  const [savingCommission, setSavingCommission] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -73,20 +83,16 @@ export default function StaffDetailPage() {
 
   const fetchStaff = useCallback(async () => {
     const supabase = createClient();
-    const [{ data: staffData }, { data: members }, { data: fees }] = await Promise.all([
+    const [{ data: staffData }, { data: members }, { data: rates }] = await Promise.all([
       supabase.from("staff_members").select("*").eq("id", id).single(),
       supabase
         .from("members")
-        .select("*, packages(name)")
+        .select("*, packages(name, monthly_fee)")
         .eq("trainer_id", id)
         .eq("status", "active")
         .is("deleted_at", null)
         .order("full_name"),
-      supabase
-        .from("fee_payments")
-        .select("amount")
-        .eq("payment_type", "trainer")
-        .is("deleted_at", null),
+      supabase.from("trainer_member_commissions").select("*").eq("trainer_id", id).is("deleted_at", null),
     ]);
 
     if (staffData) {
@@ -103,8 +109,35 @@ export default function StaffDetailPage() {
         bio: staffData.bio ?? "",
       });
     }
-    setAssignedMembers((members as MemberWithPackage[]) ?? []);
-    setTotalTrainerFees(fees?.reduce((sum: number, f: any) => sum + (f.amount ?? 0), 0) ?? 0);
+    const membersList = (members as MemberWithPackage[]) ?? [];
+    setAssignedMembers(membersList);
+    const ratesList = (rates as TrainerMemberCommission[]) ?? [];
+    setCommissionRates(ratesList);
+    setCommissionInputs(
+      Object.fromEntries(membersList.map((m) => [m.id, String(ratesList.find((r) => r.member_id === m.id)?.commission_percent ?? "")]))
+    );
+    setCommissionTypeInputs(
+      Object.fromEntries(membersList.map((m) => [m.id, (ratesList.find((r) => r.member_id === m.id)?.commission_type ?? "percent") as "percent" | "fixed"]))
+    );
+    setCommissionAmountInputs(
+      Object.fromEntries(membersList.map((m) => [m.id, String(ratesList.find((r) => r.member_id === m.id)?.commission_amount ?? "")]))
+    );
+
+    // Each assigned member's own collected membership/trainer fee_payments —
+    // fetched separately since it depends on membersList, which isn't known
+    // until the Promise.all above resolves.
+    if (membersList.length > 0) {
+      const { data: payments } = await supabase
+        .from("fee_payments")
+        .select("id, member_id, amount, payment_date, receipt_no")
+        .in("member_id", membersList.map((m) => m.id))
+        .in("payment_type", COMMISSION_ELIGIBLE_TYPES)
+        .is("deleted_at", null);
+      setMemberPayments(payments ?? []);
+    } else {
+      setMemberPayments([]);
+    }
+
     setLoading(false);
   }, [id]);
 
@@ -223,6 +256,124 @@ export default function StaffDetailPage() {
     fetchStaff();
   }
 
+  // Manually set/update this trainer's commission for one assigned
+  // member — independent of package/tier. Either a percentage (of the
+  // payment, minus the flat gym cut) or a flat Rs amount per qualifying
+  // payment — never both; the unused column is written as its neutral
+  // placeholder (0 / null) since commission_percent stays NOT NULL.
+  // Upserts by (trainer_id, member_id) so re-saving just updates the row.
+  async function saveCommissionRate(memberId: string) {
+    const type = commissionTypeInputs[memberId] ?? "percent";
+    let payload: { commission_type: "percent" | "fixed"; commission_percent: number; commission_amount: number | null };
+
+    if (type === "percent") {
+      const raw = commissionInputs[memberId] ?? "";
+      const percent = Number(raw);
+      if (raw.trim() === "" || isNaN(percent) || percent < 0 || percent > 100) {
+        toast.error("Enter a valid percentage (0–100)");
+        return;
+      }
+      payload = { commission_type: "percent", commission_percent: percent, commission_amount: null };
+    } else {
+      const raw = commissionAmountInputs[memberId] ?? "";
+      const amount = Number(raw);
+      if (raw.trim() === "" || isNaN(amount) || amount < 0) {
+        toast.error("Enter a valid fixed amount");
+        return;
+      }
+      payload = { commission_type: "fixed", commission_percent: 0, commission_amount: amount };
+    }
+
+    setSavingCommission(memberId);
+    const supabase = createClient();
+    const existing = commissionRates.find((r) => r.member_id === memberId);
+
+    const { error } = existing
+      ? await supabase.from("trainer_member_commissions")
+          .update({ ...payload, updated_by: currentUser?.id ?? null, updated_at: new Date().toISOString() })
+          .eq("id", existing.id)
+      : await supabase.from("trainer_member_commissions")
+          .insert({ trainer_id: id, member_id: memberId, ...payload, updated_by: currentUser?.id ?? null });
+
+    if (error) {
+      toast.error("Failed to save commission rate");
+      setSavingCommission(null);
+      return;
+    }
+
+    const memberName = assignedMembers.find((m) => m.id === memberId)?.full_name ?? "member";
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "updated_trainer_commission",
+      entity_type: "staff_member",
+      entity_id: id,
+      description: type === "percent"
+        ? `Set commission rate for ${memberName} to ${payload.commission_percent}%`
+        : `Set commission for ${memberName} to a flat ${formatPKR(payload.commission_amount ?? 0)} per payment`,
+    });
+
+    toast.success("Commission rate saved");
+    setSavingCommission(null);
+    fetchStaff();
+  }
+
+  // Clears one member's saved commission rate (soft-delete) — used by the
+  // per-row clear button. If nothing's been saved yet (just a typed,
+  // unsaved input), this just resets the local input instead of hitting
+  // the DB at all.
+  async function clearCommissionRate(memberId: string) {
+    const existing = commissionRates.find((r) => r.member_id === memberId);
+    if (!existing) {
+      setCommissionInputs((prev) => ({ ...prev, [memberId]: "" }));
+      setCommissionAmountInputs((prev) => ({ ...prev, [memberId]: "" }));
+      return;
+    }
+    setSavingCommission(memberId);
+    const supabase = createClient();
+    const { error } = await supabase.from("trainer_member_commissions").update({ deleted_at: new Date().toISOString() }).eq("id", existing.id);
+    if (error) {
+      toast.error("Failed to clear commission");
+      setSavingCommission(null);
+      return;
+    }
+    const memberName = assignedMembers.find((m) => m.id === memberId)?.full_name ?? "member";
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "cleared_trainer_commission",
+      entity_type: "staff_member",
+      entity_id: id,
+      description: `Cleared commission rate for ${memberName}`,
+    });
+    toast.success("Commission cleared");
+    setSavingCommission(null);
+    fetchStaff();
+  }
+
+  // Bulk-clears every assigned member's saved commission rate at once.
+  async function clearAllCommissions() {
+    if (commissionRates.length === 0) { toast.info("No commission rates to clear"); return; }
+    if (!confirm(`Clear commission rates for all ${commissionRates.length} member(s) with a rate set? This can't be undone — rates can be re-entered individually afterward.`)) return;
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("trainer_member_commissions")
+      .update({ deleted_at: new Date().toISOString() })
+      .in("id", commissionRates.map((r) => r.id));
+    if (error) {
+      toast.error("Failed to clear commissions");
+      return;
+    }
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "cleared_all_trainer_commissions",
+      entity_type: "staff_member",
+      entity_id: id,
+      description: `Cleared all ${commissionRates.length} commission rate(s) for ${staff?.full_name}`,
+    });
+    toast.success("All commission rates cleared");
+    fetchStaff();
+  }
+
   if (loading) {
     return (
       <div className="flex flex-col flex-1">
@@ -252,6 +403,26 @@ export default function StaffDetailPage() {
   const experienceText = experienceMonths >= 12
     ? `${Math.floor(experienceMonths / 12)}y ${experienceMonths % 12}m`
     : `${experienceMonths}m`;
+
+  // Commission = manually-set % × (actual collected payment − flat gym cut),
+  // per member, summed. Only counts payments that have actually been
+  // collected — nothing is projected off a member's package/monthly_fee.
+  const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
+  // "This Month"/"All Time" are open-ended ranges (no periodEnd needed —
+  // there's nothing dated beyond today). "Last Month" is a closed period,
+  // so it needs an explicit end date or it would keep pulling in every
+  // payment from last month through today.
+  const lastMonthDate = subMonths(new Date(), 1);
+  const lastMonthStart = format(startOfMonth(lastMonthDate), "yyyy-MM-dd");
+  const lastMonthEnd = format(endOfMonth(lastMonthDate), "yyyy-MM-dd");
+  function commissionForMember(memberId: string, periodStart: string | null, periodEnd: string | null = null): number {
+    const rate = commissionRates.find((r) => r.member_id === memberId);
+    const rows = memberPayments.filter((p) => p.member_id === memberId);
+    return calculateTrainerCommission(rate, rows, periodStart, periodEnd);
+  }
+  const commissionThisMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, monthStart), 0);
+  const commissionLastMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, lastMonthStart, lastMonthEnd), 0);
+  const commissionAllTime = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, null), 0);
 
   return (
     <div className="flex flex-col flex-1">
@@ -314,85 +485,68 @@ export default function StaffDetailPage() {
           />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-          {/* Profile card */}
-          <div className="lg:col-span-1 space-y-4">
-            <Card>
-              {/* Avatar + badge */}
-              <div className="flex flex-col items-center text-center pb-4 border-b border-[#E4E4DE] mb-4">
-                <div className="w-20 h-20 rounded-full bg-[#1A1A1A] flex items-center justify-center mb-3 overflow-hidden">
-                  {staff.photo_url ? (
-                    <img src={staff.photo_url} alt="" className="w-20 h-20 object-cover" />
-                  ) : (
-                    <span className="text-white font-bold text-2xl">
-                      {staff.full_name.charAt(0)}
-                    </span>
-                  )}
-                </div>
-                <h2 className="text-lg font-bold text-[#1A1A16]">{staff.full_name}</h2>
-                {staff.specialization && (
-                  <p className="text-sm text-[#7A7A72] mt-0.5">{staff.specialization}</p>
-                )}
-                <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border mt-2 ${ROLE_COLORS[staff.role ?? "Other"]}`}>
-                  {staff.role}
+        {/* Profile banner — one highlighted row instead of a tall sidebar
+            card, so the sections below (Assigned Members especially) get
+            the full page width. */}
+        <div className="bg-[#FEF0E8] border-2 border-[#FDDCC8] rounded-2xl p-4 sm:p-5 flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-14 h-14 rounded-full bg-[#1A1A1A] flex items-center justify-center flex-shrink-0 overflow-hidden">
+              {staff.photo_url ? (
+                <img src={staff.photo_url} alt="" className="w-14 h-14 object-cover" />
+              ) : (
+                <span className="text-white font-bold text-lg">
+                  {staff.full_name.charAt(0)}
                 </span>
-              </div>
-
-              {/* Contact details */}
-              <div className="space-y-2.5 text-sm">
-                {staff.phone && (
-                  <div className="flex items-center gap-2 text-[#4A4A44]">
-                    <Phone className="w-3.5 h-3.5 text-[#7A7A72]" /> {staff.phone}
-                  </div>
-                )}
-                {staff.email && (
-                  <div className="flex items-center gap-2 text-[#4A4A44]">
-                    <Mail className="w-3.5 h-3.5 text-[#7A7A72]" /> {staff.email}
-                  </div>
-                )}
-                {staff.cnic && (
-                  <div className="flex items-center gap-2 text-[#4A4A44]">
-                    <UserCheck className="w-3.5 h-3.5 text-[#7A7A72]" /> {staff.cnic}
-                  </div>
-                )}
-                {staff.joining_date && (
-                  <div className="flex items-center gap-2 text-[#4A4A44]">
-                    <Calendar className="w-3.5 h-3.5 text-[#7A7A72]" />
-                    Joined {formatDate(staff.joining_date)}
-                  </div>
-                )}
-                {staff.salary && (
-                  <div className="flex items-center gap-2 text-[#4A4A44]">
-                    <CreditCard className="w-3.5 h-3.5 text-[#7A7A72]" />
-                    {formatPKR(staff.salary)} / month
-                  </div>
-                )}
-              </div>
-
-              {staff.bio && (
-                <div className="mt-4 pt-4 border-t border-[#E4E4DE]">
-                  <p className="text-xs text-[#7A7A72] font-semibold uppercase tracking-wide mb-1">Bio</p>
-                  <p className="text-sm text-[#4A4A44]">{staff.bio}</p>
-                </div>
               )}
-
-              <div className="mt-4 pt-4 border-t border-[#E4E4DE]">
-                <button
-                  onClick={toggleStatus}
-                  className={`w-full py-2 rounded-lg text-sm font-medium transition-colors border ${
-                    staff.status === "active"
-                      ? "text-red-600 border-red-200 hover:bg-red-50"
-                      : "text-green-600 border-green-200 hover:bg-green-50"
-                  }`}
-                >
-                  {staff.status === "active" ? "Mark as Inactive" : "Mark as Active"}
-                </button>
-              </div>
-            </Card>
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-[#1A1A16] leading-tight">{staff.full_name}</h2>
+              {staff.specialization && (
+                <p className="text-xs text-[#7A7A72]">{staff.specialization}</p>
+              )}
+              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border mt-1 ${ROLE_COLORS[staff.role ?? "Other"]}`}>
+                {staff.role}
+              </span>
+            </div>
           </div>
 
-          {/* Right column */}
-          <div className="lg:col-span-2 space-y-4">
+          <div className="hidden sm:block w-px h-10 bg-[#FDDCC8]" />
+
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-[#4A4A44]">
+            {staff.phone && (
+              <span className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5 text-[#C04E10]" /> {staff.phone}</span>
+            )}
+            {staff.email && (
+              <span className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5 text-[#C04E10]" /> {staff.email}</span>
+            )}
+            {staff.cnic && (
+              <span className="flex items-center gap-1.5"><UserCheck className="w-3.5 h-3.5 text-[#C04E10]" /> {staff.cnic}</span>
+            )}
+            {staff.joining_date && (
+              <span className="flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5 text-[#C04E10]" /> Joined {formatDate(staff.joining_date)}</span>
+            )}
+            {staff.salary && (
+              <span className="flex items-center gap-1.5"><CreditCard className="w-3.5 h-3.5 text-[#C04E10]" /> {formatPKR(staff.salary)} / month</span>
+            )}
+          </div>
+
+          {staff.bio && (
+            <p className="text-xs text-[#7A7A72] italic w-full sm:w-auto sm:flex-1 sm:min-w-[160px]">{staff.bio}</p>
+          )}
+
+          <button
+            onClick={toggleStatus}
+            className={`ml-auto px-4 py-2 rounded-lg text-sm font-medium transition-colors border bg-white ${
+              staff.status === "active"
+                ? "text-red-600 border-red-200 hover:bg-red-50"
+                : "text-green-600 border-green-200 hover:bg-green-50"
+            }`}
+          >
+            {staff.status === "active" ? "Mark as Inactive" : "Mark as Active"}
+          </button>
+        </div>
+
+        <div className="space-y-4">
             {/* Edit form */}
             {editing && (
               <Card>
@@ -477,9 +631,16 @@ export default function StaffDetailPage() {
                     <span className="ml-2 text-xs font-normal text-[#7A7A72]">({assignedMembers.length})</span>
                   </h3>
                 </div>
-                <Link href="/dashboard/members">
-                  <span className="text-xs text-[#F06418] hover:underline">All members →</span>
-                </Link>
+                <div className="flex items-center gap-4">
+                  {staff.role === "Trainer" && commissionRates.length > 0 && (
+                    <button onClick={clearAllCommissions} className="text-xs text-red-600 hover:underline flex items-center gap-1">
+                      <X className="w-3 h-3" /> Clear All Commissions
+                    </button>
+                  )}
+                  <Link href="/dashboard/members">
+                    <span className="text-xs text-[#F06418] hover:underline">All members →</span>
+                  </Link>
+                </div>
               </div>
 
               {assignedMembers.length === 0 ? (
@@ -493,44 +654,125 @@ export default function StaffDetailPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-[#E4E4DE]">
-                  {assignedMembers.map((m) => (
-                    <button
-                      key={m.id}
-                      onClick={() => router.push(`/dashboard/members/${m.id}`)}
-                      className="w-full px-5 py-3 flex items-center justify-between hover:bg-[#F8F8F6] transition-colors text-left"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                          {m.photo_url ? (
-                            <img src={m.photo_url} alt="" className="w-8 h-8 object-cover" />
-                          ) : (
-                            <span className="text-[#F06418] text-xs font-bold">{m.full_name.charAt(0)}</span>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
+                      <tr>
+                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Member</th>
+                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Package</th>
+                        <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">Package Fee</th>
+                        {staff.role === "Trainer" && <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Commission</th>}
+                        {staff.role === "Trainer" && <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">This Month</th>}
+                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Expiry</th>
+                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E4E4DE]">
+                      {assignedMembers.map((m) => {
+                        const { label: statusLabel, variant: statusVariant } = getMemberStatusDisplay(m.status, m.expiry_date);
+                        const thisMonthCommission = commissionForMember(m.id, monthStart);
+                        const hasCommissionValue = (commissionInputs[m.id] ?? "").trim() !== "" || (commissionAmountInputs[m.id] ?? "").trim() !== "";
+                        return (
+                        <tr
+                          key={m.id}
+                          onClick={() => router.push(`/dashboard/members/${m.id}`)}
+                          className="hover:bg-[#F8F8F6] transition-colors cursor-pointer"
+                        >
+                          <td className="px-5 py-3">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
+                                {m.photo_url ? (
+                                  <img src={m.photo_url} alt="" className="w-8 h-8 object-cover" />
+                                ) : (
+                                  <span className="text-[#F06418] text-xs font-bold">{m.full_name.charAt(0)}</span>
+                                )}
+                              </div>
+                              <div>
+                                <p className="text-sm font-semibold text-[#1A1A16] whitespace-nowrap">{m.full_name}</p>
+                                <p className="text-xs text-[#7A7A72] whitespace-nowrap">{m.phone}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">
+                            {m.packages?.name ?? "No package"}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-[#4A4A44] text-right whitespace-nowrap">
+                            {m.packages?.monthly_fee ? formatPKR(m.packages.monthly_fee) : "—"}
+                          </td>
+                          {staff.role === "Trainer" && (
+                            <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center gap-1.5">
+                                <select
+                                  value={commissionTypeInputs[m.id] ?? "percent"}
+                                  onChange={(e) => setCommissionTypeInputs((prev) => ({ ...prev, [m.id]: e.target.value as "percent" | "fixed" }))}
+                                  title="Commission mode"
+                                  className="text-xs px-1 py-1 rounded border border-[#E4E4DE] bg-white focus:outline-none focus:ring-1 focus:ring-[#F06418]"
+                                >
+                                  <option value="percent">%</option>
+                                  <option value="fixed">Rs</option>
+                                </select>
+                                {(commissionTypeInputs[m.id] ?? "percent") === "percent" ? (
+                                  <input
+                                    type="number" min={0} max={100}
+                                    value={commissionInputs[m.id] ?? ""}
+                                    onChange={(e) => setCommissionInputs((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                                    onBlur={() => { if ((commissionInputs[m.id] ?? "").trim() !== "") saveCommissionRate(m.id); }}
+                                    placeholder="%"
+                                    title="Commission % for this member"
+                                    className="w-12 text-xs px-1.5 py-1 rounded border border-[#E4E4DE] text-center focus:outline-none focus:ring-1 focus:ring-[#F06418]"
+                                  />
+                                ) : (
+                                  <input
+                                    type="number" min={0}
+                                    value={commissionAmountInputs[m.id] ?? ""}
+                                    onChange={(e) => setCommissionAmountInputs((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                                    onBlur={() => { if ((commissionAmountInputs[m.id] ?? "").trim() !== "") saveCommissionRate(m.id); }}
+                                    placeholder="Rs"
+                                    title="Flat commission per qualifying payment"
+                                    className="w-16 text-xs px-1.5 py-1 rounded border border-[#E4E4DE] text-center focus:outline-none focus:ring-1 focus:ring-[#F06418]"
+                                  />
+                                )}
+                                {(hasCommissionValue) && (
+                                  <button
+                                    onClick={() => clearCommissionRate(m.id)}
+                                    disabled={savingCommission === m.id}
+                                    title="Clear commission"
+                                    className="p-1 rounded text-[#7A7A72] hover:text-red-600 hover:bg-red-50 disabled:opacity-50 flex-shrink-0"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                                {savingCommission === m.id && <Loader2 className="w-3 h-3 animate-spin text-[#7A7A72] flex-shrink-0" />}
+                              </div>
+                            </td>
                           )}
-                        </div>
-                        <div>
-                          <p className="text-sm font-semibold text-[#1A1A16]">{m.full_name}</p>
-                          <p className="text-xs text-[#7A7A72]">
-                            {(m as any).packages?.name ?? "No package"} · {m.phone}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {m.expiry_date && (
-                          <span className="text-xs text-[#7A7A72]">
-                            Exp: {formatDate(m.expiry_date)}
-                          </span>
-                        )}
-                        <Badge variant={m.status === "active" ? "active" : "inactive"}>
-                          {m.status}
-                        </Badge>
-                      </div>
-                    </button>
-                  ))}
+                          {staff.role === "Trainer" && (
+                            <td className="px-4 py-3 text-right whitespace-nowrap">
+                              {thisMonthCommission > 0 ? (
+                                <span className="text-xs font-semibold text-[#C04E10]">{formatPKR(thisMonthCommission)}</span>
+                              ) : (
+                                <span className="text-xs text-[#7A7A72]">—</span>
+                              )}
+                            </td>
+                          )}
+                          <td className="px-4 py-3 text-xs text-[#7A7A72] whitespace-nowrap">
+                            {m.expiry_date ? formatDate(m.expiry_date) : "—"}
+                          </td>
+                          <td className="px-5 py-3 whitespace-nowrap">
+                            <Badge variant={statusVariant}>
+                              {statusLabel}
+                            </Badge>
+                          </td>
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </Card>
 
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Device Enrollment */}
             <Card>
               <div className="flex items-center justify-between mb-3">
@@ -617,12 +859,55 @@ export default function StaffDetailPage() {
                     {staff.joining_date ? experienceText : "—"}
                   </p>
                 </div>
+                {staff.role === "Trainer" && (
+                  <>
+                    <div className="bg-[#FEF0E8] rounded-lg p-3">
+                      <p className="text-xs text-[#C04E10]">PT Commission (This Month)</p>
+                      <p className="text-base font-bold text-[#1A1A16] mt-1">
+                        {formatPKR(commissionThisMonth)}
+                      </p>
+                    </div>
+                    <div className="bg-[#FEF0E8] rounded-lg p-3">
+                      <p className="text-xs text-[#C04E10]">PT Commission (Last Month)</p>
+                      <p className="text-base font-bold text-[#1A1A16] mt-1">
+                        {formatPKR(commissionLastMonth)}
+                      </p>
+                    </div>
+                    <div className="bg-[#FEF0E8] rounded-lg p-3">
+                      <p className="text-xs text-[#C04E10]">PT Commission (All Time)</p>
+                      <p className="text-base font-bold text-[#1A1A16] mt-1">
+                        {formatPKR(commissionAllTime)}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
-              <p className="text-xs text-[#7A7A72] mt-3">
-                Payroll processing coming in Phase 2.
-              </p>
+              {staff.role === "Trainer" && (
+                <>
+                  <div className="mt-4 pt-4 border-t border-[#E4E4DE] flex items-center justify-between">
+                    <span className="text-sm font-semibold text-[#1A1A16]">Total Payable (This Month)</span>
+                    <span className="text-lg font-bold text-[#F06418]">
+                      {formatPKR((staff.salary ?? 0) + commissionThisMonth)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#7A7A72] mt-2">
+                    Commission is set manually per assigned member below (independent of package/tier) and applied to their actual collected payments, minus a flat Rs {PT_GYM_FEE_PORTION.toLocaleString()} gym cut.
+                  </p>
+                </>
+              )}
+              <Link
+                href={`/dashboard/staff/${id}/salary-slip`}
+                className="mt-4 flex items-center justify-center gap-2 w-full px-4 py-2.5 bg-[#F06418] text-white rounded-lg text-sm font-semibold hover:bg-[#C04E10] transition-colors"
+              >
+                <Printer className="w-4 h-4" /> Generate Salary Slip
+              </Link>
+              {staff.role === "Trainer" && (
+                <p className="text-xs text-[#7A7A72] mt-2 text-center">
+                  Need a different month's commission? The salary slip has its own period picker — pick any month there.
+                </p>
+              )}
             </Card>
-          </div>
+            </div>
         </div>
       </div>
     </div>

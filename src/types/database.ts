@@ -1,6 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type MemberStatus = "active" | "inactive" | "archived" | "frozen";
+export type MemberStatus = "active" | "inactive" | "archived" | "frozen" | "pending_family_approval";
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 export type PackageType = "Individual" | "Family" | "Couple" | "Daily";
 export type PaymentMethod = "Cash" | "Bank" | "Card" | "EasyPaisa" | "JazzCash";
@@ -177,6 +177,18 @@ export interface Member {
   thumb_registered: boolean;
   barcode: string | null;
   device_user_id: string | null;
+  // Family membership — set when this member was registered as a family
+  // member linked to an existing primary member. Payment is still
+  // collected in full at registration; family_pricing_decision is only
+  // set later, by an Owner/Manager reviewing the "pending_family_approval"
+  // status on /dashboard/family-approvals.
+  family_primary_member_id: string | null;
+  family_relationship: string | null;
+  family_notes: string | null;
+  family_pricing_decision: "free" | "discounted" | "full" | null;
+  family_pricing_note: string | null;
+  family_approved_by: string | null;
+  family_approved_at: string | null;
   // Meta
   comment: string | null;
   created_at: string;
@@ -187,6 +199,19 @@ export interface Member {
 export interface MemberWithJoins extends Member {
   package?: Package | null;
   trainer?: StaffMember | null;
+}
+
+// One line item within fee_payments.package_breakdown — a registration's
+// Package Payment can cover several independently-discounted packages in
+// one collection; this is the per-package detail for receipts. Only set
+// on the first row of a split-payment-method group (see FeePayment below).
+export interface PackageBreakdownItem {
+  name: string;
+  original: number;
+  discount_type: "none" | "percent" | "amount" | null;
+  discount_value: number | null;
+  discount_amount: number;
+  final: number;
 }
 
 export interface FeePayment {
@@ -200,7 +225,53 @@ export interface FeePayment {
   receipt_no: string | null;
   collected_by: string | null;
   note: string | null;
+  commission_staff_id: string | null;
+  commission_rate: number | null;
+  commission_amount: number | null;
+  // Only ever set on the first row of a split-payment-method group — every
+  // other row in the group has balance_due = 0, balance_due_date = null, so
+  // SUM(balance_due) per member is never double-counted.
+  balance_due: number;
+  balance_due_date: string | null;
+  // Per-package discount breakdown for a registration's Package Payment —
+  // same first-row-only convention as balance_due. Null on every other row
+  // in the group, and on all historical rows predating this column.
+  package_breakdown: PackageBreakdownItem[] | null;
   created_at: string;
+  deleted_at: string | null;
+}
+
+export interface PtCommissionRate {
+  id: string;
+  package_id: string;
+  total_fee: number;
+  gym_fee: number;
+  pt_fee: number;
+  trainer_share_percent: number;
+  trainer_share_amount: number;
+  status: "active" | "inactive";
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+// Manually-set commission % per (trainer, member) pair — independent of
+// package/tier. Supersedes PtCommissionRate for actual commission
+// calculation; that table is left in place but unused.
+export interface TrainerMemberCommission {
+  id: string;
+  trainer_id: string;
+  member_id: string;
+  commission_percent: number;
+  // "fixed" mode reads commission_amount instead — a flat Rs amount per
+  // qualifying payment, rather than a percentage of it. commission_percent
+  // stays 0 (unused placeholder) when commission_type is "fixed", since
+  // that column is NOT NULL.
+  commission_type: "percent" | "fixed";
+  commission_amount: number | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
   deleted_at: string | null;
 }
 
