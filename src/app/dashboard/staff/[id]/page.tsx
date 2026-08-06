@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { StatsCard } from "@/components/ui/StatsCard";
-import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, isPTPackage, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
 import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/types/database";
 import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
@@ -56,6 +56,12 @@ export default function StaffDetailPage() {
 
   const [staff, setStaff] = useState<StaffMember | null>(null);
   const [assignedMembers, setAssignedMembers] = useState<MemberWithPackage[]>([]);
+  // All packages, keyed by id — needed because a member's single joined
+  // `packages` (via the legacy package_id column) can be stale once they
+  // have multiple packages (package_ids): it may point at whichever
+  // package was first selected, not the PT one a trainer actually cares
+  // about. displayPackageFor() below prefers the real PT package.
+  const [packagesById, setPackagesById] = useState<Record<string, { name: string; monthly_fee: number }>>({});
   // Manually-set commission % per assigned member (independent of package).
   const [commissionRates, setCommissionRates] = useState<TrainerMemberCommission[]>([]);
   // This member's actual collected membership/trainer fee_payments — the
@@ -94,7 +100,7 @@ export default function StaffDetailPage() {
 
   const fetchStaff = useCallback(async () => {
     const supabase = createClient();
-    const [{ data: staffData }, { data: members }, { data: rates }] = await Promise.all([
+    const [{ data: staffData }, { data: members }, { data: rates }, { data: allPackages }] = await Promise.all([
       supabase.from("staff_members").select("*").eq("id", id).single(),
       supabase
         .from("members")
@@ -104,7 +110,10 @@ export default function StaffDetailPage() {
         .is("deleted_at", null)
         .order("full_name"),
       supabase.from("trainer_member_commissions").select("*").eq("trainer_id", id).is("deleted_at", null),
+      supabase.from("packages").select("id, name, monthly_fee"),
     ]);
+
+    setPackagesById(Object.fromEntries((allPackages ?? []).map((p) => [p.id, { name: p.name, monthly_fee: p.monthly_fee }])));
 
     if (staffData) {
       setStaff(staffData as StaffMember);
@@ -480,6 +489,18 @@ export default function StaffDetailPage() {
   const lastMonthDate = subMonths(new Date(), 1);
   const lastMonthStart = format(startOfMonth(lastMonthDate), "yyyy-MM-dd");
   const lastMonthEnd = format(endOfMonth(lastMonthDate), "yyyy-MM-dd");
+  // A member's single joined `packages` (via package_id) reflects whichever
+  // package they were assigned first — once they have multiple packages
+  // (package_ids), that can go stale (e.g. still pointing at a base "Gym"
+  // package after a Personal Training package was added). On a trainer's
+  // profile the PT package is what actually matters, so prefer it when present.
+  function displayPackageFor(m: MemberWithPackage): { name: string; monthly_fee: number } | null {
+    const ptPackage = (m.package_ids ?? [])
+      .map((pid) => packagesById[pid])
+      .find((pkg) => pkg && isPTPackage(pkg));
+    return ptPackage ?? m.packages ?? null;
+  }
+
   function commissionForMember(memberId: string, periodStart: string | null, periodEnd: string | null = null): number {
     const rate = commissionRates.find((r) => r.member_id === memberId);
     const rows = memberPayments.filter((p) => p.member_id === memberId);
@@ -735,6 +756,7 @@ export default function StaffDetailPage() {
                     <tbody className="divide-y divide-[#E4E4DE]">
                       {assignedMembers.map((m) => {
                         const { label: statusLabel, variant: statusVariant } = getMemberStatusDisplay(m.status, m.expiry_date);
+                        const displayPackage = displayPackageFor(m);
                         const thisMonthCommission = commissionForMember(m.id, monthStart);
                         const lastMonthCommission = commissionForMember(m.id, lastMonthStart, lastMonthEnd);
                         const hasCommissionValue = (commissionInputs[m.id] ?? "").trim() !== "" || (commissionAmountInputs[m.id] ?? "").trim() !== "";
@@ -760,10 +782,10 @@ export default function StaffDetailPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">
-                            {m.packages?.name ?? "No package"}
+                            {displayPackage?.name ?? "No package"}
                           </td>
                           <td className="px-4 py-3 text-sm text-[#4A4A44] text-right whitespace-nowrap">
-                            {m.packages?.monthly_fee ? formatPKR(m.packages.monthly_fee) : "—"}
+                            {displayPackage?.monthly_fee ? formatPKR(displayPackage.monthly_fee) : "—"}
                           </td>
                           {staff.role === "Trainer" && (
                             <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
