@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Barlow, Barlow_Condensed } from "next/font/google";
 import { Toaster } from "sonner";
+import { NumberInputWheelGuard } from "@/components/NumberInputWheelGuard";
 import "./globals.css";
 
 const barlow = Barlow({
@@ -32,6 +33,7 @@ export default function RootLayout({
       <body className="h-full antialiased">
         {children}
         <Toaster position="top-right" richColors closeButton />
+        <NumberInputWheelGuard />
       </body>
     </html>
   );

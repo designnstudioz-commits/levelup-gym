@@ -51,6 +51,19 @@ body {
   background: #b0b0b0;
 }
 
+/* Hide the spin-button arrows on number inputs app-wide — staff kept
+   accidentally clicking them (or scrolling over a focused price field,
+   handled separately by NumberInputWheelGuard) and silently nudging prices.
+   Applies to every <input type="number"> without needing to touch each one. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
 /* Global print rule — every dashboard page shares one layout (Sidebar +
    DeviceStatusBanner, see src/app/dashboard/layout.tsx), so without this,
    printing any receipt/slip page (fee receipts, registration receipts,
