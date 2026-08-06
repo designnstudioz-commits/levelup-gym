@@ -158,16 +158,19 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     }
   }, [joiningDate, selectedPackageIds, packages, setValue]);
 
-  // Recalculate total monthly fee whenever selected packages change
+  // Recalculate total monthly fee whenever selected packages OR their
+  // per-package selections (discount / PT custom price) change.
   useEffect(() => {
     if (!packages.length) return;
     const total = selectedPackageIds.reduce((sum, id) => {
       const pkg = packages.find((p) => p.id === id);
-      return sum + (pkg?.monthly_fee ?? 0);
+      if (!pkg) return sum;
+      const sel = packageSelections.find((s) => s.package_id === id) ?? { package_id: id, discount_type: "none" as const, discount_value: undefined };
+      return sum + (isPTPackage(pkg) ? (sel.custom_price ?? 0) : (pkg.monthly_fee ?? 0));
     }, 0);
     setValue("monthly_fee", total);
     setValue("package_id", selectedPackageIds[0] ?? undefined);
-  }, [selectedPackageIds, packages, setValue]);
+  }, [selectedPackageIds, packageSelections, packages, setValue]);
 
   // Admission fee defaults from the selected packages' own admission_fee
   // (not a hardcoded number — it's a real, independently-editable column per
@@ -186,13 +189,21 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     return packageSelections.find((s) => s.package_id === pkgId) ?? { package_id: pkgId, discount_type: "none", discount_value: undefined };
   }
 
+  // Personal Training packages have no catalog price — the price staff type
+  // in is the final amount directly, no discount step. Regular packages
+  // keep the existing original+discount+final calculation.
+  function packageFinalAmount(pkg: Package, sel: PackageSelection): number {
+    if (isPTPackage(pkg)) return sel.custom_price ?? 0;
+    return calculateDiscount(pkg.monthly_fee ?? 0, sel.discount_type, sel.discount_value).finalAmount;
+  }
+
   // Reads/writes via form.getValues() rather than the render-time
   // `packageSelections` closure — the discount-type buttons below fire two
   // updates back-to-back in one click handler (type, then value reset), and
   // setValue() doesn't update the closure until the next render, so the
   // second call would otherwise clobber the first with stale data.
   // getValues() always reflects the latest setValue() synchronously.
-  function updatePackageSelection(pkgId: string, patch: Partial<Pick<PackageSelection, "discount_type" | "discount_value">>) {
+  function updatePackageSelection(pkgId: string, patch: Partial<Pick<PackageSelection, "discount_type" | "discount_value" | "custom_price">>) {
     const current = form.getValues("package_selections") ?? [];
     const sel = current.find((s) => s.package_id === pkgId) ?? { package_id: pkgId, discount_type: "none" as const, discount_value: undefined };
     setValue("package_selections", [
@@ -238,7 +249,9 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
   const totalMonthly = selectedPackageIds.reduce((sum, id) => {
     const pkg = packages.find((p) => p.id === id);
-    return sum + (pkg?.monthly_fee ?? 0);
+    if (!pkg) return sum;
+    const sel = selectionFor(id);
+    return sum + (isPTPackage(pkg) ? (sel.custom_price ?? 0) : (pkg.monthly_fee ?? 0));
   }, 0);
   const admissionFinalAmount = calculateDiscount(admissionFee, admissionDiscountType, admissionDiscountValue).finalAmount;
 
@@ -246,12 +259,15 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
   // discount (not one discount over the summed total, per confirmed
   // requirement). One combined PaymentSplitRows below still collects this
   // as a single transaction — no package × payment-method row explosion.
+  // Personal Training packages skip the discount step entirely — the price
+  // typed in is the final amount directly (see packageFinalAmount above).
   const packageBreakdown = selectedPackageIds
     .map((id) => {
       const pkg = packages.find((p) => p.id === id);
       if (!pkg) return null;
       const sel = selectionFor(id);
-      const { discountAmount, finalAmount } = calculateDiscount(pkg.monthly_fee, sel.discount_type, sel.discount_value);
+      const finalAmount = packageFinalAmount(pkg, sel);
+      const discountAmount = isPTPackage(pkg) ? 0 : calculateDiscount(pkg.monthly_fee ?? 0, sel.discount_type, sel.discount_value).discountAmount;
       return { id, pkg, sel, discountAmount, finalAmount };
     })
     .filter((item) => item !== null) as { id: string; pkg: Package; sel: PackageSelection; discountAmount: number; finalAmount: number }[];
@@ -300,7 +316,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                   <span className={cn("text-sm font-semibold leading-tight", selected ? "text-[#C04E10]" : "text-[#1A1A16]")}>
                     {pkg.name}
                   </span>
-                  {pkg.monthly_fee > 0 && (
+                  {pkg.monthly_fee != null && pkg.monthly_fee > 0 && (
                     <span className={cn("text-xs font-medium", selected ? "text-[#F06418]" : "text-[#7A7A72]")}>
                       Rs {pkg.monthly_fee.toLocaleString()}/mo
                     </span>
@@ -352,7 +368,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                   {pkg.name}
                 </span>
                 <span className={cn("text-xs font-medium", selected ? "text-[#F06418]" : "text-[#7A7A72]")}>
-                  Rs {pkg.monthly_fee.toLocaleString()}/mo
+                  {pkg.monthly_fee != null ? `Rs ${pkg.monthly_fee.toLocaleString()}/mo` : "Custom pricing"}
                 </span>
               </button>
             );
@@ -366,10 +382,12 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
               {selectedPackageIds.map((id) => {
                 const pkg = packages.find((p) => p.id === id);
                 if (!pkg) return null;
+                const sel = selectionFor(id);
+                const amount = isPTPackage(pkg) ? (sel.custom_price ?? 0) : (pkg.monthly_fee ?? 0);
                 return (
                   <div key={id} className="flex items-center justify-between text-xs text-[#4A4A44]">
                     <span>{pkg.name}</span>
-                    <span className="font-semibold">Rs {pkg.monthly_fee.toLocaleString()}</span>
+                    <span className="font-semibold">Rs {amount.toLocaleString()}</span>
                   </div>
                 );
               })}
@@ -401,6 +419,42 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
             </Select>
             {hasPTSelected && (
               <p className="text-xs text-[#F06418] mt-1">Required — a Personal Training package is selected.</p>
+            )}
+
+            {hasPTSelected && (
+              <div className="mt-3 rounded-lg border border-[#FDDCC8] bg-[#FEF0E8] p-3 space-y-2">
+                <p className="text-xs font-bold text-[#C04E10] uppercase tracking-wide">Trainer Commission</p>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={watch("commission_type") ?? "percent"}
+                    onChange={(e) => setValue("commission_type", e.target.value as "percent" | "fixed", { shouldValidate: true })}
+                    className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                  >
+                    <option value="percent">% Percentage</option>
+                    <option value="fixed">Rs Fixed Amount</option>
+                  </select>
+                  <div className="flex-1">
+                    {(watch("commission_type") ?? "percent") === "percent" ? (
+                      <input
+                        type="number" min={0} max={100}
+                        placeholder="e.g. 30"
+                        value={watch("commission_percent") ?? ""}
+                        onChange={(e) => setValue("commission_percent", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                      />
+                    ) : (
+                      <input
+                        type="number" min={0}
+                        placeholder="e.g. 3000"
+                        value={watch("commission_amount") ?? ""}
+                        onChange={(e) => setValue("commission_amount", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
+                        className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                      />
+                    )}
+                  </div>
+                </div>
+                <p className="text-xs text-[#F06418]">Required — set the trainer's commission for this Personal Training member.</p>
+              </div>
             )}
           </div>
         )}
@@ -467,25 +521,41 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
           </div>
 
           {/* Each selected package gets its own independent discount — no
-              single discount over the summed total. */}
+              single discount over the summed total. Personal Training
+              packages have no catalog price, so they skip the discount step
+              entirely: staff type one number and that's the final price. */}
           {packageBreakdown.length === 0 ? (
             <p className="text-xs text-[#7A7A72]">Select a package above to collect payment for it.</p>
           ) : (
             <div className="space-y-3">
               {packageBreakdown.map(({ id, pkg, sel }) => (
                 <div key={id} className="rounded-lg border border-[#E4E4DE] bg-white p-3">
-                  <FeeDiscountBox
-                    bordered={false}
-                    title={pkg.name}
-                    badge={isPTPackage(pkg) ? (
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8]">PT</span>
-                    ) : undefined}
-                    original={pkg.monthly_fee}
-                    discountType={sel.discount_type ?? "none"}
-                    discountValue={sel.discount_value}
-                    onDiscountTypeChange={(v) => updatePackageSelection(id, { discount_type: v })}
-                    onDiscountValueChange={(v) => updatePackageSelection(id, { discount_value: v })}
-                  />
+                  {isPTPackage(pkg) ? (
+                    <div className="space-y-2">
+                      <p className="text-sm font-bold text-[#1A1A16] flex items-center gap-1.5">
+                        {pkg.name}
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8]">PT</span>
+                      </p>
+                      <Input
+                        label="Price (Rs)"
+                        type="number"
+                        required
+                        placeholder="e.g. 25000"
+                        value={sel.custom_price ?? ""}
+                        onChange={(e) => updatePackageSelection(id, { custom_price: e.target.value ? Number(e.target.value) : undefined })}
+                      />
+                    </div>
+                  ) : (
+                    <FeeDiscountBox
+                      bordered={false}
+                      title={pkg.name}
+                      original={pkg.monthly_fee ?? 0}
+                      discountType={sel.discount_type ?? "none"}
+                      discountValue={sel.discount_value}
+                      onDiscountTypeChange={(v) => updatePackageSelection(id, { discount_type: v })}
+                      onDiscountValueChange={(v) => updatePackageSelection(id, { discount_value: v })}
+                    />
+                  )}
                 </div>
               ))}
             </div>

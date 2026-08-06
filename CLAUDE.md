@@ -192,6 +192,10 @@ CREATE TABLE members (
   expiry_date     DATE,
   admission_fee   NUMERIC(10,2),
   monthly_fee     NUMERIC(10,2),
+  -- Active as of 2026-08-06 (previously unused) — the negotiated Personal
+  -- Training price for this member specifically, since PT packages have no
+  -- catalog price. monthly_fee is still the sum across ALL of a member's
+  -- packages including this one, not a replacement for it.
   training_fee    NUMERIC(10,2),
   -- Status
   status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive', 'archived', 'frozen', 'pending_family_approval')),
@@ -226,7 +230,12 @@ CREATE TABLE packages (
   type            TEXT CHECK (type IN ('Individual', 'Family', 'Couple', 'Daily')),
   duration_months INT DEFAULT 1,
   admission_fee   NUMERIC(10,2) DEFAULT 15000,
-  monthly_fee     NUMERIC(10,2) NOT NULL,
+  -- Nullable as of 2026-08-06 — Personal Training packages have no fixed
+  -- catalog price; staff enter a negotiated price per member instead
+  -- (registration, or the member's own profile), stored on
+  -- members.training_fee. Every other package type still requires a value
+  -- (enforced in the Packages management UI, not a DB constraint).
+  monthly_fee     NUMERIC(10,2),
   max_members     INT DEFAULT 1,
   description     TEXT,
   status          TEXT DEFAULT 'active' CHECK (status IN ('active', 'inactive')),

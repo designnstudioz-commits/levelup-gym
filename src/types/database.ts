@@ -15,7 +15,10 @@ export interface Package {
   type: PackageType | null;
   duration_months: number;
   admission_fee: number;
-  monthly_fee: number;
+  // Null for Personal Training packages — those have no fixed catalog price,
+  // staff enter a negotiated price per member instead (registration or the
+  // member's own profile), stored on members.training_fee.
+  monthly_fee: number | null;
   max_members: number;
   description: string | null;
   services_included: string[] | null;

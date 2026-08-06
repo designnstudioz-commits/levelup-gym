@@ -14,7 +14,7 @@ import { Step3Services } from "./Step3Services";
 import { Step4Review } from "./Step4Review";
 import { Button } from "@/components/ui/Button";
 import { createClient } from "@/lib/supabase/client";
-import { generateMembershipNo, generateReceiptNo, calculateDiscount, formatPKR } from "@/lib/utils";
+import { generateMembershipNo, generateReceiptNo, calculateDiscount, formatPKR, buildCommissionPayload } from "@/lib/utils";
 import { format } from "date-fns";
 import {
   fullRegistrationSchema,
@@ -87,14 +87,19 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
         const packageSelections = values.package_selections ?? [];
         let packagesFinal = 0;
         let hasPT = false;
+        let pkgById = new Map<string, { id: string; name: string; monthly_fee: number | null }>();
         if (packageIds.length > 0) {
           const supabase = createClient();
           const { data: selectedPkgs } = await supabase.from("packages").select("id, name, monthly_fee").in("id", packageIds);
-          const pkgById = new Map((selectedPkgs ?? []).map((p) => [p.id, p]));
+          pkgById = new Map((selectedPkgs ?? []).map((p) => [p.id, p]));
           hasPT = (selectedPkgs ?? []).some((p) => isPTPackage(p));
+          // Personal Training packages have no discount step — the typed
+          // price is the final amount directly.
           packagesFinal = packageSelections.reduce((sum, sel) => {
             const pkg = pkgById.get(sel.package_id);
-            return sum + (pkg ? calculateDiscount(pkg.monthly_fee, sel.discount_type, sel.discount_value).finalAmount : 0);
+            if (!pkg) return sum;
+            if (isPTPackage(pkg)) return sum + (sel.custom_price ?? 0);
+            return sum + calculateDiscount(pkg.monthly_fee ?? 0, sel.discount_type, sel.discount_value).finalAmount;
           }, 0);
         }
 
@@ -103,13 +108,33 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
           if (err) { toast.error(`Package Payment: ${err}`); return; }
         }
 
-        // Trainer is required only once a Personal Training package is
-        // selected — PT packages are exclusive (Step3Services already
-        // enforces only one can be selected at a time via auto-replace).
-        if (hasPT && !values.trainer_id) {
-          toast.error("Select a trainer — required when a Personal Training package is selected");
-          form.setError("trainer_id", { message: "Trainer is required for Personal Training packages" });
-          return;
+        // Trainer, PT price, and trainer commission are all required once a
+        // Personal Training package is selected — PT packages are exclusive
+        // (Step3Services already enforces only one can be selected at a time
+        // via auto-replace), so there's at most one PT selection to check.
+        if (hasPT) {
+          if (!values.trainer_id) {
+            toast.error("Select a trainer — required when a Personal Training package is selected");
+            form.setError("trainer_id", { message: "Trainer is required for Personal Training packages" });
+            return;
+          }
+          const ptSelection = packageSelections.find((sel) => {
+            const pkg = pkgById.get(sel.package_id);
+            return pkg && isPTPackage(pkg);
+          });
+          if (!ptSelection?.custom_price || ptSelection.custom_price <= 0) {
+            toast.error("Enter the Personal Training price — required when a Personal Training package is selected");
+            return;
+          }
+          const commissionResult = buildCommissionPayload(
+            values.commission_type ?? "percent",
+            String(values.commission_percent ?? ""),
+            String(values.commission_amount ?? "")
+          );
+          if (commissionResult.error) {
+            toast.error(`Trainer commission: ${commissionResult.error}`);
+            return;
+          }
         }
       }
     }
@@ -136,6 +161,19 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
       if (mode === "staff") {
         // Staff registration → directly create member (skip approval queue)
         const membershipNo = await generateMembershipNo(values.gender);
+
+        // Fetched up front (not just inside the payment section below) since
+        // the PT custom price is also needed for members.training_fee on
+        // the initial insert.
+        const packageIds = values.package_ids ?? [];
+        const { data: selectedPkgs } = packageIds.length > 0
+          ? await supabase.from("packages").select("id, name, monthly_fee").in("id", packageIds)
+          : { data: [] as { id: string; name: string; monthly_fee: number | null }[] };
+        const pkgById = new Map((selectedPkgs ?? []).map((p) => [p.id, p]));
+        const ptSelection = (values.package_selections ?? []).find((sel) => {
+          const pkg = pkgById.get(sel.package_id);
+          return pkg && isPTPackage(pkg);
+        });
 
         const { data, error } = await supabase
           .from("members")
@@ -171,6 +209,9 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             expiry_date: values.expiry_date || null,
             admission_fee: values.admission_fee || null,
             monthly_fee: values.monthly_fee || null,
+            // Negotiated Personal Training price specifically — separate
+            // from monthly_fee, which is the sum across all packages.
+            training_fee: ptSelection?.custom_price ?? null,
             status: values.is_family_member ? "pending_family_approval" : "active",
             family_primary_member_id: values.is_family_member ? (values.family_primary_member_id || null) : null,
             family_relationship: values.is_family_member ? (values.family_relationship || null) : null,
@@ -196,6 +237,26 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
           },
         });
 
+        // Trainer commission — required at registration whenever a PT
+        // package is selected (enforced in handleNext above), so this
+        // should always succeed here; still guarded defensively.
+        if (ptSelection && values.trainer_id) {
+          const commissionResult = buildCommissionPayload(
+            values.commission_type ?? "percent",
+            String(values.commission_percent ?? ""),
+            String(values.commission_amount ?? "")
+          );
+          if (commissionResult.payload) {
+            const { error: commissionError } = await supabase.from("trainer_member_commissions").insert({
+              trainer_id: values.trainer_id,
+              member_id: data.id,
+              ...commissionResult.payload,
+              updated_by: currentUser?.id ?? null,
+            });
+            if (commissionError) throw commissionError;
+          }
+        }
+
         // Collect the member's first payment (admission + membership fee)
         // right here, rather than requiring a separate trip through Fees —
         // the member has already paid by the time this form is submitted.
@@ -210,23 +271,30 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
         );
 
         // Package Payment = sum of each selected package's own independent
-        // discount (not one discount over the summed total) — fetch the
-        // selected packages fresh here since Step3Services' fetch isn't
-        // available in this scope, then build the breakdown that gets
-        // persisted to fee_payments.package_breakdown for the receipt.
-        const packageIds = values.package_ids ?? [];
-        const { data: selectedPkgs } = packageIds.length > 0
-          ? await supabase.from("packages").select("id, name, monthly_fee").in("id", packageIds)
-          : { data: [] as { id: string; name: string; monthly_fee: number }[] };
-        const pkgById = new Map((selectedPkgs ?? []).map((p) => [p.id, p]));
+        // discount (not one discount over the summed total) — build the
+        // breakdown that gets persisted to fee_payments.package_breakdown
+        // for the receipt. Personal Training packages skip the discount
+        // step: the custom price typed in is the final amount directly.
+        // (pkgById/ptSelection were fetched earlier, before the member insert.)
         const packageBreakdown: PackageBreakdownItem[] = (values.package_selections ?? [])
           .map((sel) => {
             const pkg = pkgById.get(sel.package_id);
             if (!pkg) return null;
-            const { discountAmount, finalAmount } = calculateDiscount(pkg.monthly_fee, sel.discount_type, sel.discount_value);
+            if (isPTPackage(pkg)) {
+              const price = sel.custom_price ?? 0;
+              return {
+                name: pkg.name,
+                original: price,
+                discount_type: "none" as const,
+                discount_value: null,
+                discount_amount: 0,
+                final: price,
+              };
+            }
+            const { discountAmount, finalAmount } = calculateDiscount(pkg.monthly_fee ?? 0, sel.discount_type, sel.discount_value);
             return {
               name: pkg.name,
-              original: pkg.monthly_fee,
+              original: pkg.monthly_fee ?? 0,
               discount_type: sel.discount_type ?? "none",
               discount_value: sel.discount_value ?? null,
               discount_amount: discountAmount,

@@ -501,7 +501,7 @@ export default function DailyMembersPage() {
                   const selected = convertForm.package_id === pkg.id;
                   return (
                     <button key={pkg.id} type="button"
-                      onClick={() => setConvertForm({ ...convertForm, package_id: pkg.id, monthly_fee: pkg.monthly_fee.toString(), admission_fee: pkg.admission_fee.toString() })}
+                      onClick={() => setConvertForm({ ...convertForm, package_id: pkg.id, monthly_fee: pkg.monthly_fee?.toString() ?? "", admission_fee: pkg.admission_fee.toString() })}
                       className={`text-left p-3 rounded-xl border-2 transition-all ${selected ? "border-[#F06418] bg-[#FEF0E8]" : "border-[#E4E4DE] hover:border-[#F06418] bg-white"}`}
                     >
                       <div className="flex items-center justify-between mb-1">

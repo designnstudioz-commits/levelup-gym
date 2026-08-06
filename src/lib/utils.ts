@@ -151,6 +151,34 @@ export function calculateTrainerCommission(
   return rows.reduce((sum, p) => sum + Math.max((p.amount ?? 0) - PT_GYM_FEE_PORTION, 0) * (percent / 100), 0);
 }
 
+export type CommissionPayload = {
+  commission_type: "percent" | "fixed";
+  commission_percent: number;
+  commission_amount: number | null;
+};
+
+/** Validates and shapes a trainer_member_commissions row from raw form
+ *  input — shared by every place a commission gets set (trainer profile,
+ *  registration, member profile) so the rules can't drift between them. */
+export function buildCommissionPayload(
+  type: "percent" | "fixed",
+  percentRaw: string,
+  amountRaw: string
+): { payload: CommissionPayload; error?: undefined } | { payload?: undefined; error: string } {
+  if (type === "percent") {
+    const percent = Number(percentRaw);
+    if (percentRaw.trim() === "" || isNaN(percent) || percent < 0 || percent > 100) {
+      return { error: "Enter a valid percentage (0–100)" };
+    }
+    return { payload: { commission_type: "percent", commission_percent: percent, commission_amount: null } };
+  }
+  const amount = Number(amountRaw);
+  if (amountRaw.trim() === "" || isNaN(amount) || amount < 0) {
+    return { error: "Enter a valid fixed amount" };
+  }
+  return { payload: { commission_type: "fixed", commission_percent: 0, commission_amount: amount } };
+}
+
 /** Computes a member's new expiry date after a recurring-dues payment.
  *  If their current expiry hasn't lapsed yet, the new cycle extends from
  *  it so paying early doesn't cost them the remaining days. Otherwise the

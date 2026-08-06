@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { StatsCard } from "@/components/ui/StatsCard";
-import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, isPTPackage, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, buildCommissionPayload, isPTPackage, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
 import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/types/database";
 import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
@@ -61,7 +61,7 @@ export default function StaffDetailPage() {
   // have multiple packages (package_ids): it may point at whichever
   // package was first selected, not the PT one a trainer actually cares
   // about. displayPackageFor() below prefers the real PT package.
-  const [packagesById, setPackagesById] = useState<Record<string, { name: string; monthly_fee: number }>>({});
+  const [packagesById, setPackagesById] = useState<Record<string, { name: string; monthly_fee: number | null }>>({});
   // Manually-set commission % per assigned member (independent of package).
   const [commissionRates, setCommissionRates] = useState<TrainerMemberCommission[]>([]);
   // This member's actual collected membership/trainer fee_payments — the
@@ -338,25 +338,12 @@ export default function StaffDetailPage() {
   // Upserts by (trainer_id, member_id) so re-saving just updates the row.
   async function saveCommissionRate(memberId: string) {
     const type = commissionTypeInputs[memberId] ?? "percent";
-    let payload: { commission_type: "percent" | "fixed"; commission_percent: number; commission_amount: number | null };
-
-    if (type === "percent") {
-      const raw = commissionInputs[memberId] ?? "";
-      const percent = Number(raw);
-      if (raw.trim() === "" || isNaN(percent) || percent < 0 || percent > 100) {
-        toast.error("Enter a valid percentage (0–100)");
-        return;
-      }
-      payload = { commission_type: "percent", commission_percent: percent, commission_amount: null };
-    } else {
-      const raw = commissionAmountInputs[memberId] ?? "";
-      const amount = Number(raw);
-      if (raw.trim() === "" || isNaN(amount) || amount < 0) {
-        toast.error("Enter a valid fixed amount");
-        return;
-      }
-      payload = { commission_type: "fixed", commission_percent: 0, commission_amount: amount };
+    const result = buildCommissionPayload(type, commissionInputs[memberId] ?? "", commissionAmountInputs[memberId] ?? "");
+    if (!result.payload) {
+      toast.error(result.error ?? "Invalid commission input");
+      return;
     }
+    const payload = result.payload;
 
     setSavingCommission(memberId);
     const supabase = createClient();
@@ -494,11 +481,14 @@ export default function StaffDetailPage() {
   // (package_ids), that can go stale (e.g. still pointing at a base "Gym"
   // package after a Personal Training package was added). On a trainer's
   // profile the PT package is what actually matters, so prefer it when present.
-  function displayPackageFor(m: MemberWithPackage): { name: string; monthly_fee: number } | null {
+  function displayPackageFor(m: MemberWithPackage): { name: string; monthly_fee: number | null } | null {
     const ptPackage = (m.package_ids ?? [])
       .map((pid) => packagesById[pid])
       .find((pkg) => pkg && isPTPackage(pkg));
-    return ptPackage ?? m.packages ?? null;
+    // PT packages have no catalog price — the negotiated fee lives on the
+    // member's own training_fee column instead.
+    if (ptPackage) return { name: ptPackage.name, monthly_fee: m.training_fee ?? ptPackage.monthly_fee };
+    return m.packages ?? null;
   }
 
   function commissionForMember(memberId: string, periodStart: string | null, periodEnd: string | null = null): number {

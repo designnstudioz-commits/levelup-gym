@@ -18,7 +18,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
-import { formatPKR } from "@/lib/utils";
+import { formatPKR, isPTPackage } from "@/lib/utils";
 import type { Package, PackageType } from "@/types/database";
 
 type PackageWithCount = Package & { member_count: number };
@@ -135,7 +135,7 @@ export default function PackagesPage() {
       if (!showInactive && p.status === "inactive") return false;
       if (typeFilter !== "all" && p.type !== typeFilter) return false;
       if (featuredOnly && !p.is_featured) return false;
-      if (maxFeeFilter && p.monthly_fee > Number(maxFeeFilter)) return false;
+      if (maxFeeFilter && p.monthly_fee != null && p.monthly_fee > Number(maxFeeFilter)) return false;
       if (serviceFilter && !p.services_included?.includes(serviceFilter)) return false;
       if (search) {
         const q = search.toLowerCase();
@@ -144,8 +144,8 @@ export default function PackagesPage() {
       return true;
     })
     .sort((a, b) => {
-      if (sortKey === "price_asc")  return a.monthly_fee - b.monthly_fee;
-      if (sortKey === "price_desc") return b.monthly_fee - a.monthly_fee;
+      if (sortKey === "price_asc")  return (a.monthly_fee ?? 0) - (b.monthly_fee ?? 0);
+      if (sortKey === "price_desc") return (b.monthly_fee ?? 0) - (a.monthly_fee ?? 0);
       if (sortKey === "name_asc")   return a.name.localeCompare(b.name);
       if (sortKey === "popular")    return b.member_count - a.member_count;
       if (sortKey === "newest")     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
@@ -197,13 +197,18 @@ export default function PackagesPage() {
 
   async function handleSave() {
     if (!form.name.trim()) { toast.error("Package name is required"); return; }
-    if (!form.monthly_fee || Number(form.monthly_fee) <= 0) { toast.error("Monthly fee is required"); return; }
+    // Personal Training packages have no catalog price — staff enter a
+    // negotiated price per member instead (registration or the member's
+    // own profile), so the fee isn't required here.
+    const isPT = isPTPackage({ name: form.name });
+    if (!isPT && (!form.monthly_fee || Number(form.monthly_fee) <= 0)) { toast.error("Monthly fee is required"); return; }
     setSaving(true);
     const supabase = createClient();
     const payload = {
       name: form.name.trim(), type: form.type,
       duration_months: Number(form.duration_months),
-      admission_fee: Number(form.admission_fee), monthly_fee: Number(form.monthly_fee),
+      admission_fee: Number(form.admission_fee),
+      monthly_fee: form.monthly_fee ? Number(form.monthly_fee) : null,
       max_members: Number(form.max_members), description: form.description || null,
       services_included: form.services_included.length ? form.services_included : null,
       training_sessions: Number(form.training_sessions),
@@ -216,7 +221,7 @@ export default function PackagesPage() {
       toast.success("Package updated");
     } else {
       await supabase.from("packages").insert(payload);
-      await supabase.from("activity_logs").insert({ user_id: currentUser?.id ?? null, action: "added_package", entity_type: "package", description: `Added package "${form.name}" at ${formatPKR(Number(form.monthly_fee))}/mo` });
+      await supabase.from("activity_logs").insert({ user_id: currentUser?.id ?? null, action: "added_package", entity_type: "package", description: `Added package "${form.name}"${form.monthly_fee ? ` at ${formatPKR(Number(form.monthly_fee))}/mo` : " (custom pricing)"}` });
       toast.success("Package created");
     }
     setAddModal(false); setSaving(false); fetchPackages();
@@ -471,7 +476,15 @@ export default function PackagesPage() {
           <div>
             <h4 className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Pricing</h4>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <Input label="Monthly Fee (Rs)" required type="number" placeholder="7500" value={form.monthly_fee} onChange={(e) => setForm({ ...form, monthly_fee: e.target.value })} />
+              <Input
+                label="Monthly Fee (Rs)"
+                required={!isPTPackage({ name: form.name })}
+                type="number"
+                placeholder={isPTPackage({ name: form.name }) ? "Leave blank — custom pricing" : "7500"}
+                hint={isPTPackage({ name: form.name }) ? "Personal Training has no fixed price — staff enter it per member at registration" : undefined}
+                value={form.monthly_fee}
+                onChange={(e) => setForm({ ...form, monthly_fee: e.target.value })}
+              />
               <Input label="Admission Fee (Rs)" type="number" placeholder="15000" value={form.admission_fee} onChange={(e) => setForm({ ...form, admission_fee: e.target.value })} />
               <Input label="PT Sessions / Month" type="number" placeholder="0" hint="0 = not included" value={form.training_sessions} onChange={(e) => setForm({ ...form, training_sessions: e.target.value })} />
             </div>
@@ -614,7 +627,11 @@ function ListView({ packages, onEdit, onToggle, onDelete }: {
                   <span className="text-xs font-medium text-[#4A4A44] bg-[#F8F8F6] border border-[#E4E4DE] px-2 py-0.5 rounded-full">{pkg.type}</span>
                 </td>
                 <td className="px-4 py-3">
-                  <span className="text-sm font-bold" style={{ color: accent }}>{formatPKR(pkg.monthly_fee)}</span>
+                  {pkg.monthly_fee != null ? (
+                    <span className="text-sm font-bold" style={{ color: accent }}>{formatPKR(pkg.monthly_fee)}</span>
+                  ) : (
+                    <span className="text-xs font-medium text-[#7A7A72] italic">Custom pricing</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-sm text-[#4A4A44]">{formatPKR(pkg.admission_fee)}</td>
                 <td className="px-4 py-3 text-sm text-[#4A4A44]">
@@ -702,12 +719,16 @@ function PackageCard({ pkg, compact, onEdit, onToggle, onDelete }: {
 
         {/* Price */}
         <div className={compact ? "mb-2" : "mb-3"}>
-          <div className="flex items-baseline gap-1">
-            <span className={`font-bold ${compact ? "text-lg" : "text-2xl"}`} style={{ color: accent }}>
-              {formatPKR(pkg.monthly_fee)}
-            </span>
-            <span className="text-xs text-[#7A7A72]">/mo</span>
-          </div>
+          {pkg.monthly_fee != null ? (
+            <div className="flex items-baseline gap-1">
+              <span className={`font-bold ${compact ? "text-lg" : "text-2xl"}`} style={{ color: accent }}>
+                {formatPKR(pkg.monthly_fee)}
+              </span>
+              <span className="text-xs text-[#7A7A72]">/mo</span>
+            </div>
+          ) : (
+            <span className={`font-bold italic text-[#7A7A72] ${compact ? "text-sm" : "text-lg"}`}>Custom pricing</span>
+          )}
           {!compact && <p className="text-xs text-[#7A7A72]">Admission: {formatPKR(pkg.admission_fee)}</p>}
           {!compact && pkg.training_sessions != null && pkg.training_sessions > 0 && (
             <p className="text-xs text-[#4A4A44] mt-0.5 flex items-center gap-1">

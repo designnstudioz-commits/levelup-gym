@@ -5,7 +5,7 @@ import { UseFormReturn } from "react-hook-form";
 import { cn, calculateDiscount, formatPKR, isPTPackage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { FullRegistrationData } from "@/lib/validations/registration";
-import type { Package } from "@/types/database";
+import type { Package, StaffMember } from "@/types/database";
 
 interface Step4Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -77,6 +77,7 @@ export function Step4Review({ form, mode }: Step4Props) {
   const data = watch();
   const termsAgreed = watch("terms_agreed");
   const [packages, setPackages] = useState<Package[]>([]);
+  const [trainer, setTrainer] = useState<StaffMember | null>(null);
 
   useEffect(() => {
     const packageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);
@@ -103,6 +104,22 @@ export function Step4Review({ form, mode }: Step4Props) {
     fetchPackages();
   }, [data.package_id, data.package_ids]);
 
+  // Trainer name for the review's "Trainer & Commission" line — trainer_id
+  // is only known as a raw id at this point, not fetched anywhere upstream.
+  useEffect(() => {
+    if (!data.trainer_id) {
+      setTrainer(null);
+      return;
+    }
+    const supabase = createClient();
+    supabase
+      .from("staff_members")
+      .select("*")
+      .eq("id", data.trainer_id)
+      .single()
+      .then(({ data: staffData }) => setTrainer((staffData as StaffMember) ?? null));
+  }, [data.trainer_id]);
+
   const selectedPackageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);
   const packageNames = selectedPackageIds
     .map((id) => packages.find((pkg) => pkg.id === id)?.name)
@@ -112,11 +129,18 @@ export function Step4Review({ form, mode }: Step4Props) {
   // discount, mirroring Step3Services — not one discount over the summed
   // total.
   const packageSelections = data.package_selections ?? [];
+  const hasPTSelected = selectedPackageIds.some((id) => {
+    const pkg = packages.find((p) => p.id === id);
+    return pkg && isPTPackage(pkg);
+  });
+  // Personal Training packages have no discount step — the custom price
+  // typed in is the final amount directly, mirroring Step3Services.
   const packagesFinalTotal = selectedPackageIds.reduce((sum, id) => {
     const pkg = packages.find((p) => p.id === id);
     if (!pkg) return sum;
     const sel = packageSelections.find((s) => s.package_id === id);
-    return sum + calculateDiscount(pkg.monthly_fee, sel?.discount_type, sel?.discount_value).finalAmount;
+    if (isPTPackage(pkg)) return sum + (sel?.custom_price ?? 0);
+    return sum + calculateDiscount(pkg.monthly_fee ?? 0, sel?.discount_type, sel?.discount_value).finalAmount;
   }, 0);
 
   return (
@@ -189,12 +213,24 @@ export function Step4Review({ form, mode }: Step4Props) {
                       badge={isPTPackage(pkg) ? (
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8]">PT</span>
                       ) : undefined}
-                      original={pkg.monthly_fee}
+                      original={isPTPackage(pkg) ? (sel?.custom_price ?? 0) : (pkg.monthly_fee ?? 0)}
                       discountType={sel?.discount_type}
                       discountValue={sel?.discount_value}
                     />
                   );
                 })}
+                {hasPTSelected && trainer && (
+                  <div className="py-2 border-b border-[#E4E4DE] last:border-0 sm:col-span-2">
+                    <p className="text-xs text-[#7A7A72] font-medium">Trainer & Commission</p>
+                    <p className="text-sm text-[#1A1A16] font-medium mt-0.5">
+                      {trainer.full_name}
+                      {" — "}
+                      {(data.commission_type ?? "percent") === "percent"
+                        ? `${data.commission_percent ?? 0}% commission`
+                        : `${formatPKR(data.commission_amount ?? 0)} commission per payment`}
+                    </p>
+                  </div>
+                )}
                 {packagesFinalTotal > 0 && (data.membership_payment_lines?.length || data.membership_partial?.isPartial) && (
                   <div className="py-2 border-b border-[#E4E4DE] last:border-0 sm:col-span-2">
                     <p className="text-xs text-[#7A7A72] font-medium">Package Payment</p>

@@ -100,6 +100,10 @@ const packageSelectionSchema = z.object({
   package_id: z.string(),
   discount_type: discountTypeSchema,
   discount_value: z.number().optional(),
+  // Personal Training packages have no catalog price — staff type the
+  // negotiated price directly here instead of discounting a fixed original.
+  // Unused for regular packages.
+  custom_price: z.number().optional(),
 });
 
 export const step3Schema = z.object({
@@ -115,6 +119,12 @@ export const step3Schema = z.object({
   // code) as the source of truth for the Package Payment total.
   package_selections: z.array(packageSelectionSchema).optional(),
   trainer_id: z.string().optional(),
+  // Trainer commission for the assigned PT trainer — required (imperatively,
+  // same pattern as trainer_id) whenever a PT package is selected. Percent
+  // mode uses commission_percent; fixed mode uses commission_amount.
+  commission_type: z.enum(["percent", "fixed"]).optional(),
+  commission_percent: z.number().optional(),
+  commission_amount: z.number().optional(),
   joining_date: z.string().optional(),
   expiry_date: z.string().optional(),
   admission_fee: z.number().optional(),

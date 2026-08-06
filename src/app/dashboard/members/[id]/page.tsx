@@ -19,8 +19,8 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
-import type { Member, Package as PackageType, StaffMember, FeePayment } from "@/types/database";
+import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, isPTPackage, buildCommissionPayload } from "@/lib/utils";
+import type { Member, Package as PackageType, StaffMember, FeePayment, TrainerMemberCommission } from "@/types/database";
 import Link from "next/link";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
 
@@ -295,6 +295,17 @@ export default function MemberDetailPage() {
   // Form states
   const [selectedPackageIds, setSelectedPackageIds] = useState<string[]>([]);
   const [selectedTrainer, setSelectedTrainer] = useState("");
+
+  // PT price & commission — editable directly on the profile for any member
+  // with a trainer assigned, not just at registration (Personal Training
+  // packages have no catalog price; existing PT members need this too,
+  // since their training_fee was never populated before this feature).
+  const [trainerCommission, setTrainerCommission] = useState<TrainerMemberCommission | null>(null);
+  const [ptPriceInput, setPtPriceInput] = useState("");
+  const [commissionTypeInput, setCommissionTypeInput] = useState<"percent" | "fixed">("percent");
+  const [commissionPercentInput, setCommissionPercentInput] = useState("");
+  const [commissionAmountInput, setCommissionAmountInput] = useState("");
+  const [savingPTPricing, setSavingPTPricing] = useState(false);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [joiningDate, setJoiningDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
@@ -351,7 +362,7 @@ export default function MemberDetailPage() {
 
   const fetchMember = useCallback(async () => {
     const supabase = createClient();
-    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }] = await Promise.all([
+    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }, { data: commissionData }] = await Promise.all([
       supabase
         .from("members")
         .select("*, packages(*), trainer:staff_members!members_trainer_id_fkey(*)")
@@ -361,6 +372,7 @@ export default function MemberDetailPage() {
       supabase.from("staff_members").select("*").eq("role", "Trainer").eq("status", "active").is("deleted_at", null),
       supabase.from("fee_payments").select("*").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).limit(10),
       supabase.from("staff_members").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active").is("deleted_at", null),
+      supabase.from("trainer_member_commissions").select("*").eq("member_id", id).is("deleted_at", null).maybeSingle(),
     ]);
 
     if (memberData) {
@@ -377,6 +389,11 @@ export default function MemberDetailPage() {
     setTrainers(trnrs ?? []);
     setPayments(pays ?? []);
     setAllStaff((allStaffData as StaffMember[]) ?? []);
+    setTrainerCommission((commissionData as TrainerMemberCommission) ?? null);
+    setPtPriceInput(memberData?.training_fee != null ? String(memberData.training_fee) : "");
+    setCommissionTypeInput(commissionData?.commission_type ?? "percent");
+    setCommissionPercentInput(commissionData?.commission_percent ? String(commissionData.commission_percent) : "");
+    setCommissionAmountInput(commissionData?.commission_amount != null ? String(commissionData.commission_amount) : "");
     setLoading(false);
   }, [id]);
 
@@ -444,6 +461,67 @@ export default function MemberDetailPage() {
     toast.success("Trainer updated");
     setEditTrainer(false);
     setSaving(false);
+    fetchMember();
+  }
+
+  // Forward-looking edit — updates the current reference price/commission
+  // (display + future commission calculations), not a rewrite of past
+  // receipts. Price and commission are saved independently: leaving one
+  // blank just skips it rather than blocking the other.
+  async function savePTPricing() {
+    if (!member) return;
+    setSavingPTPricing(true);
+    const supabase = createClient();
+
+    const priceRaw = ptPriceInput.trim();
+    if (priceRaw && (isNaN(Number(priceRaw)) || Number(priceRaw) < 0)) {
+      toast.error("Enter a valid price");
+      setSavingPTPricing(false);
+      return;
+    }
+    const priceValue = priceRaw ? Number(priceRaw) : null;
+    if (priceValue !== member.training_fee) {
+      const { error: priceError } = await supabase.from("members").update({ training_fee: priceValue }).eq("id", id);
+      if (priceError) {
+        toast.error("Failed to save price");
+        setSavingPTPricing(false);
+        return;
+      }
+    }
+
+    const hasCommissionInput = commissionTypeInput === "percent"
+      ? commissionPercentInput.trim() !== ""
+      : commissionAmountInput.trim() !== "";
+    if (hasCommissionInput) {
+      const result = buildCommissionPayload(commissionTypeInput, commissionPercentInput, commissionAmountInput);
+      if (!result.payload) {
+        toast.error(result.error ?? "Invalid commission input");
+        setSavingPTPricing(false);
+        return;
+      }
+      const { error: commissionError } = trainerCommission
+        ? await supabase.from("trainer_member_commissions")
+            .update({ ...result.payload, updated_by: currentUser?.id ?? null, updated_at: new Date().toISOString() })
+            .eq("id", trainerCommission.id)
+        : await supabase.from("trainer_member_commissions")
+            .insert({ trainer_id: member.trainer_id, member_id: id, ...result.payload, updated_by: currentUser?.id ?? null });
+      if (commissionError) {
+        toast.error("Failed to save commission");
+        setSavingPTPricing(false);
+        return;
+      }
+    }
+
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "updated_pt_pricing",
+      entity_type: "member",
+      entity_id: id,
+      description: `Updated PT price/commission for ${member.full_name}`,
+    });
+
+    toast.success("PT price & commission saved");
+    setSavingPTPricing(false);
     fetchMember();
   }
 
@@ -1122,7 +1200,9 @@ export default function MemberDetailPage() {
                     {assignedPackages.map((pkg) => (
                       <div key={pkg.id} className="flex items-center justify-between text-sm">
                         <span className="text-[#1A1A16]">{pkg.name}</span>
-                        <span className="text-[#7A7A72]">{formatPKR(pkg.monthly_fee)}/mo</span>
+                        <span className="text-[#7A7A72]">
+                          {formatPKR(isPTPackage(pkg) ? (member.training_fee ?? pkg.monthly_fee) : pkg.monthly_fee)}/mo
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -1193,7 +1273,62 @@ export default function MemberDetailPage() {
                 <p className="text-sm text-[#7A7A72]">No trainer assigned — click Change to assign one</p>
               )}
             </Card>
-          
+
+              {/* PT Price & Commission — shown for any member with a trainer
+                  assigned. Personal Training packages have no catalog price,
+                  so this is how staff set/update the negotiated price and
+                  the trainer's commission directly, whether at a fresh
+                  registration or retroactively for an existing member. */}
+              {member.trainer_id && (
+                <Card>
+                  <div className="flex items-center gap-2 mb-3">
+                    <Dumbbell className="w-4 h-4 text-[#F06418]" />
+                    <h3 className="text-sm font-semibold text-[#1A1A16]">PT Price & Commission</h3>
+                  </div>
+                  <div className="space-y-3">
+                    <Input
+                      label="Personal Training Price (Rs)"
+                      type="number"
+                      placeholder="e.g. 25000"
+                      hint="Custom price for this member — not tied to any catalog fee"
+                      value={ptPriceInput}
+                      onChange={(e) => setPtPriceInput(e.target.value)}
+                    />
+                    <div>
+                      <label className="text-sm font-medium text-[#1A1A16] block mb-1">Trainer Commission</label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={commissionTypeInput}
+                          onChange={(e) => setCommissionTypeInput(e.target.value as "percent" | "fixed")}
+                          className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                        >
+                          <option value="percent">% Percentage</option>
+                          <option value="fixed">Rs Fixed Amount</option>
+                        </select>
+                        {commissionTypeInput === "percent" ? (
+                          <input
+                            type="number" min={0} max={100} placeholder="e.g. 30"
+                            value={commissionPercentInput}
+                            onChange={(e) => setCommissionPercentInput(e.target.value)}
+                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                          />
+                        ) : (
+                          <input
+                            type="number" min={0} placeholder="e.g. 3000"
+                            value={commissionAmountInput}
+                            onChange={(e) => setCommissionAmountInput(e.target.value)}
+                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                          />
+                        )}
+                      </div>
+                    </div>
+                    <Button size="sm" onClick={savePTPricing} loading={savingPTPricing}>
+                      <Check className="w-4 h-4" /> Save
+                    </Button>
+                  </div>
+                </Card>
+              )}
+
               {/* Services */}
               <Card>
                 <div className="flex items-center justify-between mb-4">
