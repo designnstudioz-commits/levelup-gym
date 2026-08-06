@@ -9,7 +9,7 @@ import { format, endOfMonth } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
-import { formatDate, formatPKR, calculateTrainerCommission, COMMISSION_ELIGIBLE_TYPES, PT_GYM_FEE_PORTION } from "@/lib/utils";
+import { formatDate, formatPKR, calculateTrainerCommission, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
 import { PrintButton } from "@/app/dashboard/fees/receipt/[id]/PrintButton";
 import { ReceiptStyles } from "@/app/dashboard/fees/receipt/ReceiptStyles";
 import type { StaffMember, Member, TrainerMemberCommission } from "@/types/database";
@@ -72,7 +72,7 @@ export default function SalarySlipPage() {
     .map((m) => {
       const rate = commissionRates.find((r) => r.member_id === m.id);
       const rows = memberPayments.filter((p) => p.member_id === m.id);
-      const amount = calculateTrainerCommission(rate, rows, periodStart, periodEnd);
+      const amount = calculateTrainerCommission(rate, rows, periodStart, periodEnd, m.training_fee);
       return { member: m, amount };
     })
     .filter((row) => row.amount > 0);
@@ -263,7 +263,7 @@ export default function SalarySlipPage() {
             )}
             {staff.role === "Trainer" && (
               <p className="row-label" style={{ marginTop: 6, fontSize: 10 }}>
-                Commission is manually set per assigned member, applied to their actual collected payments minus a flat Rs {PT_GYM_FEE_PORTION.toLocaleString()} gym cut.
+                Commission is manually set per assigned member, applied to their actual collected payments.
               </p>
             )}
           </div>

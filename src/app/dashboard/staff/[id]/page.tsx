@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { StatsCard } from "@/components/ui/StatsCard";
-import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, buildCommissionPayload, isPTPackage, PT_GYM_FEE_PORTION, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, buildCommissionPayload, isPTPackage, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
 import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/types/database";
 import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
@@ -331,10 +331,10 @@ export default function StaffDetailPage() {
   }
 
   // Manually set/update this trainer's commission for one assigned
-  // member — independent of package/tier. Either a percentage (of the
-  // payment, minus the flat gym cut) or a flat Rs amount per qualifying
-  // payment — never both; the unused column is written as its neutral
-  // placeholder (0 / null) since commission_percent stays NOT NULL.
+  // member — independent of package/tier. Either a straight percentage of
+  // the payment or a flat Rs amount per qualifying payment — never both;
+  // the unused column is written as its neutral placeholder (0 / null)
+  // since commission_percent stays NOT NULL.
   // Upserts by (trainer_id, member_id) so re-saving just updates the row.
   async function saveCommissionRate(memberId: string) {
     const type = commissionTypeInputs[memberId] ?? "percent";
@@ -465,9 +465,9 @@ export default function StaffDetailPage() {
     ? `${Math.floor(experienceMonths / 12)}y ${experienceMonths % 12}m`
     : `${experienceMonths}m`;
 
-  // Commission = manually-set % × (actual collected payment − flat gym cut),
-  // per member, summed. Only counts payments that have actually been
-  // collected — nothing is projected off a member's package/monthly_fee.
+  // Commission = manually-set % × actual collected payment, per member,
+  // summed. Only counts payments that have actually been collected —
+  // nothing is projected off a member's package/monthly_fee.
   const monthStart = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`;
   // "This Month"/"All Time" are open-ended ranges (no periodEnd needed —
   // there's nothing dated beyond today). "Last Month" is a closed period,
@@ -494,7 +494,8 @@ export default function StaffDetailPage() {
   function commissionForMember(memberId: string, periodStart: string | null, periodEnd: string | null = null): number {
     const rate = commissionRates.find((r) => r.member_id === memberId);
     const rows = memberPayments.filter((p) => p.member_id === memberId);
-    return calculateTrainerCommission(rate, rows, periodStart, periodEnd);
+    const trainingFee = assignedMembers.find((m) => m.id === memberId)?.training_fee;
+    return calculateTrainerCommission(rate, rows, periodStart, periodEnd, trainingFee);
   }
   const commissionThisMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, monthStart), 0);
   const commissionLastMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, lastMonthStart, lastMonthEnd), 0);
@@ -985,7 +986,7 @@ export default function StaffDetailPage() {
                     </span>
                   </div>
                   <p className="text-xs text-[#7A7A72] mt-2">
-                    Commission is set manually per assigned member below (independent of package/tier) and applied to their actual collected payments, minus a flat Rs {PT_GYM_FEE_PORTION.toLocaleString()} gym cut.
+                    Commission is set manually per assigned member below (independent of package/tier) and applied to their actual collected payments.
                   </p>
                 </>
               )}

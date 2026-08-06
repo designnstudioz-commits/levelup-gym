@@ -110,13 +110,6 @@ export function countLogicalPayments(rows: { id: string; receipt_no: string | nu
   return new Set(rows.map((r) => r.receipt_no ?? r.id)).size;
 }
 
-/** Flat cut the gym takes off every Personal Training payment before the
- *  trainer's commission applies — a fixed business constant (every row of
- *  the old package-tier rate chart used this same Rs 10,000 regardless of
- *  tier), not tied to any specific package. Shared by the staff profile's
- *  commission section and the salary slip so both compute identically. */
-export const PT_GYM_FEE_PORTION = 10000;
-
 /** fee_payments.payment_type values that count toward a trainer's
  *  commission basis — actual collected recurring dues plus any ad hoc
  *  trainer session fees. Admission fees don't count (one-off joining fee,
@@ -124,16 +117,26 @@ export const PT_GYM_FEE_PORTION = 10000;
 export const COMMISSION_ELIGIBLE_TYPES = ["membership", "trainer"];
 
 /** A trainer's manually-set commission for one assigned member, for a given
- *  period — either a percentage of (payment − flat gym cut), or a flat Rs
- *  amount per qualifying payment. `periodEnd` is optional (omit for an
- *  open-ended "from periodStart to now" range, e.g. "this month" viewed
- *  live); pass it when computing a past, closed period (e.g. a salary slip
- *  for a prior month) so later payments aren't pulled in. */
+ *  period — either a straight percentage or a flat Rs amount, per
+ *  qualifying payment. When the member has a custom Personal Training
+ *  price on file (members.training_fee), percent-mode commission is based
+ *  on THAT agreed price, not each payment's own historical amount — PT
+ *  pricing is fully custom/negotiated now, and a payment collected under
+ *  an old price (before a renegotiation, or before this feature existed)
+ *  would otherwise produce a commission figure that doesn't match what
+ *  staff see as the member's current price on screen. Falls back to each
+ *  payment's real amount only when there's no training_fee to anchor on
+ *  (a trainer-commissioned member with no PT package — rare/legacy).
+ *  `periodEnd` is optional (omit for an open-ended "from periodStart to
+ *  now" range, e.g. "this month" viewed live); pass it when computing a
+ *  past, closed period (e.g. a salary slip for a prior month) so later
+ *  payments aren't pulled in. */
 export function calculateTrainerCommission(
   rate: { commission_type: "percent" | "fixed"; commission_percent: number; commission_amount: number | null } | undefined,
   payments: { id: string; amount: number; payment_date: string; receipt_no: string | null }[],
   periodStart: string | null,
-  periodEnd: string | null = null
+  periodEnd: string | null = null,
+  trainingFee?: number | null
 ): number {
   if (!rate) return 0;
   const rows = payments.filter(
@@ -148,7 +151,10 @@ export function calculateTrainerCommission(
 
   const percent = Number(rate.commission_percent);
   if (!(percent > 0)) return 0;
-  return rows.reduce((sum, p) => sum + Math.max((p.amount ?? 0) - PT_GYM_FEE_PORTION, 0) * (percent / 100), 0);
+  if (trainingFee != null && trainingFee > 0) {
+    return countLogicalPayments(rows) * trainingFee * (percent / 100);
+  }
+  return rows.reduce((sum, p) => sum + (p.amount ?? 0) * (percent / 100), 0);
 }
 
 export type CommissionPayload = {

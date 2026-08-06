@@ -306,6 +306,7 @@ export default function MemberDetailPage() {
   const [commissionPercentInput, setCommissionPercentInput] = useState("");
   const [commissionAmountInput, setCommissionAmountInput] = useState("");
   const [savingPTPricing, setSavingPTPricing] = useState(false);
+  const [editPTPricing, setEditPTPricing] = useState(false);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [joiningDate, setJoiningDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
@@ -510,6 +511,20 @@ export default function MemberDetailPage() {
         setSavingPTPricing(false);
         return;
       }
+    } else if (trainerCommission) {
+      // Both commission inputs were cleared and a rate already exists on
+      // file — soft-delete it, otherwise the old rate would silently
+      // survive untouched (Save would look like it worked but the cleared
+      // field never actually persisted).
+      const { error: clearError } = await supabase
+        .from("trainer_member_commissions")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", trainerCommission.id);
+      if (clearError) {
+        toast.error("Failed to clear commission");
+        setSavingPTPricing(false);
+        return;
+      }
     }
 
     await supabase.from("activity_logs").insert({
@@ -522,7 +537,18 @@ export default function MemberDetailPage() {
 
     toast.success("PT price & commission saved");
     setSavingPTPricing(false);
+    setEditPTPricing(false);
     fetchMember();
+  }
+
+  // Discards unsaved edits, restoring the last-saved price/commission —
+  // same convention as the Trainer card's Cancel.
+  function cancelPTPricing() {
+    setPtPriceInput(member?.training_fee != null ? String(member.training_fee) : "");
+    setCommissionTypeInput(trainerCommission?.commission_type ?? "percent");
+    setCommissionPercentInput(trainerCommission?.commission_percent ? String(trainerCommission.commission_percent) : "");
+    setCommissionAmountInput(trainerCommission?.commission_amount != null ? String(trainerCommission.commission_amount) : "");
+    setEditPTPricing(false);
   }
 
   async function saveServices() {
@@ -910,6 +936,22 @@ export default function MemberDetailPage() {
     .map((pid) => packages.find((p) => p.id === pid) ?? (pid === member.package_id ? currentPackage : null))
     .filter((p): p is PackageType => !!p);
   const currentTrainer = (member as any).trainer as StaffMember | null;
+  // members.services is auto-populated as the union of the assigned
+  // package(s)' own services_included whenever the package changes
+  // (savePackage()) — so for the common case it's just restating what the
+  // Membership Package card already shows. Only worth its own card when
+  // staff have manually customized it (via Edit Services) to include
+  // something beyond what the current package(s) already imply.
+  const packageDerivedServices = new Set(assignedPackages.flatMap((p) => (p as any).services_included ?? []));
+  const servicesAreCustomized = services.length !== packageDerivedServices.size || services.some((s) => !packageDerivedServices.has(s));
+  // Live commission preview for the PT Price & Commission card — updates
+  // as soon as either input changes, in both the read-only summary and
+  // while editing, mirroring registration's live preview and the actual
+  // calculateTrainerCommission() formula (percent of the full custom price,
+  // no flat deduction — see src/lib/utils.ts).
+  const ptCommissionPreview = commissionTypeInput === "percent"
+    ? (Number(ptPriceInput) || 0) * (Number(commissionPercentInput) || 0) / 100
+    : (Number(commissionAmountInput) || 0);
   const totalPaid = payments.reduce((sum, p) => sum + (p.amount ?? 0), 0);
   // Only ever set on the first row of a split-payment group, so this is
   // never double-counted across the member's payment history.
@@ -1192,20 +1234,26 @@ export default function MemberDetailPage() {
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-sm font-semibold text-[#1A1A16]">
-                      {assignedPackages.length > 1 ? `${assignedPackages.length} packages` : assignedPackages[0].name}
+                      {assignedPackages.length > 1 ? `${assignedPackages.length} Packages` : assignedPackages[0].name}
                     </p>
                     <Badge variant="active">Active</Badge>
                   </div>
-                  <div className="space-y-1.5">
-                    {assignedPackages.map((pkg) => (
-                      <div key={pkg.id} className="flex items-center justify-between text-sm">
-                        <span className="text-[#1A1A16]">{pkg.name}</span>
-                        <span className="text-[#7A7A72]">
-                          {formatPKR(isPTPackage(pkg) ? (member.training_fee ?? pkg.monthly_fee) : pkg.monthly_fee)}/mo
-                        </span>
-                      </div>
-                    ))}
-                  </div>
+                  {assignedPackages.length > 1 ? (
+                    <div className="space-y-1.5">
+                      {assignedPackages.map((pkg) => (
+                        <div key={pkg.id} className="flex items-center justify-between text-sm">
+                          <span className="text-[#1A1A16]">{pkg.name}</span>
+                          <span className="text-[#7A7A72]">
+                            {formatPKR(isPTPackage(pkg) ? (member.training_fee ?? pkg.monthly_fee) : pkg.monthly_fee)}/mo
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm font-semibold text-[#F06418]">
+                      {formatPKR(isPTPackage(assignedPackages[0]) ? (member.training_fee ?? assignedPackages[0].monthly_fee) : assignedPackages[0].monthly_fee)}/mo
+                    </p>
+                  )}
                   {assignedPackages.length > 1 && (
                     <div className="flex items-center justify-between text-sm font-semibold mt-2 pt-2 border-t border-[#E4E4DE]">
                       <span className="text-[#1A1A16]">Total</span>
@@ -1213,15 +1261,6 @@ export default function MemberDetailPage() {
                     </div>
                   )}
                   <p className="text-xs text-[#7A7A72] mt-1">Admission {formatPKR(assignedPackages[0].admission_fee)}</p>
-                  {services.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mt-2 pt-2 border-t border-[#E4E4DE]">
-                      {services.map((s) => (
-                        <span key={s} className="text-xs px-2 py-0.5 bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] rounded-full">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <p className="text-sm text-[#7A7A72]">No package assigned — click Change to assign one</p>
@@ -1281,55 +1320,128 @@ export default function MemberDetailPage() {
                   registration or retroactively for an existing member. */}
               {member.trainer_id && (
                 <Card>
-                  <div className="flex items-center gap-2 mb-3">
-                    <Dumbbell className="w-4 h-4 text-[#F06418]" />
-                    <h3 className="text-sm font-semibold text-[#1A1A16]">PT Price & Commission</h3>
-                  </div>
-                  <div className="space-y-3">
-                    <Input
-                      label="Personal Training Price (Rs)"
-                      type="number"
-                      placeholder="e.g. 25000"
-                      hint="Custom price for this member — not tied to any catalog fee"
-                      value={ptPriceInput}
-                      onChange={(e) => setPtPriceInput(e.target.value)}
-                    />
-                    <div>
-                      <label className="text-sm font-medium text-[#1A1A16] block mb-1">Trainer Commission</label>
-                      <div className="flex items-center gap-2">
-                        <select
-                          value={commissionTypeInput}
-                          onChange={(e) => setCommissionTypeInput(e.target.value as "percent" | "fixed")}
-                          className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                        >
-                          <option value="percent">% Percentage</option>
-                          <option value="fixed">Rs Fixed Amount</option>
-                        </select>
-                        {commissionTypeInput === "percent" ? (
-                          <input
-                            type="number" min={0} max={100} placeholder="e.g. 30"
-                            value={commissionPercentInput}
-                            onChange={(e) => setCommissionPercentInput(e.target.value)}
-                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                          />
-                        ) : (
-                          <input
-                            type="number" min={0} placeholder="e.g. 3000"
-                            value={commissionAmountInput}
-                            onChange={(e) => setCommissionAmountInput(e.target.value)}
-                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                          />
-                        )}
-                      </div>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Dumbbell className="w-4 h-4 text-[#F06418]" />
+                      <h3 className="text-sm font-semibold text-[#1A1A16]">PT Price & Commission</h3>
                     </div>
-                    <Button size="sm" onClick={savePTPricing} loading={savingPTPricing}>
-                      <Check className="w-4 h-4" /> Save
-                    </Button>
+                    {!editPTPricing ? (
+                      <button onClick={() => setEditPTPricing(true)} className="text-xs text-[#F06418] flex items-center gap-1 hover:underline">
+                        <Edit3 className="w-3 h-3" /> Edit
+                      </button>
+                    ) : (
+                      <div className="flex gap-2">
+                        <button onClick={savePTPricing} disabled={savingPTPricing} className="text-xs text-green-600 flex items-center gap-1 hover:underline disabled:opacity-50">
+                          <Check className="w-3 h-3" /> Save
+                        </button>
+                        <button onClick={cancelPTPricing} className="text-xs text-red-600 flex items-center gap-1 hover:underline">
+                          <X className="w-3 h-3" /> Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
+
+                  {editPTPricing ? (
+                    <div className="space-y-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="text-sm font-medium text-[#1A1A16] w-48 flex-shrink-0">Personal Training Price (Rs)</label>
+                        <div className="flex-1 min-w-40 flex items-center gap-1.5">
+                          <input
+                            type="number"
+                            placeholder="e.g. 25000"
+                            value={ptPriceInput}
+                            onChange={(e) => setPtPriceInput(e.target.value)}
+                            className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                          />
+                          {ptPriceInput && (
+                            <button type="button" onClick={() => setPtPriceInput("")} title="Clear price" className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="text-sm font-medium text-[#1A1A16] w-48 flex-shrink-0">Trainer Commission</label>
+                        <div className="flex-1 min-w-40 flex items-center gap-1.5">
+                          <select
+                            value={commissionTypeInput}
+                            onChange={(e) => setCommissionTypeInput(e.target.value as "percent" | "fixed")}
+                            className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                          >
+                            <option value="percent">% Percentage</option>
+                            <option value="fixed">Rs Fixed Amount</option>
+                          </select>
+                          {commissionTypeInput === "percent" ? (
+                            <input
+                              type="number" min={0} max={100} placeholder="e.g. 30"
+                              value={commissionPercentInput}
+                              onChange={(e) => setCommissionPercentInput(e.target.value)}
+                              className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                            />
+                          ) : (
+                            <input
+                              type="number" min={0} placeholder="e.g. 3000"
+                              value={commissionAmountInput}
+                              onChange={(e) => setCommissionAmountInput(e.target.value)}
+                              className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                            />
+                          )}
+                          {(commissionPercentInput || commissionAmountInput) && (
+                            <button
+                              type="button"
+                              title="Clear commission"
+                              onClick={() => { setCommissionPercentInput(""); setCommissionAmountInput(""); }}
+                              className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-xs text-[#7A7A72]">Custom price for this member — not tied to any catalog fee. Clearing a field and saving removes it.</p>
+                      {ptCommissionPreview > 0 && (
+                        <div className="bg-[#F8F8F6] rounded-lg border border-[#E4E4DE] px-3 py-2.5">
+                          <p className="text-xs text-[#4A4A44]">
+                            Trainer earns <span className="font-bold text-[#F06418]">{formatPKR(ptCommissionPreview)}</span> per qualifying payment
+                            {commissionTypeInput === "percent" && (
+                              <span className="text-[#7A7A72]"> ({commissionPercentInput}% of {formatPKR(Number(ptPriceInput) || 0)})</span>
+                            )}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  ) : ptPriceInput || commissionPercentInput || commissionAmountInput ? (
+                    <div className="flex items-center gap-6">
+                      <div>
+                        <p className="text-xs text-[#7A7A72]">Personal Training Price</p>
+                        <p className="text-sm font-semibold text-[#1A1A16]">{ptPriceInput ? formatPKR(Number(ptPriceInput)) : "—"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[#7A7A72]">Trainer Commission</p>
+                        <p className="text-sm font-semibold text-[#1A1A16]">
+                          {commissionTypeInput === "percent"
+                            ? (commissionPercentInput ? `${commissionPercentInput}%` : "—")
+                            : (commissionAmountInput ? `${formatPKR(Number(commissionAmountInput))} flat` : "—")}
+                        </p>
+                      </div>
+                      {ptCommissionPreview > 0 && (
+                        <div>
+                          <p className="text-xs text-[#7A7A72]">Trainer Earns</p>
+                          <p className="text-sm font-semibold text-[#F06418]">{formatPKR(ptCommissionPreview)} <span className="text-xs font-normal text-[#7A7A72]">/ payment</span></p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-[#7A7A72]">No PT price/commission set — click Edit to add</p>
+                  )}
                 </Card>
               )}
 
-              {/* Services */}
+              {/* Services — only shown when it has something to say beyond
+                  what Membership Package already shows (see
+                  servicesAreCustomized above); stays visible mid-edit so
+                  the card doesn't vanish out from under an active edit. */}
+              {(servicesAreCustomized || editServices) && (
               <Card>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-sm font-semibold text-[#1A1A16]">Services & Activities</h3>
@@ -1380,6 +1492,7 @@ export default function MemberDetailPage() {
                   <p className="text-sm text-[#7A7A72]">No services assigned. Click Edit Services to add.</p>
                 )}
               </Card>
+              )}
             </div>
           </div>
 

@@ -10,7 +10,7 @@ import type { Package, StaffMember, SystemUser } from "@/types/database";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { addMonths, format } from "date-fns";
-import { Minus } from "lucide-react";
+import { Minus, Dumbbell } from "lucide-react";
 import { PaymentSplitRows, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
 
 interface Step3Props {
@@ -247,12 +247,6 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     setValue("package_selections", [...packageSelections, { package_id: pkgId, discount_type: "none", discount_value: undefined }]);
   }
 
-  const totalMonthly = selectedPackageIds.reduce((sum, id) => {
-    const pkg = packages.find((p) => p.id === id);
-    if (!pkg) return sum;
-    const sel = selectionFor(id);
-    return sum + (isPTPackage(pkg) ? (sel.custom_price ?? 0) : (pkg.monthly_fee ?? 0));
-  }, 0);
   const admissionFinalAmount = calculateDiscount(admissionFee, admissionDiscountType, admissionDiscountValue).finalAmount;
 
   // Package Payment total = sum of each selected package's own independent
@@ -276,6 +270,23 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     const pkg = packages.find((p) => p.id === id);
     return pkg && isPTPackage(pkg);
   });
+
+  // Personal Training gets its own dedicated section (package tier, trainer,
+  // price, commission all together) instead of being mixed into the regular
+  // package grid — it needs a fundamentally different flow (no discount step,
+  // requires a trainer + commission) so it reads as one clear sequence.
+  const regularPackages = packages.filter((p) => !isPTPackage(p));
+  const ptPackages = packages.filter((p) => isPTPackage(p));
+  const regularSelectedIds = selectedPackageIds.filter((id) => regularPackages.some((p) => p.id === id));
+  const selectedTrainerId = watch("trainer_id") ?? "";
+  const ptSelection = packageBreakdown.find((p) => isPTPackage(p.pkg))?.sel;
+  const ptPrice = ptSelection?.custom_price ?? 0;
+  const commissionType = watch("commission_type") ?? "percent";
+  const commissionPercent = watch("commission_percent") ?? 0;
+  const commissionAmount = watch("commission_amount") ?? 0;
+  const commissionPreview = commissionType === "percent"
+    ? ptPrice * (commissionPercent / 100)
+    : commissionAmount;
 
   // ── Public mode ───────────────────────────────────────────────────────
   if (mode === "public") {
@@ -340,17 +351,19 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
   return (
     <div className="space-y-5">
 
-      {/* Services multi-select */}
+      {/* Services multi-select — regular packages only. Personal Training
+          gets its own dedicated section below since it needs a trainer,
+          custom price, and commission, not a discount. */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-base font-bold text-[#1A1A16]">Choose Interested Services</h3>
-          {selectedPackageIds.length > 0 && (
-            <span className="text-xs text-[#7A7A72]">{selectedPackageIds.length} selected</span>
+          {regularSelectedIds.length > 0 && (
+            <span className="text-xs text-[#7A7A72]">{regularSelectedIds.length} selected</span>
           )}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {packages.map((pkg) => {
+          {regularPackages.map((pkg) => {
             const selected = selectedPackageIds.includes(pkg.id);
             return (
               <button
@@ -376,18 +389,16 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
         </div>
 
         {/* Fee breakdown */}
-        {selectedPackageIds.length > 0 && (
+        {regularSelectedIds.length > 0 && (
           <div className="mt-3 bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3">
             <div className="space-y-1 mb-2">
-              {selectedPackageIds.map((id) => {
+              {regularSelectedIds.map((id) => {
                 const pkg = packages.find((p) => p.id === id);
                 if (!pkg) return null;
-                const sel = selectionFor(id);
-                const amount = isPTPackage(pkg) ? (sel.custom_price ?? 0) : (pkg.monthly_fee ?? 0);
                 return (
                   <div key={id} className="flex items-center justify-between text-xs text-[#4A4A44]">
                     <span>{pkg.name}</span>
-                    <span className="font-semibold">Rs {amount.toLocaleString()}</span>
+                    <span className="font-semibold">Rs {(pkg.monthly_fee ?? 0).toLocaleString()}</span>
                   </div>
                 );
               })}
@@ -395,65 +406,134 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
             <div className="flex items-center justify-between pt-2 border-t border-[#FDDCC8]">
               <span className="text-sm font-semibold text-[#1A1A16]">Total Monthly</span>
               <span className="text-lg font-bold text-[#F06418]">
-                Rs {totalMonthly.toLocaleString()}
+                Rs {regularSelectedIds.reduce((sum, id) => sum + (packages.find((p) => p.id === id)?.monthly_fee ?? 0), 0).toLocaleString()}
               </span>
             </div>
           </div>
         )}
+      </div>
 
-        {/* Trainer — only required when a Personal Training package is
-            selected (PT packages are exclusive, enforced in togglePackage
-            above), but shown whenever any package is selected since
-            assigning a trainer to a non-PT member is still useful. */}
-        {selectedPackageIds.length > 0 && (
-          <div className="mt-3">
+      {/* Personal Training — one dedicated section covering the whole
+          flow: pick a tier, then trainer, then price, then commission each
+          reveal in sequence, so it reads as one clear path instead of being
+          scattered across the form. All of it (price → members.training_fee,
+          commission → trainer_member_commissions) saves on final submit and
+          shows up on both this member's profile and the trainer's assigned
+          list — see index.tsx's handleSubmit. */}
+      <div className="rounded-xl border-2 border-[#F06418] bg-white p-4 space-y-4">
+        <div className="flex items-center gap-2">
+          <Dumbbell className="w-4 h-4 text-[#F06418]" />
+          <h3 className="text-base font-bold text-[#1A1A16]">Personal Training</h3>
+          <span className="text-xs font-normal text-[#7A7A72]">(optional)</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {ptPackages.map((pkg) => {
+            const selected = selectedPackageIds.includes(pkg.id);
+            return (
+              <button
+                key={pkg.id}
+                type="button"
+                onClick={() => togglePackage(pkg.id)}
+                className={cn(
+                  "flex flex-col items-start gap-0.5 px-3 py-2.5 rounded-lg border text-left transition-all",
+                  selected
+                    ? "bg-[#FEF0E8] border-[#F06418]"
+                    : "bg-white border-[#E4E4DE] hover:border-[#F06418] hover:bg-[#FEF0E8]"
+                )}
+              >
+                <span className={cn("text-sm font-semibold leading-tight", selected ? "text-[#C04E10]" : "text-[#1A1A16]")}>
+                  {pkg.name}
+                </span>
+                <span className={cn("text-xs font-medium", selected ? "text-[#F06418]" : "text-[#7A7A72]")}>
+                  Custom pricing
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Step 2: trainer — revealed once a tier is picked */}
+        {hasPTSelected && (
+          <div className="pt-3 border-t border-[#FDDCC8]">
             <Select
               label="Assigned Trainer"
-              required={hasPTSelected}
+              required
               placeholder="Select trainer"
               error={errors.trainer_id?.message}
-              value={watch("trainer_id") ?? ""}
+              value={selectedTrainerId}
               onChange={(e) => setValue("trainer_id", e.target.value, { shouldValidate: true })}
             >
               {trainers.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
             </Select>
-            {hasPTSelected && (
-              <p className="text-xs text-[#F06418] mt-1">Required — a Personal Training package is selected.</p>
-            )}
+            <p className="text-xs text-[#F06418] mt-1">Required — a Personal Training package is selected.</p>
+          </div>
+        )}
 
-            {hasPTSelected && (
-              <div className="mt-3 rounded-lg border border-[#FDDCC8] bg-[#FEF0E8] p-3 space-y-2">
-                <p className="text-xs font-bold text-[#C04E10] uppercase tracking-wide">Trainer Commission</p>
-                <div className="flex items-center gap-2">
-                  <select
-                    value={watch("commission_type") ?? "percent"}
-                    onChange={(e) => setValue("commission_type", e.target.value as "percent" | "fixed", { shouldValidate: true })}
-                    className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                  >
-                    <option value="percent">% Percentage</option>
-                    <option value="fixed">Rs Fixed Amount</option>
-                  </select>
-                  <div className="flex-1">
-                    {(watch("commission_type") ?? "percent") === "percent" ? (
-                      <input
-                        type="number" min={0} max={100}
-                        placeholder="e.g. 30"
-                        value={watch("commission_percent") ?? ""}
-                        onChange={(e) => setValue("commission_percent", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                      />
-                    ) : (
-                      <input
-                        type="number" min={0}
-                        placeholder="e.g. 3000"
-                        value={watch("commission_amount") ?? ""}
-                        onChange={(e) => setValue("commission_amount", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
-                        className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                      />
-                    )}
-                  </div>
-                </div>
-                <p className="text-xs text-[#F06418]">Required — set the trainer's commission for this Personal Training member.</p>
+        {/* Step 3: price — revealed once a trainer is picked */}
+        {hasPTSelected && selectedTrainerId && (
+          <div className="pt-3 border-t border-[#FDDCC8]">
+            <Input
+              label="Personal Training Price (Rs)"
+              type="number"
+              required
+              placeholder="e.g. 25000"
+              value={ptPrice || ""}
+              onChange={(e) => {
+                const ptPkgId = selectedPackageIds.find((id) => {
+                  const pkg = packages.find((p) => p.id === id);
+                  return pkg && isPTPackage(pkg);
+                });
+                if (ptPkgId) updatePackageSelection(ptPkgId, { custom_price: e.target.value ? Number(e.target.value) : undefined });
+              }}
+            />
+          </div>
+        )}
+
+        {/* Step 4: commission — revealed once a price is entered */}
+        {hasPTSelected && selectedTrainerId && ptPrice > 0 && (
+          <div className="pt-3 border-t border-[#FDDCC8] space-y-2">
+            <p className="text-xs font-bold text-[#C04E10] uppercase tracking-wide">Trainer Commission</p>
+            <div className="flex items-center gap-2">
+              <select
+                value={commissionType}
+                onChange={(e) => setValue("commission_type", e.target.value as "percent" | "fixed", { shouldValidate: true })}
+                className="flex-shrink-0 text-sm px-2 py-2 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+              >
+                <option value="percent">% Percentage</option>
+                <option value="fixed">Rs Fixed Amount</option>
+              </select>
+              <div className="flex-1">
+                {commissionType === "percent" ? (
+                  <input
+                    type="number" min={0} max={100}
+                    placeholder="e.g. 30"
+                    value={commissionPercent || ""}
+                    onChange={(e) => setValue("commission_percent", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                  />
+                ) : (
+                  <input
+                    type="number" min={0}
+                    placeholder="e.g. 3000"
+                    value={commissionAmount || ""}
+                    onChange={(e) => setValue("commission_amount", e.target.value ? Number(e.target.value) : undefined, { shouldValidate: true })}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                  />
+                )}
+              </div>
+            </div>
+            <p className="text-xs text-[#F06418]">Required — set the trainer's commission for this Personal Training member.</p>
+
+            {/* Step 5: live commission preview, once a value is entered */}
+            {commissionPreview > 0 && (
+              <div className="bg-[#F8F8F6] rounded-lg border border-[#E4E4DE] px-3 py-2.5">
+                <p className="text-xs text-[#4A4A44]">
+                  Trainer earns <span className="font-bold text-[#F06418]">{formatPKR(commissionPreview)}</span> per qualifying payment
+                  {commissionType === "percent" && (
+                    <span className="text-[#7A7A72]"> ({commissionPercent}% of {formatPKR(ptPrice)})</span>
+                  )}
+                </p>
               </div>
             )}
           </div>
@@ -531,19 +611,15 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
               {packageBreakdown.map(({ id, pkg, sel }) => (
                 <div key={id} className="rounded-lg border border-[#E4E4DE] bg-white p-3">
                   {isPTPackage(pkg) ? (
-                    <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
                       <p className="text-sm font-bold text-[#1A1A16] flex items-center gap-1.5">
                         {pkg.name}
                         <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8]">PT</span>
                       </p>
-                      <Input
-                        label="Price (Rs)"
-                        type="number"
-                        required
-                        placeholder="e.g. 25000"
-                        value={sel.custom_price ?? ""}
-                        onChange={(e) => updatePackageSelection(id, { custom_price: e.target.value ? Number(e.target.value) : undefined })}
-                      />
+                      <div className="text-right">
+                        <span className="text-sm font-semibold text-[#1A1A16]">{formatPKR(sel.custom_price ?? 0)}</span>
+                        <p className="text-[10px] text-[#7A7A72]">Set in the Personal Training section above</p>
+                      </div>
                     </div>
                   ) : (
                     <FeeDiscountBox
