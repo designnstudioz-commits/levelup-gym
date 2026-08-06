@@ -6,7 +6,7 @@ import {
   CalendarCheck, Users, Wifi, WifiOff, RefreshCw,
   Search, AlertTriangle, ArrowRight, CheckCircle, X,
   Fingerprint, Calendar, Activity, DoorOpen, Settings,
-  MapPin, Edit3, Check, Plus,
+  MapPin, Edit3, Check, Plus, UserCheck,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDateTime, isDeviceOnline } from "@/lib/utils";
+import { formatDateTime, isDeviceOnline, timeAgo } from "@/lib/utils";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { Device } from "@/types/database";
@@ -45,6 +45,15 @@ interface UnverifiedRow {
   raw_id: string; punch_time: string; resolved: boolean;
 }
 
+interface LiveMemberRow {
+  member_id: string;
+  full_name: string;
+  membership_no: string;
+  photo_url: string | null;
+  punch_time: string;
+  device_id: string | null;
+}
+
 const DATE_LABELS: Record<DateRange, string> = {
   today: "Today", yesterday: "Yesterday",
   week: "This Week", month: "This Month", custom: "Custom",
@@ -65,6 +74,8 @@ export default function AttendancePage() {
   const currentUser = useCurrentUser();
   const [records, setRecords]         = useState<AttendanceRow[]>([]);
   const [unverified, setUnverified]   = useState<UnverifiedRow[]>([]);
+  const [liveMembers, setLiveMembers] = useState<LiveMemberRow[]>([]);
+  const [showLiveList, setShowLiveList] = useState(false);
   const [devices, setDevices]         = useState<Device[]>([]);
   const [loading, setLoading]         = useState(true);
   const [liveMode, setLiveMode]       = useState(true);
@@ -108,16 +119,43 @@ export default function AttendancePage() {
       .order("punch_time", { ascending: false })
       .limit(500);
 
+    // "Currently in" is always today-scoped, regardless of the page's own
+    // date-range filter — it's a live occupancy read, not a browsing view.
+    const todayStr = format(new Date(), "yyyy-MM-dd");
+
     // NOTE: deviceFilter is applied client-side so per-device counts on cards stay correct
-    const [{ data: atts }, { data: unveri }, { data: devs }] = await Promise.all([
+    const [{ data: atts }, { data: unveri }, { data: devs }, { data: todayAtts }] = await Promise.all([
       query,
       supabase.from("unverified_attendances").select("*").eq("resolved", false).order("punch_time", { ascending: false }).limit(100),
       supabase.from("devices").select("*").order("name"),
+      supabase
+        .from("attendances")
+        .select("member_id, punch_type, punch_time, device_id, members(id, full_name, membership_no, photo_url)")
+        .not("member_id", "is", null)
+        .gte("punch_time", `${todayStr}T00:00:00+05:00`)
+        .lte("punch_time", `${todayStr}T23:59:59+05:00`)
+        .order("punch_time", { ascending: false }),
     ]);
 
     setRecords((atts ?? []) as unknown as AttendanceRow[]);
     setUnverified(unveri ?? []);
     setDevices((devs ?? []) as Device[]);
+
+    // Latest punch per member today — punch_time is sorted desc, so the
+    // first time a member_id is seen is their most recent punch. "In" with
+    // no later "out" today means they haven't checked out yet.
+    const latestByMember = new Map<string, any>();
+    for (const r of todayAtts ?? []) {
+      if (!latestByMember.has(r.member_id)) latestByMember.set(r.member_id, r);
+    }
+    const live: LiveMemberRow[] = [...latestByMember.values()]
+      .filter((r) => r.punch_type === "in" && r.members)
+      .map((r) => ({
+        member_id: r.member_id, full_name: r.members.full_name, membership_no: r.members.membership_no,
+        photo_url: r.members.photo_url, punch_time: r.punch_time, device_id: r.device_id,
+      }));
+    setLiveMembers(live);
+
     setLoading(false);
   }, [dateRange, customDate]);
 
@@ -261,6 +299,46 @@ export default function AttendancePage() {
     fetchData();
   }
 
+  // Dismisses one unidentified punch without linking it to anyone — for
+  // rows not worth chasing down (e.g. a one-off scan from a visitor).
+  async function dismissUnverified(row: UnverifiedRow) {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("unverified_attendances")
+      .update({ resolved: true, resolved_at: new Date().toISOString(), resolved_by: currentUser?.id ?? null })
+      .eq("id", row.id);
+    if (error) { toast.error("Failed to clear punch"); return; }
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "cleared_unidentified_punch", entity_type: "unverified_attendance", entity_id: row.id,
+      description: `Cleared unidentified punch (Device User ID ${row.raw_id}) from ${getDevice(row.device_id)?.name ?? row.device_id ?? "unknown device"}`,
+    });
+    toast.success("Punch cleared");
+    fetchData();
+  }
+
+  // Bulk-clears every currently-pending unidentified punch — not just the
+  // ones rendered locally, so this is a real UPDATE ... WHERE resolved =
+  // false rather than an .in() over the (possibly truncated) fetched list.
+  async function clearAllUnverified() {
+    if (unverified.length === 0) return;
+    if (!confirm(`Clear all ${unverified.length} unidentified punch(es)? This can't be undone — punches can still be looked up in the raw attendance log if needed.`)) return;
+
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("unverified_attendances")
+      .update({ resolved: true, resolved_at: new Date().toISOString(), resolved_by: currentUser?.id ?? null })
+      .eq("resolved", false);
+    if (error) { toast.error("Failed to clear punches"); return; }
+    await supabase.from("activity_logs").insert({
+      user_id: currentUser?.id ?? null,
+      action: "cleared_all_unidentified_punches", entity_type: "unverified_attendance",
+      description: `Cleared all ${unverified.length} unidentified punch(es)`,
+    });
+    toast.success("All unidentified punches cleared");
+    fetchData();
+  }
+
   return (
     <div className="flex flex-col flex-1">
       <DashboardHeader
@@ -371,7 +449,7 @@ export default function AttendancePage() {
         </div>
 
         {/* ── Stats ──────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           <StatsCard
             title={deviceFilter !== "all" ? `Punches (${getDevice(deviceFilter)?.name ?? deviceFilter})` : `Total Punches (${DATE_LABELS[dateRange]})`}
             value={deviceFiltered.filter((r) => r.punch_type === "in").length}
@@ -380,7 +458,63 @@ export default function AttendancePage() {
           <StatsCard title="Unique Members" value={uniqueMembers} icon={Users} iconColor="text-blue-600" iconBg="bg-blue-50" />
           <StatsCard title="Peak Hour" value={peakLabel} icon={Activity} iconColor="text-purple-600" iconBg="bg-purple-50" />
           <StatsCard title="Total Records" value={deviceFiltered.length} icon={CheckCircle} iconColor="text-green-600" iconBg="bg-green-50" />
+          <div
+            role="button" tabIndex={0}
+            onClick={() => setShowLiveList((v) => !v)}
+            onKeyDown={(e) => e.key === "Enter" && setShowLiveList((v) => !v)}
+          >
+            <StatsCard
+              title="Currently In Gym" value={liveMembers.length} icon={UserCheck}
+              iconColor="text-green-600" iconBg="bg-green-50"
+              className={`cursor-pointer transition-all hover:border-green-400 ${showLiveList ? "border-green-400 ring-1 ring-green-200" : ""}`}
+            />
+          </div>
         </div>
+
+        {/* ── Currently In Gym list ──────────────────────────────── */}
+        {showLiveList && (
+          <Card padding={false}>
+            <div className="px-5 py-4 border-b border-[#E4E4DE] flex items-center gap-2">
+              <UserCheck className="w-4 h-4 text-green-600" />
+              <h3 className="text-sm font-semibold text-[#1A1A16]">Currently In Gym</h3>
+              <span className="ml-auto text-xs text-[#7A7A72]">{liveMembers.length} checked in, not yet checked out (today)</span>
+            </div>
+            {liveMembers.length === 0 ? (
+              <div className="px-5 py-8 text-center text-sm text-[#7A7A72]">Nobody is currently checked in.</div>
+            ) : (
+              <div className="divide-y divide-[#E4E4DE]">
+                {[...liveMembers]
+                  .sort((a, b) => new Date(b.punch_time).getTime() - new Date(a.punch_time).getTime())
+                  .map((m) => {
+                    const dev = getDevice(m.device_id);
+                    return (
+                      <Link key={m.member_id} href={`/dashboard/members/${m.member_id}`}>
+                        <div className="px-5 py-3 flex items-center gap-3 hover:bg-[#F8F8F6] transition-colors">
+                          <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
+                            {m.photo_url ? (
+                              <img src={m.photo_url} alt="" className="w-8 h-8 object-cover" />
+                            ) : (
+                              <span className="text-[#F06418] text-xs font-bold">{m.full_name.charAt(0)}</span>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-[#1A1A16] truncate">{m.full_name}</p>
+                            <p className="text-xs text-[#7A7A72]">{m.membership_no}</p>
+                          </div>
+                          <div className="text-right flex-shrink-0">
+                            <p className="text-xs font-medium text-green-700">Checked in {timeAgo(m.punch_time)}</p>
+                            {dev && (
+                              <p className="text-[10px] mt-0.5" style={{ color: dev.color ?? "#F06418" }}>{dev.name}</p>
+                            )}
+                          </div>
+                        </div>
+                      </Link>
+                    );
+                  })}
+              </div>
+            )}
+          </Card>
+        )}
 
         {/* ── Filter bar ─────────────────────────────────────────── */}
         <div className="bg-white border border-[#E4E4DE] rounded-xl p-4 space-y-3">
@@ -502,6 +636,11 @@ export default function AttendancePage() {
               <AlertTriangle className="w-4 h-4 text-red-500" />
               <h3 className="text-sm font-semibold text-[#1A1A16]">Unidentified Punches</h3>
               <span className="ml-auto text-xs text-[#7A7A72]">{unverified.length} pending</span>
+              <button onClick={clearAllUnverified}
+                className="text-xs font-semibold text-red-600 hover:text-red-700 hover:underline transition-colors"
+              >
+                Clear All
+              </button>
             </div>
             <div className="divide-y divide-[#E4E4DE]">
               {unverified.slice(0, 20).map((u) => {
@@ -522,11 +661,18 @@ export default function AttendancePage() {
                         </p>
                       </div>
                     </div>
-                    <button onClick={() => { setResolveModal(u); setResolveId(""); }}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FEF0E8] text-[#F06418] border border-[#FDDCC8] hover:bg-[#F06418] hover:text-white transition-colors flex-shrink-0"
-                    >
-                      Identify Member
-                    </button>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <button onClick={() => { setResolveModal(u); setResolveId(""); }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#FEF0E8] text-[#F06418] border border-[#FDDCC8] hover:bg-[#F06418] hover:text-white transition-colors"
+                      >
+                        Identify Member
+                      </button>
+                      <button onClick={() => dismissUnverified(u)} title="Clear without identifying"
+                        className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
