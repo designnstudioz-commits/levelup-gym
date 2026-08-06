@@ -5,9 +5,10 @@ import { UseFormReturn } from "react-hook-form";
 import { Camera, Loader2, User } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/Input";
+import { PhoneInput } from "@/components/ui/PhoneInput";
 import { Select } from "@/components/ui/Select";
 import type { FullRegistrationData } from "@/lib/validations/registration";
-import { formatCnic, formatPhone } from "@/lib/utils";
+import { formatCnic } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 interface Step1Props {
@@ -500,23 +501,33 @@ export function Step1Personal({ form, mode }: Step1Props) {
           Contact Information
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <Input
+          <PhoneInput
             label="Phone Number"
             required
-            type="tel"
             placeholder="0300-0000000"
             error={errors.phone?.message}
             value={watch("phone") ?? ""}
-            onChange={(e) => setValue("phone", formatPhone(e.target.value), { shouldValidate: true })}
+            onChange={(v) => setValue("phone", v, { shouldValidate: true })}
           />
-          <Input
-            label="WhatsApp Number"
-            type="tel"
-            placeholder="Same as phone"
-            error={errors.whatsapp?.message}
-            value={watch("whatsapp") ?? ""}
-            onChange={(e) => setValue("whatsapp", formatPhone(e.target.value))}
-          />
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center justify-between">
+              <label htmlFor="whatsapp-number" className="text-sm font-medium text-[#1A1A16]">WhatsApp Number</label>
+              <button
+                type="button"
+                onClick={() => setValue("whatsapp", watch("phone") ?? "", { shouldValidate: true })}
+                className="text-xs font-medium text-[#F06418] hover:underline"
+              >
+                Same as phone number
+              </button>
+            </div>
+            <PhoneInput
+              id="whatsapp-number"
+              placeholder="0300-0000000"
+              error={errors.whatsapp?.message}
+              value={watch("whatsapp") ?? ""}
+              onChange={(v) => setValue("whatsapp", v, { shouldValidate: true })}
+            />
+          </div>
           <Input
             label="Email Address"
             type="email"

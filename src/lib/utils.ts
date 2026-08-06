@@ -23,6 +23,11 @@ export async function fetchAllRows<T>(
 }
 
 export function formatPhone(raw: string): string {
+  // International numbers (leading +) are left as typed, digits-only after
+  // the +, since the Pakistani 4-digit-prefix grouping below doesn't apply.
+  if (raw.trim().startsWith("+")) {
+    return `+${raw.replace(/\D/g, "").slice(0, 15)}`;
+  }
   const digits = raw.replace(/\D/g, "").slice(0, 11);
   if (digits.length <= 4) return digits;
   return `${digits.slice(0, 4)}-${digits.slice(4)}`;

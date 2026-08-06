@@ -1,14 +1,19 @@
 import { z } from "zod";
 
+// Accepts a Pakistani local number (0300-0000000) or an international
+// number (+<dial code> <grouped digits>, e.g. "+971 50 123 4567") —
+// members/emergency contacts aren't always Pakistan-based.
+const phoneRegex = /^(0\d{2,3}[-\s]?\d{7,8}|\+\d[\d\s-]{6,17})$/;
+
 const pkPhone = z
   .string()
-  .regex(/^0\d{2,3}[-\s]?\d{7,8}$/, "Format: 0300-0000000");
+  .regex(phoneRegex, "Format: 0300-0000000 or +1 234 567 8900");
 
 const pkPhoneOptional = z
   .string()
   .optional()
-  .refine((v) => !v || /^0\d{2,3}[-\s]?\d{7,8}$/.test(v), {
-    message: "Format: 0300-0000000",
+  .refine((v) => !v || phoneRegex.test(v), {
+    message: "Format: 0300-0000000 or +1 234 567 8900",
   });
 
 export const step1Schema = z.object({
