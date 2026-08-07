@@ -119,14 +119,26 @@ export const COMMISSION_ELIGIBLE_TYPES = ["membership", "trainer"];
 /** A trainer's manually-set commission for one assigned member, for a given
  *  period — either a straight percentage or a flat Rs amount, per
  *  qualifying payment. When the member has a custom Personal Training
- *  price on file (members.training_fee), percent-mode commission is based
- *  on THAT agreed price, not each payment's own historical amount — PT
- *  pricing is fully custom/negotiated now, and a payment collected under
- *  an old price (before a renegotiation, or before this feature existed)
- *  would otherwise produce a commission figure that doesn't match what
- *  staff see as the member's current price on screen. Falls back to each
- *  payment's real amount only when there's no training_fee to anchor on
- *  (a trainer-commissioned member with no PT package — rare/legacy).
+ *  price on file (members.training_fee), commission is based on THAT
+ *  agreed price, not each payment's own historical amount — PT pricing is
+ *  fully custom/negotiated now, and a payment collected under an old price
+ *  (before a renegotiation, or before this feature existed) would
+ *  otherwise produce a commission figure that doesn't match what staff see
+ *  as the member's current price on screen.
+ *
+ *  For that same reason, when training_fee is set, the qualifying-payment
+ *  count is capped at 1 per period — PT billing is monthly, and staff tag
+ *  payment_type inconsistently for what's conceptually the same PT due
+ *  (sometimes "membership", sometimes "trainer"), so filtering by type
+ *  isn't reliable in either direction. A single due can also legitimately
+ *  span 2 rows (a split payment, or one mistakenly logged across 2
+ *  receipts) without that meaning 2x commission. Confirmed tradeoff: a
+ *  member who genuinely pays 2+ months at once in one sitting still only
+ *  counts once that period — rare enough to correct manually if it happens.
+ *  Falls back to every COMMISSION_ELIGIBLE_TYPES row, uncapped, using each
+ *  payment's real amount, only when there's no training_fee to anchor on —
+ *  a trainer-commissioned member with no PT package, rare/legacy.
+ *
  *  `periodEnd` is optional (omit for an open-ended "from periodStart to
  *  now" range, e.g. "this month" viewed live); pass it when computing a
  *  past, closed period (e.g. a salary slip for a prior month) so later
@@ -142,17 +154,19 @@ export function calculateTrainerCommission(
   const rows = payments.filter(
     (p) => (!periodStart || p.payment_date >= periodStart) && (!periodEnd || p.payment_date <= periodEnd)
   );
+  const hasTrainingFee = trainingFee != null && trainingFee > 0;
+  const qualifyingCount = hasTrainingFee ? Math.min(1, countLogicalPayments(rows)) : countLogicalPayments(rows);
 
   if (rate.commission_type === "fixed") {
     const amount = Number(rate.commission_amount);
     if (!(amount > 0)) return 0;
-    return countLogicalPayments(rows) * amount;
+    return qualifyingCount * amount;
   }
 
   const percent = Number(rate.commission_percent);
   if (!(percent > 0)) return 0;
-  if (trainingFee != null && trainingFee > 0) {
-    return countLogicalPayments(rows) * trainingFee * (percent / 100);
+  if (hasTrainingFee) {
+    return qualifyingCount * (trainingFee as number) * (percent / 100);
   }
   return rows.reduce((sum, p) => sum + (p.amount ?? 0) * (percent / 100), 0);
 }
