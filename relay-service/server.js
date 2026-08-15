@@ -45,7 +45,16 @@ app.get("/iclock/cdata", async (req, res) => {
     console.error("[ADMS Heartbeat DB Error]", e);
   }
 
-  sendText(res, "GET ATTLOG STAMP=9999999999\nGET OPERLOG STAMP=9999999999\n");
+  // A real, device-tested ADMS reference implementation (probed against a
+  // SpeedFace device — same family as ours) replies plain OK to this
+  // heartbeat; it never sends an ATTLOG/OPERLOG "resync" trigger here.
+  // Devices push attendance logs immediately/proactively on their own, not
+  // in response to this line. Sending "GET ATTLOG STAMP=9999999999" (an
+  // impossible/nonsensical stamp) on every single heartbeat is the likely
+  // cause of the device getting stuck perpetually re-announcing a full
+  // resync of its local cache instead of ever pushing a fresh scan through
+  // its normal immediate-push path.
+  sendText(res, "OK");
 });
 
 app.post("/iclock/cdata", async (req, res) => {
@@ -111,36 +120,44 @@ app.post("/iclock/cdata", async (req, res) => {
         .single();
       const member = enrollment ? enrollment.members : null;
 
+      // Dedup check runs BEFORE computing punch_type and is intentionally
+      // type-agnostic. The device re-sends its whole local ATTLOG cache on
+      // every heartbeat if it never sees its upload cursor advance (a known
+      // failure mode after a reset), so the same line can arrive hundreds of
+      // times. The old check scoped this to punch_type, but punch_type was
+      // itself computed by toggling off the member's most-recent row — once
+      // a few duplicates got in, that row toggled every re-send, so the
+      // type-scoped check missed roughly every other duplicate. Checking
+      // purely by (member/staff, time proximity) closes that gap regardless
+      // of how many times a record gets replayed.
+      const thirtySecAgo = new Date(localDate.getTime() - 30 * 1000).toISOString();
+
       if (member) {
-        const { data: lastPunch } = await supabase
-          .from("attendances")
-          .select("punch_type, punch_time")
-          .eq("member_id", member.id)
-          .order("punch_time", { ascending: false })
-          .limit(1)
-          .single();
-
-        let punchType;
-        if (state === "1" || state === "5") {
-          punchType = "out";
-        } else if (state === "0" || state === "4") {
-          punchType = lastPunch?.punch_type === "in" ? "out" : "in";
-        } else {
-          punchType = lastPunch?.punch_type === "in" ? "out" : "in";
-        }
-
-        const thirtySecAgo = new Date(localDate.getTime() - 30 * 1000).toISOString();
         const { count: recentCount } = await supabase
           .from("attendances")
           .select("*", { count: "exact", head: true })
           .eq("member_id", member.id)
-          .eq("punch_type", punchType)
           .gte("punch_time", thirtySecAgo)
           .lte("punch_time", punchTimeUTC);
 
         if ((recentCount || 0) > 0) {
-          console.log(`[ADMS POST] Duplicate ${punchType.toUpperCase()} within 30s — skipped for ${member.full_name}`);
+          console.log(`[ADMS POST] Duplicate within 30s — skipped for ${member.full_name}`);
         } else {
+          const { data: lastPunch } = await supabase
+            .from("attendances")
+            .select("punch_type, punch_time")
+            .eq("member_id", member.id)
+            .order("punch_time", { ascending: false })
+            .limit(1)
+            .single();
+
+          let punchType;
+          if (state === "1" || state === "5") {
+            punchType = "out";
+          } else {
+            punchType = lastPunch?.punch_type === "in" ? "out" : "in";
+          }
+
           const { error } = await supabase.from("attendances").insert({
             member_id: member.id,
             device_id: serialNo,
@@ -160,21 +177,44 @@ app.post("/iclock/cdata", async (req, res) => {
           .single();
 
         if (staff) {
-          await supabase.from("attendances").insert({
-            staff_id: staff.id,
-            device_id: serialNo,
-            punch_time: punchTimeUTC,
-            punch_type: "in",
-            verified: true,
-          });
-          console.log(`[ADMS POST] ✓ Saved attendance for staff: ${staff.full_name}`);
+          const { count: recentStaffCount } = await supabase
+            .from("attendances")
+            .select("*", { count: "exact", head: true })
+            .eq("staff_id", staff.id)
+            .gte("punch_time", thirtySecAgo)
+            .lte("punch_time", punchTimeUTC);
+
+          if ((recentStaffCount || 0) > 0) {
+            console.log(`[ADMS POST] Duplicate within 30s — skipped for staff ${staff.full_name}`);
+          } else {
+            await supabase.from("attendances").insert({
+              staff_id: staff.id,
+              device_id: serialNo,
+              punch_time: punchTimeUTC,
+              punch_type: "in",
+              verified: true,
+            });
+            console.log(`[ADMS POST] ✓ Saved attendance for staff: ${staff.full_name}`);
+          }
         } else {
-          await supabase.from("unverified_attendances").insert({
-            device_id: serialNo,
-            raw_id: uid,
-            punch_time: punchTimeUTC,
-          });
-          console.log(`[ADMS POST] ⚠ Unverified punch: uid=${uid}`);
+          const { count: recentUnverifiedCount } = await supabase
+            .from("unverified_attendances")
+            .select("*", { count: "exact", head: true })
+            .eq("device_id", serialNo)
+            .eq("raw_id", uid)
+            .gte("punch_time", thirtySecAgo)
+            .lte("punch_time", punchTimeUTC);
+
+          if ((recentUnverifiedCount || 0) > 0) {
+            console.log(`[ADMS POST] Duplicate unverified punch within 30s — skipped for uid=${uid}`);
+          } else {
+            await supabase.from("unverified_attendances").insert({
+              device_id: serialNo,
+              raw_id: uid,
+              punch_time: punchTimeUTC,
+            });
+            console.log(`[ADMS POST] ⚠ Unverified punch: uid=${uid}`);
+          }
         }
       }
     }
