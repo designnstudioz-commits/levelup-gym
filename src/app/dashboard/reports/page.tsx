@@ -21,7 +21,7 @@ import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { formatPKR, formatDate, getMemberStatusDisplay, fetchAllRows } from "@/lib/utils";
+import { formatPKR, formatDate, getMemberStatusDisplay, fetchAllRows, safeDateValue } from "@/lib/utils";
 
 // ── Constants ────────────────────────────────────────────────────────
 type ReportType = "overview" | "revenue" | "membership" | "attendance" | "submissions" | "trainers" | "daily";
@@ -199,10 +199,12 @@ export default function ReportsPage() {
             </div>
             {period === "custom" && (
               <div className="flex items-center gap-2">
-                <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
+                <input type="date" value={customFrom} min="1900-01-01" max="2099-12-31"
+                  onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomFrom(v); }}
                   className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
                 <span className="text-xs text-[#7A7A72]">to</span>
-                <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
+                <input type="date" value={customTo} min="1900-01-01" max="2099-12-31"
+                  onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomTo(v); }}
                   className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
               </div>
             )}

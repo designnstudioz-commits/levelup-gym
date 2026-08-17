@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDateTime, isDeviceOnline, timeAgo } from "@/lib/utils";
+import { formatDateTime, isDeviceOnline, timeAgo, safeDateValue } from "@/lib/utils";
 import Link from "next/link";
 import { toast } from "sonner";
 import type { Device } from "@/types/database";
@@ -536,7 +536,8 @@ export default function AttendancePage() {
             </div>
 
             {dateRange === "custom" && (
-              <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
+              <input type="date" value={customDate} min="1900-01-01" max="2099-12-31"
+                onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomDate(v); }}
                 className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
               />
             )}

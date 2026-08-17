@@ -67,6 +67,19 @@ export function formatDateTime(date: string | Date | null | undefined): string {
   }
 }
 
+// Native date inputs don't reliably stop a stray extra digit in the year
+// segment (e.g. typing "42026" instead of "2026") in every browser. Use
+// this to guard a raw <input type="date"> onChange — returns null (drop
+// the change) when the year is out of a sane range, otherwise the value
+// to pass through unchanged. Pairs with min/max attrs for the visual
+// :invalid state; this is what actually stops the bad value reaching state.
+export function safeDateValue(value: string): string | null {
+  if (!value) return "";
+  const year = value.split("-")[0];
+  if (year.length > 4 || Number(year) < 1900 || Number(year) > 2099) return null;
+  return value;
+}
+
 export function timeAgo(date: string | Date | null | undefined): string {
   if (!date) return "—";
   try {

@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatDateTime, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, safeDateValue } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
@@ -796,12 +796,14 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2">
               <label className="text-xs text-[#7A7A72] font-medium">From</label>
-              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)}
+              <input type="date" value={customFrom} min="1900-01-01" max="2099-12-31"
+                onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomFrom(v); }}
                 className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-[#7A7A72] font-medium">To</label>
-              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)}
+              <input type="date" value={customTo} min="1900-01-01" max="2099-12-31"
+                onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomTo(v); }}
                 className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
             </div>
           </div>

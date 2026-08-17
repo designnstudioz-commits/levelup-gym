@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatPKR, generateMembershipNo, formatPhone } from "@/lib/utils";
+import { formatDate, formatPKR, generateMembershipNo, formatPhone, safeDateValue } from "@/lib/utils";
 import type { DailyMember, Package, StaffMember } from "@/types/database";
 import { addMonths } from "date-fns";
 
@@ -274,7 +274,8 @@ export default function DailyMembersPage() {
             </div>
 
             {dateRange === "custom" && (
-              <input type="date" value={customDate} onChange={(e) => setCustomDate(e.target.value)}
+              <input type="date" value={customDate} min="1900-01-01" max="2099-12-31"
+                onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomDate(v); }}
                 className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
               />
             )}
