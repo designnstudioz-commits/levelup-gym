@@ -19,7 +19,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, isPTPackage, buildCommissionPayload } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, isPTPackage, buildCommissionPayload } from "@/lib/utils";
 import type { Member, Package as PackageType, StaffMember, FeePayment, TrainerMemberCommission } from "@/types/database";
 import Link from "next/link";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
@@ -41,6 +41,10 @@ const SERVICE_ICONS: Record<string, string> = {
   "Physiotherapy": "🩺", "Pilates": "🧘", "Kids Play Area": "🧸",
   "Snooker & Pool": "🎱", "Chess & Carom": "♟️",
 };
+
+interface PaymentWithCollector extends FeePayment {
+  collector?: { full_name: string } | null;
+}
 
 function buildReceiptHtml(r: {
   memberName: string; memberNo: string; packageName: string;
@@ -142,7 +146,7 @@ export default function MemberDetailPage() {
   const [member, setMember] = useState<Member & { packages?: PackageType | null; trainer?: StaffMember | null } | null>(null);
   const [packages, setPackages] = useState<PackageType[]>([]);
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
-  const [payments, setPayments] = useState<FeePayment[]>([]);
+  const [payments, setPayments] = useState<PaymentWithCollector[]>([]);
   const [services, setServices] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -371,7 +375,7 @@ export default function MemberDetailPage() {
         .single(),
       supabase.from("packages").select("*").eq("status", "active").is("deleted_at", null),
       supabase.from("staff_members").select("*").eq("role", "Trainer").eq("status", "active").is("deleted_at", null),
-      supabase.from("fee_payments").select("*").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).limit(10),
+      supabase.from("fee_payments").select("*, collector:system_users!fee_payments_collected_by_fkey(full_name)").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).order("created_at", { ascending: false }).limit(10),
       supabase.from("staff_members").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active").is("deleted_at", null),
       supabase.from("trainer_member_commissions").select("*").eq("member_id", id).is("deleted_at", null).maybeSingle(),
     ]);
@@ -624,6 +628,7 @@ export default function MemberDetailPage() {
       payment_method: line.method as any,
       payment_date: paymentDate,
       receipt_no: receiptNo,
+      collected_by: currentUser?.id ?? null,
       note: fullNote,
       balance_due: i === 0 ? balanceDue : 0,
       balance_due_date: i === 0 && balanceDue > 0 ? feePartial.balanceDueDate : null,
@@ -763,6 +768,7 @@ export default function MemberDetailPage() {
       payment_method: line.method as any,
       payment_date: paymentDate,
       receipt_no: receiptNo,
+      collected_by: currentUser?.id ?? null,
       note: `Balance payment for receipt${receiptNos.length > 1 ? "s" : ""} ${receiptNos.join(", ")}`,
       balance_due: 0,
       balance_due_date: null,
@@ -1563,6 +1569,9 @@ export default function MemberDetailPage() {
                         )}
                       </div>
                       <p className="text-xs text-[#7A7A72]">{formatDate(p.payment_date)} · {p.payment_method}</p>
+                      <p className="text-xs text-[#7A7A72]">
+                        Collected by {p.collector?.full_name ?? <span className="italic">not recorded</span>} · {formatDateTime(p.created_at)}
+                      </p>
                       {p.note && <p className="text-xs text-[#7A7A72] italic mt-0.5 truncate max-w-xs">{p.note}</p>}
                     </div>
                     <span className="text-base font-bold text-green-700 flex-shrink-0">{formatPKR(p.amount)}</span>

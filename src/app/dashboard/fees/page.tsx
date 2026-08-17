@@ -21,7 +21,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments } from "@/lib/utils";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
@@ -33,6 +33,7 @@ type DateRange = "thisMonth" | "lastMonth" | "3months" | "alltime" | "custom";
 interface PaymentRow extends FeePayment {
   member?: { id: string; full_name: string; membership_no: string; photo_url: string | null } | null;
   packages?: { name: string; color: string | null } | null;
+  collector?: { full_name: string } | null;
 }
 
 interface MemberWithPackage extends Member {
@@ -134,7 +135,7 @@ export default function FeesPage() {
 
     const [{ data: pays }, { data: mems }, { data: rp }] = await Promise.all([
       supabase.from("fee_payments")
-        .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url, packages(name, color))")
+        .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url, packages(name, color)), collector:system_users!fee_payments_collected_by_fkey(full_name)")
         .is("deleted_at", null)
         .gte("payment_date", from)
         .lte("payment_date", to)
@@ -229,6 +230,7 @@ export default function FeesPage() {
         payment_date: today,
         month_covered: feeType === "membership" ? today : null,
         receipt_no: receiptNo,
+        collected_by: currentUser?.id ?? null,
         note: fullNote,
         balance_due: i === 0 ? balanceDue : 0,
         balance_due_date: i === 0 && balanceDue > 0 ? feePartial.balanceDueDate : null,
@@ -728,9 +730,10 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
 
   function getSortValue(p: PaymentRow, key: string): string | number | null {
     switch (key) {
-      case "member":  return (p as any).member?.full_name ?? null;
-      case "month":   return p.month_covered ?? p.payment_date ?? null;
-      default:        return (p as any)[key] ?? null;
+      case "member":       return (p as any).member?.full_name ?? null;
+      case "month":        return p.month_covered ?? p.payment_date ?? null;
+      case "collected_by": return p.collector?.full_name ?? null;
+      default:             return (p as any)[key] ?? null;
     }
   }
   const sortedPayments = [...payments].sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
@@ -855,6 +858,7 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                   <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Method" sortKey="payment_method" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Paid On" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Collected By" sortKey="collected_by" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Note</th>
                   <th className="px-4 py-3" />
                 </tr>
@@ -924,6 +928,16 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                         </span>
                       </td>
                       <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {p.collector?.full_name ? (
+                          <>
+                            <p className="text-sm text-[#1A1A16]">{p.collector.full_name}</p>
+                            <p className="text-[10px] text-[#7A7A72]">{formatDateTime(p.created_at)}</p>
+                          </>
+                        ) : (
+                          <span className="text-xs text-[#7A7A72] italic">Not recorded</span>
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[140px] truncate">{cleanNote ?? "—"}</td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2">
