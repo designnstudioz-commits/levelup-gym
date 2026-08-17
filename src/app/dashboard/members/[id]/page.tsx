@@ -173,7 +173,7 @@ export default function MemberDetailPage() {
     email: "", cnic: "", address: "", dob: "", gender: "",
     marital_status: "", blood_group: "", height: "", weight: "",
     medical_notes: "", emergency_name: "", emergency_phone: "",
-    joining_date: "", expiry_date: "", admission_fee: "",
+    joining_date: "", membership_start_date: "", expiry_date: "", admission_fee: "",
   });
   const [editPhotoUrl, setEditPhotoUrl] = useState<string | null>(null);
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -199,6 +199,7 @@ export default function MemberDetailPage() {
       emergency_name: member.emergency_name ?? "",
       emergency_phone: member.emergency_phone ?? "",
       joining_date: member.joining_date ?? "",
+      membership_start_date: member.membership_start_date ?? "",
       expiry_date: member.expiry_date ?? "",
       admission_fee: member.admission_fee ? String(member.admission_fee) : "",
     });
@@ -275,8 +276,9 @@ export default function MemberDetailPage() {
       emergency_phone:   profileForm.emergency_phone.trim() || null,
       photo_url:         editPhotoUrl?.startsWith("blob:") ? member?.photo_url ?? null : (editPhotoUrl || null),
       membership_no:     updatedMembershipNo,
-      joining_date:      profileForm.joining_date || null,
-      expiry_date:       profileForm.expiry_date || null,
+      joining_date:           profileForm.joining_date || null,
+      membership_start_date:  profileForm.membership_start_date || null,
+      expiry_date:            profileForm.expiry_date || null,
       admission_fee:     profileForm.admission_fee ? parseFloat(profileForm.admission_fee) : null,
       updated_at:        new Date().toISOString(),
     }).eq("id", id);
@@ -1716,22 +1718,29 @@ export default function MemberDetailPage() {
           <div>
             <p className="text-xs font-bold text-[#7A7A72] uppercase tracking-wide mb-3">Membership Details</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <Input label="Joining Date *" type="date" required value={profileForm.joining_date}
+              <Input
+                label="Joining Date"
+                type="date"
+                value={profileForm.joining_date}
+                disabled
+                hint="Original signup date — not editable here"
+              />
+              <Input label="Start Date" type="date" value={profileForm.membership_start_date}
                 onChange={(e) => {
-                  const newJoiningDate = e.target.value;
+                  const newStart = e.target.value;
                   const durationMonths = member?.packages?.duration_months || 1;
                   setProfileForm((f) => ({
                     ...f,
-                    joining_date: newJoiningDate,
-                    expiry_date: newJoiningDate ? addMonthsToDateStr(newJoiningDate, durationMonths) : f.expiry_date,
+                    membership_start_date: newStart,
+                    expiry_date: newStart ? addMonthsToDateStr(newStart, durationMonths) : f.expiry_date,
                   }));
                 }} />
               <Input
-                label="Expiry Date"
+                label="End Date"
                 type="date"
                 value={profileForm.expiry_date}
                 onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))}
-                hint="Auto-calculated from joining date + package duration"
+                hint="Auto-calculated from start date + package duration"
               />
               <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
                 onChange={(e) => setProfileForm((f) => ({ ...f, admission_fee: e.target.value }))} />

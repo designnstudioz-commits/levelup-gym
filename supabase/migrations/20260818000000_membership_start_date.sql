@@ -1,0 +1,12 @@
+-- New column: the start of a member's CURRENT billing/membership cycle,
+-- editable independently from expiry_date in the Edit Profile modal (which
+-- now shows "Start Date" / "End Date" instead of a single auto-computed
+-- Expiry Date). No existing column represents this — joining_date is the
+-- member's original signup date (unchanged, now read-only in that modal)
+-- and expiry_date is the existing cycle-end date (relabeled "End Date" in
+-- the UI only; column name/semantics unchanged everywhere else it's used).
+-- Left NULL for all existing members — there's nothing reliable to
+-- backfill it from (joining_date would be historically wrong for anyone
+-- who has since renewed), so staff fill it in going forward as they edit
+-- each member.
+ALTER TABLE members ADD COLUMN IF NOT EXISTS membership_start_date DATE;

@@ -168,6 +168,7 @@ export interface Member {
   trainer_id: string | null;
   nutritionist_id: string | null;
   joining_date: string | null;
+  membership_start_date: string | null;
   expiry_date: string | null;
   admission_fee: number | null;
   monthly_fee: number | null;
