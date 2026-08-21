@@ -7,7 +7,9 @@ export type PaymentMethod = "Cash" | "Bank" | "Card" | "EasyPaisa" | "JazzCash";
 export type SystemRole = "owner" | "manager" | "receptionist" | "trainer" | "viewer";
 export type StaffRole = "Trainer" | "Receptionist" | "Manager" | "Nutritionist" | "Software Developer" | "Designer" | "Freelancer" | "Other";
 export type PunchType = "in" | "out" | "unknown";
-export type SmsStatus = "queued" | "sent" | "failed";
+// "prepared" = logged from the Front Desk dashboard's Send Reminder action
+// but never actually dispatched — no SMS/WhatsApp/email gateway exists yet.
+export type SmsStatus = "prepared" | "queued" | "sent" | "failed";
 
 export interface Package {
   id: string;
@@ -399,6 +401,24 @@ export interface SmsLog {
   created_at: string;
 }
 
+// Ad-hoc front-desk to-do items ("Call Ali about renewal") — see
+// supabase/migrations/20260822000000_staff_tasks.sql.
+export interface StaffTask {
+  id: string;
+  title: string;
+  member_id: string | null;
+  assigned_to: string;
+  due_date: string | null;
+  priority: "low" | "medium" | "high";
+  status: "pending" | "completed" | "snoozed";
+  snoozed_until: string | null;
+  created_by: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
 // Supabase Database type for typed client
 export interface Database {
   public: {
@@ -415,6 +435,7 @@ export interface Database {
       daily_members: { Row: DailyMember; Insert: Omit<DailyMember, "id" | "created_at">; Update: Partial<DailyMember> };
       sms_log: { Row: SmsLog; Insert: Omit<SmsLog, "id" | "created_at">; Update: Partial<SmsLog> };
       trainer_commission_ledger: { Row: TrainerCommissionLedger; Insert: Omit<TrainerCommissionLedger, "id" | "created_at" | "updated_at">; Update: Partial<TrainerCommissionLedger> };
+      staff_tasks: { Row: StaffTask; Insert: Omit<StaffTask, "id" | "created_at" | "updated_at">; Update: Partial<StaffTask> };
     };
   };
 }

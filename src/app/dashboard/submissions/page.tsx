@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
-import { formatDate, timeAgo, formatPKR, generateMembershipNo } from "@/lib/utils";
+import { formatDate, timeAgo, formatPKR } from "@/lib/utils";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import type { Submission } from "@/types/database";
 
@@ -48,6 +48,10 @@ const REJECT_PRESETS = [
 export default function SubmissionsPage() {
   const router = useRouter();
   const currentUser = useCurrentUser();
+  // The real enforcement is server-side (src/app/api/submissions/approve|
+  // reject) — this only hides the buttons so a receptionist isn't shown
+  // actions that would just 403.
+  const canApprove = currentUser?.role === "owner" || currentUser?.role === "manager";
   const [submissions, setSubmissions] = useState<SubmissionWithPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("pending");
@@ -104,79 +108,30 @@ export default function SubmissionsPage() {
     );
   }).sort((a, b) => compareValues(getSortValue(a, sortKey), getSortValue(b, sortKey), sortDir));
 
+  // Approve/reject go through server routes now, not a direct client
+  // mutation — those routes are the actual owner/manager-only enforcement
+  // point (see src/app/api/submissions/approve|reject). A receptionist can
+  // still click Review to see everything, but the action itself will be
+  // rejected server-side with a 403 if they somehow reach it.
   async function handleApprove(sub: SubmissionWithPackage) {
     setProcessing(sub.id);
     try {
-      const supabase = createClient();
-
-      const membershipNo = await generateMembershipNo(sub.gender);
-
-      // Insert into members
-      const { data: newMember, error: memberError } = await supabase.from("members").insert({
-        submission_id: sub.id,
-        membership_no: membershipNo,
-        full_name: sub.full_name,
-        secondary_name: sub.secondary_name,
-        dob: sub.dob,
-        age: sub.age,
-        gender: sub.gender,
-        marital_status: sub.marital_status,
-        phone: sub.phone,
-        whatsapp: sub.whatsapp,
-        email: sub.email,
-        cnic: sub.cnic,
-        address: sub.address,
-        blood_group: sub.blood_group,
-        vaccinated: sub.vaccinated,
-        height: sub.height,
-        weight: sub.weight,
-        medical_notes: sub.medical_notes,
-        emergency_name: sub.emergency_name,
-        emergency_phone: sub.emergency_phone,
-        photo_url: sub.photo_url,
-        package_id: sub.package_id,
-        trainer_id: sub.trainer_id,
-        joining_date: sub.joining_date,
-        expiry_date: sub.expiry_date,
-        admission_fee: sub.admission_fee,
-        monthly_fee: sub.monthly_fee,
-        status: "active",
-      }).select("id").single();
-
-      if (memberError) throw memberError;
-
-      // Update submission status
-      const { error: subError } = await supabase
-        .from("submissions")
-        .update({
-          status: "approved",
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq("id", sub.id);
-
-      if (subError) throw subError;
-
-      // Log activity
-      await supabase.from("activity_logs").insert({
-        user_id: currentUser?.id ?? null,
-        action: "approved_submission",
-        entity_type: "submission",
-        entity_id: sub.id,
-        description: `Approved registration for ${sub.full_name} — Membership ${membershipNo}`,
-        metadata: { membership_no: membershipNo },
+      const res = await fetch("/api/submissions/approve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submissionId: sub.id }),
       });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error ?? "Failed to approve");
 
-      toast.success(`${sub.full_name} approved! Membership: ${membershipNo}`);
+      toast.success(`${sub.full_name} approved! Membership: ${result.membershipNo}`);
       setViewSubmission(null);
       fetchSubmissions();
       router.refresh(); // updates the sidebar's pending-submissions badge
-      // Navigate to new member profile
-      if (newMember?.id) {
-        router.push(`/dashboard/members/${newMember.id}`);
-      }
-    } catch (err) {
+      if (result.memberId) router.push(`/dashboard/members/${result.memberId}`);
+    } catch (err: any) {
       console.error(err);
-      toast.error("Failed to approve. Please try again.");
+      toast.error(err?.message ?? "Failed to approve. Please try again.");
     } finally {
       setProcessing(null);
     }
@@ -191,31 +146,21 @@ export default function SubmissionsPage() {
 
     setProcessing(rejectModal.id);
     try {
-      const supabase = createClient();
-      await supabase
-        .from("submissions")
-        .update({
-          status: "rejected",
-          rejection_reason: rejectReason,
-          reviewed_at: new Date().toISOString(),
-        })
-        .eq("id", rejectModal.id);
-
-      await supabase.from("activity_logs").insert({
-        user_id: currentUser?.id ?? null,
-        action: "rejected_submission",
-        entity_type: "submission",
-        entity_id: rejectModal.id,
-        description: `Rejected registration for ${rejectModal.full_name}. Reason: ${rejectReason}`,
+      const res = await fetch("/api/submissions/reject", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ submissionId: rejectModal.id, reason: rejectReason }),
       });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error ?? "Failed to reject");
 
       toast.success("Submission rejected");
       setRejectModal(null);
       setRejectReason("");
       fetchSubmissions();
       router.refresh(); // updates the sidebar's pending-submissions badge
-    } catch {
-      toast.error("Failed to reject. Please try again.");
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to reject. Please try again.");
     } finally {
       setProcessing(null);
     }
@@ -461,7 +406,7 @@ export default function SubmissionsPage() {
                           >
                             <Eye className="w-4 h-4" />
                           </button>
-                          {sub.status === "pending" && (
+                          {sub.status === "pending" && canApprove && (
                             <>
                               <button
                                 onClick={() => handleApprove(sub)}
@@ -588,7 +533,7 @@ export default function SubmissionsPage() {
               </div>
             )}
 
-            {viewSubmission.status === "pending" && (
+            {viewSubmission.status === "pending" && canApprove && (
               <div className="flex gap-3 pt-4 border-t border-[#E4E4DE]">
                 <Button
                   onClick={() => handleApprove(viewSubmission)}
@@ -611,6 +556,11 @@ export default function SubmissionsPage() {
                   Reject
                 </Button>
               </div>
+            )}
+            {viewSubmission.status === "pending" && !canApprove && (
+              <p className="text-xs text-[#7A7A72] pt-4 border-t border-[#E4E4DE]">
+                Awaiting review by an owner or manager.
+              </p>
             )}
           </div>
         )}
