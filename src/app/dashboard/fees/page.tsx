@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
+import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Badge } from "@/components/ui/Badge";
@@ -32,7 +33,7 @@ type PeriodMode = "current" | "next" | "custom";
 
 // ── Types ────────────────────────────────────────────────────────────
 type Tab = "overview" | "transactions" | "outstanding" | "renewals" | "analytics";
-type DateRange = "thisMonth" | "lastMonth" | "3months" | "alltime" | "custom";
+type DateRange = "today" | "yesterday" | "week" | "month" | "lastMonth" | "custom";
 
 interface PaymentRow extends FeePayment {
   member?: { id: string; full_name: string; membership_no: string; photo_url: string | null } | null;
@@ -64,6 +65,7 @@ const TYPE_COLORS: Record<string, string> = {
 
 // ── Main Page ────────────────────────────────────────────────────────
 export default function FeesPage() {
+  useRoleGuard(["owner", "manager", "receptionist"]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const currentUser = useCurrentUser();
@@ -77,6 +79,12 @@ export default function FeesPage() {
   // Shared data
   const [payments, setPayments]           = useState<PaymentRow[]>([]);
   const [members, setMembers]             = useState<MemberWithPackage[]>([]);
+  // Walk-in day-pass revenue (daily_members.fee_paid) for the selected
+  // period — real collected money, kept as its own clearly-labeled figure
+  // rather than merged into the fee_payments-based Transactions rows,
+  // since walk-ins aren't members and don't share that table's shape
+  // (no receipt_no, no coverage period, no reverse/detail actions).
+  const [walkIns, setWalkIns]             = useState<{ fee_paid: number | null; visit_date: string }[]>([]);
   const [recentPayments30, setRecentP30]  = useState<{ member_id: string; payment_date: string }[]>([]);
   const [loading, setLoading]             = useState(true);
 
@@ -87,7 +95,7 @@ export default function FeesPage() {
   // Finance redesign — a payment collected in August for September dues
   // must be findable either way, on purpose.
   const [txDateField, setTxDateField]         = useState<"collection" | "coverage">("collection");
-  const [txDateRange, setTxDateRange]         = useState<DateRange>("thisMonth");
+  const [txDateRange, setTxDateRange]         = useState<DateRange>("month");
   const [txCustomFrom, setTxCustomFrom]       = useState("");
   const [txCustomTo, setTxCustomTo]           = useState("");
   const [txSearch, setTxSearch]               = useState("");
@@ -161,13 +169,14 @@ export default function FeesPage() {
   // ── Date bounds ─────────────────────────────────────────────────
   function getTxBounds() {
     const today = new Date();
-    if (txDateRange === "thisMonth")  return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
+    if (txDateRange === "today")     { const t = format(today, "yyyy-MM-dd"); return { from: t, to: t }; }
+    if (txDateRange === "yesterday") { const y = format(subDays(today, 1), "yyyy-MM-dd"); return { from: y, to: y }; }
+    if (txDateRange === "week")      return { from: format(startOfWeek(today, { weekStartsOn: 1 }), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
+    if (txDateRange === "month")     return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
     if (txDateRange === "lastMonth") {
       const last = subMonths(today, 1);
       return { from: format(startOfMonth(last), "yyyy-MM-dd"), to: format(endOfMonth(last), "yyyy-MM-dd") };
     }
-    if (txDateRange === "3months") return { from: format(startOfMonth(subMonths(today, 2)), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
-    if (txDateRange === "alltime")  return { from: "2020-01-01", to: format(today, "yyyy-MM-dd") };
     if (txDateRange === "custom" && txCustomFrom && txCustomTo) return { from: txCustomFrom, to: txCustomTo };
     return { from: format(startOfMonth(today), "yyyy-MM-dd"), to: format(today, "yyyy-MM-dd") };
   }
@@ -191,14 +200,19 @@ export default function FeesPage() {
       ? paymentsQuery.lte("coverage_start", to).gte("coverage_end", from)
       : paymentsQuery.gte("payment_date", from).lte("payment_date", to);
 
-    const [{ data: pays }, { data: mems }] = await Promise.all([
+    const [{ data: pays }, { data: mems }, { data: walkIns }] = await Promise.all([
       paymentsQuery.order("payment_date", { ascending: false }).order("created_at", { ascending: false }),
       supabase.from("members")
         .select("*, packages(name, monthly_fee, color, duration_months)")
         .eq("status", "active")
         .is("deleted_at", null)
         .order("full_name"),
+      // Walk-ins have no coverage-period concept, so they're scoped by
+      // visit_date regardless of the Collection Date / Coverage Period
+      // filter toggle above.
+      supabase.from("daily_members").select("fee_paid, visit_date").is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
     ]);
+    setWalkIns(walkIns ?? []);
 
     // "Unpaid" lookback is per-member: since membership_start_date (the
     // start of their CURRENT billing cycle), falling back to the 30-day
@@ -440,8 +454,14 @@ export default function FeesPage() {
     return days !== null && days > 3 && days <= 7;
   });
   const todayPayments = payments.filter((p) => p.payment_date === todayStr);
-  const totalRevenue  = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
-  const todayRevenue  = todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0);
+  // Revenue = fee_payments + walk-in day passes — walk-in money is real
+  // collected revenue and belongs in these totals; it was previously
+  // tracked only on the Reports Daily Summary tab.
+  const todayWalkIns  = walkIns.filter((w) => w.visit_date === todayStr);
+  const walkInTotal   = walkIns.reduce((s, w) => s + (w.fee_paid ?? 0), 0);
+  const todayWalkInTotal = todayWalkIns.reduce((s, w) => s + (w.fee_paid ?? 0), 0);
+  const totalRevenue  = payments.reduce((s, p) => s + (p.amount ?? 0), 0) + walkInTotal;
+  const todayRevenue  = todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0) + todayWalkInTotal;
 
   const collectorNames = [...new Set(payments.map((p) => p.collector?.full_name).filter(Boolean))] as string[];
 
@@ -498,6 +518,11 @@ export default function FeesPage() {
           <StatsCard title="Expired Members" value={expired.length} icon={AlertTriangle} iconColor="text-red-600" iconBg="bg-red-50" />
           <StatsCard title="Unpaid This Month" value={unpaidActive.length} icon={Clock} iconColor="text-amber-600" iconBg="bg-amber-50" />
         </div>
+        {!hideRevenue && walkInTotal > 0 && (
+          <p className="text-xs text-[#7A7A72] -mt-2">
+            Revenue above includes {formatPKR(walkInTotal)} from {walkIns.length} walk-in day pass{walkIns.length !== 1 ? "es" : ""} this period ({formatPKR(todayWalkInTotal)} today) — see <Link href="/dashboard/daily-members" className="text-[#F06418] font-semibold hover:underline">Daily Members</Link>.
+          </p>
+        )}
 
         {/* Tabs */}
         <div className="flex bg-white border border-[#E4E4DE] rounded-xl p-1 gap-0.5 w-fit">
@@ -524,6 +549,7 @@ export default function FeesPage() {
           collectorFilter={txCollectorFilter} setCollectorFilter={setTxCollectorFilter} collectorNames={collectorNames}
           balanceFilter={txBalanceFilter} setBalanceFilter={setTxBalanceFilter}
           amountMin={txAmountMin} setAmountMin={setTxAmountMin} amountMax={txAmountMax} setAmountMax={setTxAmountMax}
+          walkInTotal={walkInTotal} walkInCount={walkIns.length}
           onRefresh={fetchAll} hideRevenue={hideRevenue} onOpenDetail={setDetailPaymentId} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
         {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
@@ -952,8 +978,10 @@ function TransactionsTab({ payments, totalRevenue, loading,
   search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter,
   collectorFilter, setCollectorFilter, collectorNames, balanceFilter, setBalanceFilter,
   amountMin, setAmountMin, amountMax, setAmountMax,
+  walkInTotal, walkInCount,
   onRefresh, hideRevenue, onOpenDetail }: {
   payments: PaymentRow[]; totalRevenue: number; loading: boolean;
+  walkInTotal: number; walkInCount: number;
   dateField: "collection" | "coverage"; setDateField: (v: "collection" | "coverage") => void;
   dateRange: DateRange; setDateRange: (v: DateRange) => void;
   customFrom: string; setCustomFrom: (v: string) => void;
@@ -974,6 +1002,38 @@ function TransactionsTab({ payments, totalRevenue, loading,
   const [sortKey, setSortKey] = useState("payment_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const handleSort = useSortToggle(sortKey, setSortKey, sortDir, setSortDir);
+
+  // Secondary filters live behind the "Filters" popover — staged in local
+  // draft state so opening the panel never changes anything until Apply is
+  // clicked, per the redesign's "don't feel like a database query form"
+  // goal. The primary Date Type / period buttons stay live/instant, same
+  // as before — only these six get the Apply/Clear treatment.
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [draftType, setDraftType] = useState(typeFilter);
+  const [draftMethod, setDraftMethod] = useState(methodFilter);
+  const [draftCollector, setDraftCollector] = useState(collectorFilter);
+  const [draftBalance, setDraftBalance] = useState(balanceFilter);
+  const [draftMin, setDraftMin] = useState(amountMin);
+  const [draftMax, setDraftMax] = useState(amountMax);
+
+  function openFilters() {
+    setDraftType(typeFilter); setDraftMethod(methodFilter); setDraftCollector(collectorFilter);
+    setDraftBalance(balanceFilter); setDraftMin(amountMin); setDraftMax(amountMax);
+    setFiltersOpen(true);
+  }
+  function applyFilters() {
+    setTypeFilter(draftType); setMethodFilter(draftMethod); setCollectorFilter(draftCollector);
+    setBalanceFilter(draftBalance); setAmountMin(draftMin); setAmountMax(draftMax);
+    setFiltersOpen(false);
+  }
+  function clearSecondaryFilters() {
+    setTypeFilter("all"); setMethodFilter("all"); setCollectorFilter("all");
+    setBalanceFilter("all"); setAmountMin(""); setAmountMax("");
+    setDraftType("all"); setDraftMethod("all"); setDraftCollector("all");
+    setDraftBalance("all"); setDraftMin(""); setDraftMax("");
+    setFiltersOpen(false);
+  }
+  const activeSecondaryCount = [typeFilter !== "all", methodFilter !== "all", collectorFilter !== "all", balanceFilter !== "all", !!amountMin, !!amountMax].filter(Boolean).length;
 
   function getSortValue(p: PaymentRow, key: string): string | number | null {
     switch (key) {
@@ -997,17 +1057,46 @@ function TransactionsTab({ payments, totalRevenue, loading,
     toast.success("Payment entry removed.");
   }
   const DATE_LABELS: Record<DateRange, string> = {
-    thisMonth: "This Month", lastMonth: "Last Month",
-    "3months": "3 Months", alltime: "All Time", custom: "Custom Range",
+    today: "Today", yesterday: "Yesterday", week: "This Week",
+    month: "This Month", lastMonth: "Last Month", custom: "Custom",
   };
 
-  // Totals by method for summary row
+  // Active filter chips — only the ones genuinely deviating from defaults,
+  // so the bar stays empty/quiet on the common "just looking at this
+  // month's payments" case.
+  type Chip = { key: string; label: string; onRemove: () => void };
+  const chips: Chip[] = [];
+  if (!(dateField === "collection" && dateRange === "month")) {
+    const dateTypeLabel = dateField === "coverage" ? "Coverage Period" : "Collection Date";
+    const rangeLabel = dateRange === "custom" && customFrom && customTo
+      ? `${formatDate(customFrom)} – ${formatDate(customTo)}`
+      : DATE_LABELS[dateRange];
+    chips.push({ key: "date", label: `${dateTypeLabel}: ${rangeLabel}`, onRemove: () => { setDateField("collection"); setDateRange("month"); } });
+  }
+  if (typeFilter !== "all") chips.push({ key: "type", label: `Type: ${TYPE_LABELS[typeFilter] ?? typeFilter}`, onRemove: () => setTypeFilter("all") });
+  if (methodFilter !== "all") chips.push({ key: "method", label: `Method: ${methodFilter}`, onRemove: () => setMethodFilter("all") });
+  if (collectorFilter !== "all") chips.push({ key: "collector", label: `Collected By: ${collectorFilter}`, onRemove: () => setCollectorFilter("all") });
+  if (balanceFilter !== "all") chips.push({ key: "balance", label: `Balance: ${balanceFilter === "partial" ? "Outstanding" : "Fully Paid"}`, onRemove: () => setBalanceFilter("all") });
+  if (amountMin || amountMax) chips.push({ key: "amount", label: `Amount: Rs ${amountMin || "0"}–${amountMax || "∞"}`, onRemove: () => { setAmountMin(""); setAmountMax(""); } });
+  function clearAllFilters() {
+    setDateField("collection"); setDateRange("month"); setCustomFrom(""); setCustomTo("");
+    clearSecondaryFilters();
+  }
+
+  // Totals by method for summary row — payment methods only. Walk-in day
+  // passes aren't a payment method (they're a different revenue category,
+  // daily_members not fee_payments), so they're kept as their own separate
+  // summary line below rather than mixed into this breakdown.
   const byMethod = PAYMENT_METHODS.map((m) => ({
     method: m,
     total: payments.filter((p) => p.payment_method === m).reduce((s, p) => s + (p.amount ?? 0), 0),
   })).filter((m) => m.total > 0);
 
-  const grandTotal = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
+  // Includes walk-in day passes (daily_members) so this matches the
+  // Overview tab's Revenue figure — walk-ins aren't shown as rows in the
+  // table below (different shape, no receipt/coverage/reverse), so they're
+  // added here as one line rather than merged into the row list.
+  const grandTotal = payments.reduce((s, p) => s + (p.amount ?? 0), 0) + walkInTotal;
 
   // Colours for method badges
   const METHOD_BADGE: Record<string, string> = {
@@ -1019,22 +1108,17 @@ function TransactionsTab({ payments, totalRevenue, loading,
   };
 
   return (
-    <div className="space-y-4">
-      {/* ── Search & Filters ── */}
+    <div className="space-y-3">
+      {/* ── Row 1 — date context: "show me payments for this period" ── */}
       <div className="bg-white border border-[#E4E4DE] rounded-xl p-4 space-y-3">
-        {/* Row 1 — which date field the range below applies to */}
         <div className="flex flex-wrap items-center gap-3">
-          <span className="text-xs font-semibold text-[#7A7A72]">Filter by</span>
-          <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
-            <button onClick={() => setDateField("collection")}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${dateField === "collection" ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
-            >Collection Date</button>
-            <button onClick={() => setDateField("coverage")}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${dateField === "coverage" ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
-            >Coverage Period</button>
-          </div>
+          <select value={dateField} onChange={(e) => setDateField(e.target.value as "collection" | "coverage")}
+            className="text-xs font-bold px-3 py-2 rounded-lg border-2 border-[#E4E4DE] bg-white text-[#1A1A16] focus:outline-none focus:border-[#F06418] cursor-pointer">
+            <option value="collection">Collection Date</option>
+            <option value="coverage">Coverage Period</option>
+          </select>
           <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5 flex-wrap">
-            {(["thisMonth", "lastMonth", "3months", "alltime", "custom"] as DateRange[]).map((d) => (
+            {(["today", "yesterday", "week", "month", "lastMonth", "custom"] as DateRange[]).map((d) => (
               <button key={d} onClick={() => setDateRange(d)}
                 className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${dateRange === d ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
               >{DATE_LABELS[d]}</button>
@@ -1043,7 +1127,6 @@ function TransactionsTab({ payments, totalRevenue, loading,
           <Button variant="ghost" size="sm" onClick={onRefresh} className="ml-auto"><RefreshCw className="w-4 h-4" /></Button>
         </div>
 
-        {/* Row 2 — custom range inputs (only when custom selected) */}
         {dateRange === "custom" && (
           <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2">
@@ -1061,56 +1144,101 @@ function TransactionsTab({ payments, totalRevenue, loading,
           </div>
         )}
 
-        {/* Row 3 — free-text search */}
-        <div className="relative max-w-sm">
-          <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
-          <input type="text" placeholder="Search member, membership no., or receipt #..." value={search} onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
-        </div>
+        {/* ── Row 2 — search + Filters popover ── */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative flex-1 min-w-56 max-w-md">
+            <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input type="text" placeholder="Search member, membership #, or receipt #" value={search} onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+          </div>
 
-        {/* Row 4 — type / method / collected by / balance / amount filters */}
-        <div className="flex flex-wrap items-center gap-2">
-          <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
-            <option value="all">All Payment Types</option>
-            {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select>
-          <select value={methodFilter} onChange={(e) => setMethodFilter(e.target.value)}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
-            <option value="all">All Methods</option>
-            {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <select value={collectorFilter} onChange={(e) => setCollectorFilter(e.target.value)}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
-            <option value="all">All Collected By</option>
-            {collectorNames.map((n) => <option key={n} value={n}>{n}</option>)}
-          </select>
-          <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as any)}
-            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
-            <option value="all">All Balances</option>
-            <option value="paid">Fully Paid</option>
-            <option value="partial">Partial / Balance Due</option>
-          </select>
-          <input type="number" placeholder="Min Rs" value={amountMin} onChange={(e) => setAmountMin(e.target.value)}
-            className="w-20 text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
-          <input type="number" placeholder="Max Rs" value={amountMax} onChange={(e) => setAmountMax(e.target.value)}
-            className="w-20 text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
-          <span className="text-xs text-[#7A7A72]">{payments.length} records</span>
+          <div className="relative">
+            <button onClick={() => (filtersOpen ? setFiltersOpen(false) : openFilters())}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-semibold transition-colors ${
+                activeSecondaryCount > 0 ? "border-[#F06418] text-[#F06418] bg-[#FEF0E8]" : "border-[#E4E4DE] text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418]"
+              }`}
+            >
+              Filters
+              {activeSecondaryCount > 0 && (
+                <span className="bg-[#F06418] text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center">{activeSecondaryCount}</span>
+              )}
+              <ChevronDown className="w-3.5 h-3.5" />
+            </button>
+
+            {filtersOpen && (
+              <>
+                {/* Click-away layer — transparent, just for closing the popover */}
+                <div className="fixed inset-0 z-10" onClick={() => setFiltersOpen(false)} />
+                <div className="absolute left-0 top-full mt-2 w-80 bg-white border border-[#E4E4DE] rounded-xl shadow-lg z-20 p-4 space-y-3">
+                  <Select label="Payment Type" value={draftType} onChange={(e) => setDraftType(e.target.value)}>
+                    <option value="all">All Payment Types</option>
+                    {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                  </Select>
+                  <Select label="Payment Method" value={draftMethod} onChange={(e) => setDraftMethod(e.target.value)}>
+                    <option value="all">All Methods</option>
+                    {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                  </Select>
+                  <Select label="Collected By" value={draftCollector} onChange={(e) => setDraftCollector(e.target.value)}>
+                    <option value="all">All Staff</option>
+                    {collectorNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                  </Select>
+                  <Select label="Balance Status" value={draftBalance} onChange={(e) => setDraftBalance(e.target.value as any)}>
+                    <option value="all">All Balances</option>
+                    <option value="paid">Fully Paid</option>
+                    <option value="partial">Outstanding</option>
+                  </Select>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Input label="Min Amount (Rs)" type="number" placeholder="0" value={draftMin} onChange={(e) => setDraftMin(e.target.value)} />
+                    <Input label="Max Amount (Rs)" type="number" placeholder="Any" value={draftMax} onChange={(e) => setDraftMax(e.target.value)} />
+                  </div>
+                  <div className="flex gap-2 pt-2 border-t border-[#E4E4DE]">
+                    <Button variant="secondary" size="sm" onClick={clearSecondaryFilters} className="flex-1">Clear</Button>
+                    <Button size="sm" onClick={applyFilters} className="flex-1">Apply Filters</Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          <span className="text-xs text-[#7A7A72] whitespace-nowrap">{payments.length} records</span>
           {!hideRevenue && (
-            <span className="ml-auto text-sm font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
+            <span className="ml-auto text-sm font-bold text-[#1A1A16] whitespace-nowrap">Total: {formatPKR(grandTotal)}</span>
           )}
         </div>
       </div>
 
-      {/* ── Summary chips ── */}
-      {!hideRevenue && byMethod.length > 0 && (
-        <div className="flex flex-wrap gap-2">
+      {/* ── Active filter chips ── */}
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          {chips.map((c) => (
+            <button key={c.key} onClick={c.onRemove}
+              className="flex items-center gap-1.5 pl-3 pr-2 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-xs font-medium text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] transition-colors">
+              {c.label}
+              <X className="w-3 h-3" />
+            </button>
+          ))}
+          <button onClick={clearAllFilters} className="text-xs font-semibold text-[#F06418] hover:underline">Clear All</button>
+        </div>
+      )}
+
+      {/* ── Payment method summary — reconciliation reference, not filter controls ── */}
+      {!hideRevenue && (byMethod.length > 0 || walkInTotal > 0) && (
+        <div className="flex flex-wrap items-center gap-2">
           {byMethod.map((m) => (
             <div key={m.method} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${METHOD_BADGE[m.method] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
               <span>{m.method}:</span>
               <span className="font-bold">{formatPKR(m.total)}</span>
             </div>
           ))}
+          {walkInTotal > 0 && (
+            <>
+              <span className="w-px h-4 bg-[#E4E4DE] mx-1" />
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 text-xs font-semibold">
+                <span>Walk-in / Day Passes ({walkInCount}):</span>
+                <span className="font-bold">{formatPKR(walkInTotal)}</span>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -1129,12 +1257,10 @@ function TransactionsTab({ payments, totalRevenue, loading,
                 <tr>
                   <SortableTh label="Receipt #" sortKey="receipt_no" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
                   <SortableTh label="Member" sortKey="member" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="Collection Date" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="Coverage Period" sortKey="coverage" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="Payment Type" sortKey="payment_type" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Collected" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="For" sortKey="coverage" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Method" sortKey="payment_method" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="Balance" sortKey="balance" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Collected By" sortKey="collected_by" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Status</th>
                   <th className="px-4 py-3" />
@@ -1178,20 +1304,12 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
-                          {TYPE_LABELS[p.payment_type ?? "other"] ?? p.payment_type}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
                         <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${METHOD_BADGE[p.payment_method ?? ""] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
                           {p.payment_method ?? "—"}
                         </span>
-                      </td>
-                      <td className="px-4 py-3 text-sm whitespace-nowrap">
-                        {isPartial ? <span className="font-bold text-[#C04E10]">{formatPKR(p.balance_due)}</span> : <span className="text-[#7A7A72]">—</span>}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {p.collector?.full_name ? (
@@ -1206,17 +1324,10 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         </span>
                       </td>
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-center gap-2">
-                          <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                            <span className="flex items-center gap-1.5 p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors" title="Printable receipt">
-                              <Receipt className="w-3.5 h-3.5" />
-                            </span>
-                          </Link>
-                          <button onClick={() => setDeleteId(p.id)}
-                            className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" title="Remove this entry">
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        <button onClick={() => setDeleteId(p.id)}
+                          className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" title="Reverse this payment">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </td>
                     </tr>
                   );
@@ -1225,18 +1336,12 @@ function TransactionsTab({ payments, totalRevenue, loading,
             </table>
           </div>
 
-          {/* Footer totals */}
+          {/* Footer total — responds to every active filter above, since
+              `payments` is already the fully-filtered set. */}
           <div className="px-5 py-3 border-t border-[#E4E4DE] bg-[#F8F8F6] flex flex-wrap items-center justify-between gap-3">
-            <span className="text-sm text-[#7A7A72]">{payments.length} transaction{payments.length !== 1 ? "s" : ""}</span>
+            <span className="text-sm text-[#7A7A72]">{payments.length} record{payments.length !== 1 ? "s" : ""}</span>
             {!hideRevenue && (
-              <div className="flex items-center gap-4 flex-wrap">
-                {byMethod.map((m) => (
-                  <span key={m.method} className="text-xs text-[#7A7A72]">
-                    {m.method}: <span className="font-semibold text-[#1A1A16]">{formatPKR(m.total)}</span>
-                  </span>
-                ))}
-                <span className="text-base font-bold text-[#1A1A16] border-l border-[#E4E4DE] pl-4">Total: {formatPKR(grandTotal)}</span>
-              </div>
+              <span className="text-base font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
             )}
           </div>
         </div>
