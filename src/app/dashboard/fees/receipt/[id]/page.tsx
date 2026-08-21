@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { formatDate, formatPKR } from "@/lib/utils";
+import { formatDate, formatPKR, describeCoveredPeriod } from "@/lib/utils";
 import { ArrowLeft } from "lucide-react";
 import { PrintButton } from "./PrintButton";
 import { ReceiptStyles } from "../ReceiptStyles";
@@ -65,6 +65,14 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
     | { name: string; original: number; discount_amount: number; final: number }[]
     | undefined;
 
+  const coverageStartValue = rows.find((r) => r.coverage_start)?.coverage_start ?? null;
+  const coverageEndValue = rows.find((r) => r.coverage_end)?.coverage_end ?? null;
+  const monthsCoveredValue = rows.find((r) => r.months_covered != null)?.months_covered ?? null;
+  const monthCoveredValue = rows.find((r) => r.month_covered)?.month_covered ?? null;
+  const coverage = (coverageStartValue || monthCoveredValue)
+    ? describeCoveredPeriod(coverageStartValue, coverageEndValue, monthCoveredValue, anchor.payment_date, monthsCoveredValue)
+    : null;
+
   const typeLabels: Record<string, string> = {
     membership:     "Monthly Membership",
     admission:      "Admission Fee",
@@ -111,7 +119,7 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
               <p className="receipt-no-value">{receiptNo}</p>
             </div>
             <div>
-              <p className="date-label">Date</p>
+              <p className="date-label">Collection Date</p>
               <p className="date-value">{formatDate(anchor.payment_date)}</p>
             </div>
           </div>
@@ -148,6 +156,12 @@ export default async function ReceiptPage({ params }: { params: Promise<{ id: st
               <span className="row-label">Payment Type</span>
               <span className="row-value">{typeLabels[anchor.payment_type ?? "other"]}</span>
             </div>
+            {coverage?.label && (
+              <div className="row">
+                <span className="row-label">Coverage Period</span>
+                <span className="row-value">{coverage.label}</span>
+              </div>
+            )}
             {packageBreakdown && packageBreakdown.length > 0 && packageBreakdown.map((p, i) => (
               <div className="row" key={i}>
                 <span className="row-label">{p.name}{p.discount_amount > 0 ? ` (− ${formatPKR(p.discount_amount)})` : ""}</span>

@@ -19,10 +19,14 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, isPTPackage, buildCommissionPayload } from "@/lib/utils";
+import { formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, isPTPackage, buildCommissionPayload, safeDateValue } from "@/lib/utils";
+import { generateCommissionEntry } from "@/lib/commission";
 import type { Member, Package as PackageType, StaffMember, FeePayment, TrainerMemberCommission } from "@/types/database";
 import Link from "next/link";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
+import { PaymentDetailModal } from "@/components/forms/PaymentDetailModal";
+
+type PeriodMode = "current" | "next" | "custom";
 
 const SERVICES = [
   "Gym", "Cardio", "Personal Training", "CrossFit", "MMA",
@@ -51,6 +55,7 @@ function buildReceiptHtml(r: {
   amount: number; originalAmount: number; discountAmount: number;
   type: string; lines: { method: string; amount: number }[]; date: string; note: string | null; receiptNo: string;
   balanceDue?: number; balanceDueDate?: string | null;
+  coverageStart?: string | null; coverageEnd?: string | null; monthsCovered?: number | null;
 }): string {
   const typeLabel: Record<string, string> = {
     membership: "Monthly Membership", admission: "Admission Fee",
@@ -68,6 +73,9 @@ function buildReceiptHtml(r: {
   const pkgRow = r.packageName !== "—" ? `
     <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Package</td>
         <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.packageName}</td></tr>` : "";
+  const coverRow = r.coverageStart ? `
+    <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Covers</td>
+        <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${describeCoveredPeriod(r.coverageStart, r.coverageEnd, null, null, r.monthsCovered ?? 1).label}</td></tr>` : "";
   const methodRows = r.lines.map((l) => `
     <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Method${r.lines.length > 1 ? ` (${l.method})` : ""}</td>
         <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${r.lines.length > 1 ? `${new Intl.NumberFormat("en-PK").format(l.amount)} Rs` : l.method}</td></tr>`).join("");
@@ -122,7 +130,7 @@ function buildReceiptHtml(r: {
       <table>
         <tr><td style="padding:4px 0;color:#7A7A72;font-size:13px;">Payment Type</td>
             <td style="padding:4px 0;text-align:right;font-size:13px;font-weight:600;">${typeLabel[r.type] ?? r.type}</td></tr>
-        ${methodRows}${noteRow}${discountRow}
+        ${coverRow}${methodRows}${noteRow}${discountRow}
         <tr class="total-row">
           <td>Total Paid</td>
           <td style="text-align:right;">Rs ${new Intl.NumberFormat("en-PK").format(r.amount)}</td>
@@ -159,11 +167,13 @@ export default function MemberDetailPage() {
   const [renewModal, setRenewModal] = useState(false);
   const [freezeModal, setFreezeModal] = useState(false);
   const [receiptModal, setReceiptModal] = useState(false);
+  const [detailPaymentId, setDetailPaymentId] = useState<string | null>(null);
   const [receiptData, setReceiptData] = useState<{
     memberName: string; memberNo: string; packageName: string;
     amount: number; originalAmount: number; discountAmount: number;
     type: string; lines: { method: string; amount: number }[]; date: string; note: string | null;
     receiptNo: string; balanceDue?: number; balanceDueDate?: string | null;
+    coverageStart?: string | null; coverageEnd?: string | null; monthsCovered?: number | null;
   } | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -321,6 +331,14 @@ export default function MemberDetailPage() {
   const [feeLines, setFeeLines] = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
   const [feePartial, setFeePartial] = useState<PartialPaymentState>(emptyPartialState);
   const [feeNote, setFeeNote] = useState("");
+  const [collectionDate, setCollectionDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
+  const [periodMode, setPeriodMode] = useState<PeriodMode>("current");
+  const [monthsCovered, setMonthsCovered] = useState("1");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
   const [discountType, setDiscountType] = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue] = useState("");
   const [commissionStaffId, setCommissionStaffId] = useState("");
@@ -336,7 +354,7 @@ export default function MemberDetailPage() {
   const [balanceLines, setBalanceLines] = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
   const [payingBalance, setPayingBalance] = useState(false);
 
-  async function openFeeModal() {
+  function openFeeModal() {
     // Pre-fill with package monthly fee (prefer package record, fall back to member field)
     const prefill = (member as any)?.packages?.monthly_fee ?? member?.monthly_fee;
     setFeeAmount(prefill ? String(prefill) : "");
@@ -344,24 +362,28 @@ export default function MemberDetailPage() {
     setFeeLines([{ method: "Cash", amount: "" }]);
     setFeePartial(emptyPartialState);
     setFeeNote("");
+    const d = new Date();
+    setCollectionDate(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
+    setMonthsCovered("1");
+    setCustomStart(""); setCustomEnd("");
+    // "Current Period" only makes sense once the member has an existing
+    // cycle on file (expiry_date set) — a member with none defaults
+    // straight to "Next Period" instead.
+    setPeriodMode(member?.expiry_date ? "current" : "next");
     setDiscountType("none");
     setDiscountValue("");
     setCommissionStaffId(member?.trainer_id ?? "");
     setCommissionRate("");
-    // Check if already paid membership this month
-    if (id) {
-      const supabase = createClient();
-      const now = new Date();
-      const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-      const { count } = await supabase
-        .from("fee_payments")
-        .select("*", { count: "exact", head: true })
-        .eq("member_id", id)
-        .eq("payment_type", "membership")
-        .gte("payment_date", monthStart)
-        .is("deleted_at", null);
-      setAlreadyPaidWarning((count ?? 0) > 0);
-    }
+    // Warn when this member is already paid comfortably ahead — i.e.
+    // expiry is further out than the app's own "renewal due soon" window
+    // (same 30-day threshold getMemberStatusDisplay() uses for the
+    // "Expiring" badge) — rather than checking whether a payment fell in
+    // the current calendar month. That check silently missed an advance
+    // payer: someone who pre-paid last month for a future month has a
+    // stale payment_date but a genuinely-not-yet-due expiry_date, exactly
+    // the case this warning needs to catch.
+    const days = daysUntilExpiry(member?.expiry_date);
+    setAlreadyPaidWarning(days !== null && days > 30);
     setFeeModal(true);
   }
   const [freezeUntil, setFreezeUntil] = useState("");
@@ -591,6 +613,29 @@ export default function MemberDetailPage() {
       : 0;
   const collectingNow = splitTarget(finalAmount, feePartial);
 
+  // ── Coverage Period — completely independent of Collection Date ──
+  // See fees/page.tsx for the full rationale: staff pick WHAT period this
+  // payment covers explicitly, never inferred from when it was collected.
+  const monthsCoveredNum = Math.max(Number(monthsCovered) || 1, 1);
+  const coverageToday = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-${String(new Date().getDate()).padStart(2, "0")}`;
+  const durationMonths = (member as any)?.packages?.duration_months || 1;
+  const currentPeriodStart = member?.membership_start_date ?? member?.joining_date ?? null;
+  const currentPeriodEnd = member?.expiry_date ?? null;
+  const nextStart = member ? nextPeriodStart(member.expiry_date, coverageToday, member.joining_date) : coverageToday;
+  const nextEnd = computeCoverageEnd(nextStart, durationMonths, monthsCoveredNum);
+  const coverageStartValue = periodMode === "current" ? currentPeriodStart : periodMode === "next" ? nextStart : (customStart || null);
+  const coverageEndValue   = periodMode === "current" ? currentPeriodEnd   : periodMode === "next" ? nextEnd   : (customEnd || null);
+  const coverageLabel = coverageStartValue && coverageEndValue
+    ? describeCoveredPeriod(coverageStartValue, coverageEndValue, null, null, monthsCoveredNum).label
+    : null;
+
+  function applyMonths(n: number) {
+    const months = Math.max(n, 1);
+    setMonthsCovered(String(months));
+    const base = Number((member as any)?.packages?.monthly_fee ?? member?.monthly_fee) || 0;
+    if (base > 0) setFeeAmount(String(base * months));
+  }
+
   // showCommission/commissionAmount are computed further down (after the
   // loading/not-found guards). recordFee() below closes over them by
   // reference, so it still sees the correct values by the time it's called.
@@ -605,6 +650,12 @@ export default function MemberDetailPage() {
       toast.error(splitError);
       return;
     }
+    const isRecurring = (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
+    if (isRecurring && periodMode === "custom" && (!customStart || !customEnd)) {
+      toast.error("Enter both a Coverage Start and End date");
+      return;
+    }
+    if (!collectionDate) { toast.error("Enter a Collection Date"); return; }
     setSaving(true);
     const supabase = createClient();
 
@@ -614,21 +665,62 @@ export default function MemberDetailPage() {
         : null;
     const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
     const receiptNo = await generateReceiptNo();
+    // Collection Date — when the money was actually received. Staff-
+    // editable and defaults to today; entirely independent of Coverage
+    // Period below. systemToday is kept separate — used only as the Next
+    // Period fallback anchor when a member has no expiry yet.
+    const paymentDate = collectionDate;
     const today = new Date();
-    const paymentDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
+    const systemToday = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
     const collectedNow = splitTarget(finalAmount, feePartial);
     const balanceDue = feePartial.isPartial ? Math.max(finalAmount - collectedNow, 0) : 0;
+    const monthsNum = isRecurring ? monthsCoveredNum : null;
+
+    // Fresh snapshot, read BEFORE this payment's own insert — Coverage
+    // Period math and the later expiry update both read from this same
+    // snapshot, rather than trusting the component's `member` state, so
+    // they can never disagree with each other or with a change another
+    // action just made to this same member.
+    let freshMemberBefore: { expiry_date: string | null; joining_date: string | null; membership_start_date: string | null } | null = null;
+    if (isRecurring) {
+      const { data } = await supabase.from("members").select("expiry_date, joining_date, membership_start_date").eq("id", id).single();
+      freshMemberBefore = data;
+    }
+
+    // Coverage Period is whatever staff explicitly chose — completely
+    // independent of Collection Date. "Current" echoes the cycle already
+    // on file; "Next" chains from the member's real current expiry;
+    // "Custom" is taken as entered.
+    let coverageStart: string | null = null;
+    let coverageEnd: string | null = null;
+    if (isRecurring) {
+      if (periodMode === "current") {
+        coverageStart = freshMemberBefore?.membership_start_date ?? freshMemberBefore?.joining_date ?? null;
+        coverageEnd = freshMemberBefore?.expiry_date ?? null;
+      } else if (periodMode === "custom") {
+        coverageStart = customStart;
+        coverageEnd = customEnd;
+      } else {
+        coverageStart = nextPeriodStart(freshMemberBefore?.expiry_date, systemToday, freshMemberBefore?.joining_date);
+        coverageEnd = computeCoverageEnd(coverageStart, durationMonths, monthsCoveredNum);
+      }
+    }
 
     // One row per payment method, all sharing one receipt_no. Only the
-    // first row carries balance_due/commission — every other row gets them
-    // null/0 so summing either across a member's payments never
-    // double-counts a single split transaction.
+    // first row carries balance_due/commission/coverage/months_covered —
+    // every other row gets them null/0 so summing any of them across a
+    // member's payments never double-counts a single split transaction.
+    // month_covered (legacy) kept in sync for backward compatibility.
     const rows = feeLines.map((line, i) => ({
       member_id: id,
       amount: Number(line.amount),
       payment_type: feeType as any,
       payment_method: line.method as any,
       payment_date: paymentDate,
+      month_covered: i === 0 ? coverageStart : null,
+      coverage_start: i === 0 ? coverageStart : null,
+      coverage_end: i === 0 ? coverageEnd : null,
+      months_covered: i === 0 ? monthsNum : null,
       receipt_no: receiptNo,
       collected_by: currentUser?.id ?? null,
       note: fullNote,
@@ -639,42 +731,48 @@ export default function MemberDetailPage() {
       commission_amount: i === 0 && showCommission && commissionAmount > 0 ? commissionAmount : null,
     }));
 
-    const { error: feeError } = await supabase.from("fee_payments").insert(rows);
+    const { data: newPayments, error: feeError } = await supabase.from("fee_payments").insert(rows).select("id");
     if (feeError) {
       toast.error("Failed to save payment. Please try again.");
       setSaving(false);
       return;
     }
 
-    // Paying a recurring fee (membership, or trainer/nutritionist/physio for
-    // packages billed that way) pushes out the expiry date. If the current
-    // cycle hasn't lapsed yet, extend from it so paying early doesn't cost
-    // the member their remaining days; otherwise the cycle restarts from
-    // the payment date. A member's very first recurring payment is excluded
-    // from this: it settles the cycle already granted at registration, not
-    // a new one. A partial payment still extends expiry fully — the balance
-    // owed is purely a bookkeeping flag, not a hold on service.
-    if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
-      // Counted as distinct transactions (by receipt_no), not raw rows —
-      // this payment may have just inserted 2+ rows if split across methods.
-      // Re-fetch expiry/joining fresh rather than trusting the component's
-      // `member` state — if another action (e.g. a renewal, or a second
-      // rapid payment) just updated this same member, stale state here
-      // would silently compute the new expiry off outdated data.
-      const [{ data: recurringRows }, { data: freshMember }] = await Promise.all([
-        supabase
-          .from("fee_payments")
-          .select("id, receipt_no")
-          .eq("member_id", id)
-          .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
-          .is("deleted_at", null),
-        supabase.from("members").select("expiry_date, joining_date").eq("id", id).single(),
-      ]);
+    // Coverage End is the ONE thing that can move a member's expiry
+    // forward — never Collection Date. Only ever moves forward, so a
+    // "Current Period" settlement (coverageEnd == existing expiry) is a
+    // no-op, and a "Custom" period backfilling a past gap doesn't shrink
+    // it. A partial payment still extends expiry fully — the balance owed
+    // is purely a bookkeeping flag, not a hold on service.
+    if (isRecurring && coverageEnd) {
+      const newExpiry = applyCoverageToExpiry(freshMemberBefore?.expiry_date, coverageEnd);
+      if (newExpiry !== freshMemberBefore?.expiry_date) {
+        await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
+      }
+    }
 
-      const durationMonths = (member as any)?.packages?.duration_months || 1;
-      const isFirstPayment = countLogicalPayments(recurringRows ?? []) <= 1;
-      const newExpiry = extendExpiryDate(freshMember?.expiry_date, paymentDate, durationMonths, isFirstPayment, freshMember?.joining_date);
-      await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", id);
+    // Trainer commission is generated automatically from the PT Fee + the
+    // trainer's current rate — never typed in manually here. Uses this
+    // payment's own coverage_start as the qualifying date (not today), and
+    // is idempotent per (member, cycle) so this can never double-generate
+    // a split payment's extra rows.
+    if ((COMMISSION_ELIGIBLE_TYPES as readonly string[]).includes(feeType) && member?.trainer_id && member?.training_fee && coverageStart) {
+      const { data: rate } = await supabase
+        .from("trainer_member_commissions")
+        .select("*")
+        .eq("trainer_id", member.trainer_id)
+        .eq("member_id", id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      await generateCommissionEntry({
+        memberId: id,
+        trainerId: member.trainer_id,
+        ptFee: member.training_fee,
+        rate: rate as any,
+        qualifyingDate: coverageStart,
+        feePaymentId: newPayments?.[0]?.id ?? null,
+        createdBy: currentUser?.id ?? null,
+      });
     }
 
     await supabase.from("activity_logs").insert({
@@ -682,8 +780,8 @@ export default function MemberDetailPage() {
       action: "paid_fee",
       entity_type: "member",
       entity_id: id,
-      description: `${member?.full_name} paid ${formatPKR(collectedNow)} (${feeType})${discountAmount > 0 ? ` — discount ${formatPKR(discountAmount)}` : ""}${balanceDue > 0 ? ` — Rs ${balanceDue} balance due` : ""}`,
-      metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected: collectedNow, balanceDue, type: feeType, methods: feeLines },
+      description: `${member?.full_name} paid ${formatPKR(collectedNow)} (${feeType}${monthsNum && monthsNum > 1 ? `, ${monthsNum} months` : ""})${discountAmount > 0 ? ` — discount ${formatPKR(discountAmount)}` : ""}${balanceDue > 0 ? ` — Rs ${balanceDue} balance due` : ""}`,
+      metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected: collectedNow, balanceDue, type: feeType, methods: feeLines, months_covered: monthsNum, coverage_start: coverageStart, coverage_end: coverageEnd },
     });
     // Build receipt data and open receipt modal
     setReceiptData({
@@ -700,6 +798,9 @@ export default function MemberDetailPage() {
       receiptNo,
       balanceDue,
       balanceDueDate: balanceDue > 0 ? feePartial.balanceDueDate : null,
+      coverageStart,
+      coverageEnd,
+      monthsCovered:  monthsNum,
     });
 
     toast.success(`Fee of ${formatPKR(collectedNow)} recorded${balanceDue > 0 ? ` — Rs ${formatPKR(balanceDue)} balance due` : ""}`);
@@ -710,6 +811,7 @@ export default function MemberDetailPage() {
     setDiscountValue("");
     setFeeLines([{ method: "Cash", amount: "" }]);
     setFeePartial(emptyPartialState);
+    setMonthsCovered("1"); setPeriodMode("current"); setCustomStart(""); setCustomEnd("");
     setSaving(false);
     fetchMember();
     setReceiptModal(true);
@@ -762,13 +864,21 @@ export default function MemberDetailPage() {
     const paymentDate = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,"0")}-${String(today.getDate()).padStart(2,"0")}`;
     const receiptNo = await generateReceiptNo();
     const primaryType = unsettled[0].payment_type ?? "membership";
+    // Settling a balance never touches expiry or picks a new Coverage
+    // Period of its own — it mirrors whatever the original unsettled
+    // payment already recorded, purely so the Payments table/Payment
+    // Detail still show a coherent period for this row.
+    const primaryCoverageStart = unsettled[0].coverage_start ?? unsettled[0].month_covered ?? null;
+    const primaryCoverageEnd = unsettled[0].coverage_end ?? null;
 
-    const rows = balanceLines.map((line) => ({
+    const rows = balanceLines.map((line, i) => ({
       member_id: id,
       amount: Number(line.amount),
       payment_type: primaryType as any,
       payment_method: line.method as any,
       payment_date: paymentDate,
+      coverage_start: i === 0 ? primaryCoverageStart : null,
+      coverage_end: i === 0 ? primaryCoverageEnd : null,
       receipt_no: receiptNo,
       collected_by: currentUser?.id ?? null,
       note: `Balance payment for receipt${receiptNos.length > 1 ? "s" : ""} ${receiptNos.join(", ")}`,
@@ -955,8 +1065,9 @@ export default function MemberDetailPage() {
   // Live commission preview for the PT Price & Commission card — updates
   // as soon as either input changes, in both the read-only summary and
   // while editing, mirroring registration's live preview and the actual
-  // calculateTrainerCommission() formula (percent of the full custom price,
-  // no flat deduction — see src/lib/utils.ts).
+  // computeCommissionAmount() formula used when a ledger entry is
+  // generated (percent of the PT Fee, no flat deduction — see
+  // src/lib/commission.ts).
   const ptCommissionPreview = commissionTypeInput === "percent"
     ? (Number(ptPriceInput) || 0) * (Number(commissionPercentInput) || 0) / 100
     : (Number(commissionAmountInput) || 0);
@@ -969,10 +1080,13 @@ export default function MemberDetailPage() {
     .map((p) => p.balance_due_date as string)
     .sort()[0] ?? null;
 
-  // Commission computed values (must be after finalAmount) — manual entry
-  // only. PT commission is now set per (trainer, member) on the trainer's
-  // own Staff page, independent of package/tier, not calculated here.
-  const COMMISSION_TYPES = ["trainer", "nutritionist", "physiotherapy"];
+  // Commission computed values (must be after finalAmount) — manual entry,
+  // nutritionist/physiotherapy only. Trainer commission is NOT entered here
+  // anymore — it's generated automatically from the PT Fee and the
+  // trainer's current rate (trainer_member_commissions), based on this
+  // payment's Coverage Period, via generateCommissionEntry() in recordFee().
+  // See /dashboard/commissions.
+  const COMMISSION_TYPES = ["nutritionist", "physiotherapy"];
   const showCommission = COMMISSION_TYPES.includes(feeType);
   const commissionAmount = showCommission && commissionRate
     ? Math.round(finalAmount * (Number(commissionRate) / 100))
@@ -1552,8 +1666,10 @@ export default function MemberDetailPage() {
             <div className="divide-y divide-[#E4E4DE]">
               {payments.map((p) => {
                 const hasDiscount = p.note?.includes("Discount:");
+                const coverage = describeCoveredPeriod(p.coverage_start, p.coverage_end, p.month_covered, p.payment_date, p.months_covered);
+                const showCoverage = coverage.label && (RECURRING_FEE_TYPES as readonly string[]).includes(p.payment_type ?? "");
                 return (
-                  <div key={p.id} className="px-5 py-3 flex items-center justify-between gap-3">
+                  <div key={p.id} onClick={() => setDetailPaymentId(p.id)} className="px-5 py-3 flex items-center justify-between gap-3 cursor-pointer hover:bg-[#F8F8F6] transition-colors">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-semibold text-[#1A1A16] capitalize">
@@ -1562,6 +1678,11 @@ export default function MemberDetailPage() {
                         {hasDiscount && (
                           <span className="inline-flex items-center gap-1 text-[10px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-semibold">
                             <Tag className="w-2.5 h-2.5" /> Discounted
+                          </span>
+                        )}
+                        {(p.months_covered ?? 1) > 1 && (
+                          <span className="inline-flex items-center gap-1 text-[10px] bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-full font-semibold">
+                            <Calendar className="w-2.5 h-2.5" /> {p.months_covered} months
                           </span>
                         )}
                         {(p.balance_due ?? 0) > 0 && (
@@ -1574,6 +1695,9 @@ export default function MemberDetailPage() {
                       <p className="text-xs text-[#7A7A72]">
                         Collected by {p.collector?.full_name ?? <span className="italic">not recorded</span>} · {formatDateTime(p.created_at)}
                       </p>
+                      {showCoverage && (
+                        <p className="text-xs text-[#7A7A72]">Covers: <span className="font-medium text-[#4A4A44]">{coverage.label}</span></p>
+                      )}
                       {p.note && <p className="text-xs text-[#7A7A72] italic mt-0.5 truncate max-w-xs">{p.note}</p>}
                     </div>
                     <span className="text-base font-bold text-green-700 flex-shrink-0">{formatPKR(p.amount)}</span>
@@ -1770,13 +1894,13 @@ export default function MemberDetailPage() {
             </div>
           </div>
 
-          {/* Already paid this month warning */}
-          {alreadyPaidWarning && feeType === "membership" && (
+          {/* Already paid ahead warning */}
+          {alreadyPaidWarning && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
             <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5">
               <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
               <div>
-                <p className="text-xs font-semibold text-amber-800">Already paid this month</p>
-                <p className="text-xs text-amber-700 mt-0.5">This member has a membership payment recorded for the current month. You can still proceed for corrections or advance payments.</p>
+                <p className="text-xs font-semibold text-amber-800">Already paid through {formatDate(member.expiry_date)}</p>
+                <p className="text-xs text-amber-700 mt-0.5">This member's current cycle doesn't end for a while. You can still proceed if this is a correction or a further advance payment.</p>
               </div>
             </div>
           )}
@@ -1791,15 +1915,88 @@ export default function MemberDetailPage() {
               onChange={(e) => setFeeAmount(e.target.value)}
               required
             />
-            <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); setCommissionRate(""); if (e.target.value !== "membership") setAlreadyPaidWarning(false); }}>
-              <option value="membership">Monthly Membership</option>
-              <option value="admission">Admission Fee</option>
-              <option value="trainer">Trainer Fee</option>
-              <option value="nutritionist">Nutritionist Fee</option>
-              <option value="physiotherapy">Physiotherapy Fee</option>
-              <option value="other">Other</option>
-            </Select>
+            <div>
+              <label className="text-sm font-medium text-[#1A1A16] block mb-1.5">Collection Date <span className="text-[#F06418]">*</span></label>
+              <input type="date" value={collectionDate} min="1900-01-01" max="2099-12-31"
+                onChange={(e) => { const v = safeDateValue(e.target.value); if (v) setCollectionDate(v); }}
+                className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+            </div>
           </div>
+          <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); setCommissionRate(""); }}>
+            <option value="membership">Monthly Membership</option>
+            <option value="admission">Admission Fee</option>
+            <option value="trainer">Trainer Fee</option>
+            <option value="nutritionist">Nutritionist Fee</option>
+            <option value="physiotherapy">Physiotherapy Fee</option>
+            <option value="other">Other</option>
+          </Select>
+
+          {/* Payment For / Coverage Period — completely independent of
+              when the money is being collected */}
+          {(RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+            <div className="rounded-xl border border-[#E4E4DE] bg-white p-3 space-y-2.5">
+              <p className="text-xs font-semibold text-[#1A1A16]">Payment For</p>
+              <div className="flex gap-2">
+                {([
+                  { key: "current", label: "Current Period" },
+                  { key: "next", label: "Next Period" },
+                  { key: "custom", label: "Custom Period" },
+                ] as { key: PeriodMode; label: string }[]).map((opt) => (
+                  <button key={opt.key} type="button"
+                    disabled={opt.key === "current" && !member.expiry_date}
+                    onClick={() => setPeriodMode(opt.key)}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                      periodMode === opt.key ? "bg-[#F06418] text-white border-[#F06418]" : "bg-white text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418]"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              {periodMode === "next" && (
+                <div className="flex items-center gap-2">
+                  {MONTHS_PRESET.map((n) => (
+                    <button key={n} type="button" onClick={() => applyMonths(n)}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                        monthsCoveredNum === n ? "bg-[#F06418] text-white border-[#F06418]" : "bg-white text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418]"
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                  <input type="number" min={1} placeholder="Custom" value={monthsCovered}
+                    onChange={(e) => applyMonths(Math.max(Number(e.target.value) || 1, 1))}
+                    className="w-16 px-2 py-1.5 text-xs text-center rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                </div>
+              )}
+
+              {periodMode === "custom" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="text-[10px] text-[#7A7A72] block mb-1">Coverage Start</label>
+                    <input type="date" value={customStart} min="1900-01-01" max="2099-12-31"
+                      onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomStart(v); }}
+                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-[#7A7A72] block mb-1">Coverage End</label>
+                    <input type="date" value={customEnd} min="1900-01-01" max="2099-12-31"
+                      onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomEnd(v); }}
+                      className="w-full px-2 py-1.5 text-xs rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between bg-[#F8F8F6] rounded-lg border border-[#E4E4DE] px-3 py-2">
+                <span className="text-xs text-[#4A4A44]">Coverage Period</span>
+                <span className="text-xs font-bold text-[#F06418]">{coverageLabel ?? "—"}</span>
+              </div>
+              {periodMode === "current" && (
+                <p className="text-[11px] text-[#7A7A72]">Settles the cycle already on file — this won't change the member's membership expiry.</p>
+              )}
+            </div>
+          )}
 
           {/* ── DISCOUNT SECTION ── */}
           <div className="rounded-xl border-2 border-dashed border-[#F06418] bg-[#FEF0E8]/40 p-4 space-y-3">
@@ -1875,7 +2072,15 @@ export default function MemberDetailPage() {
             )}
           </div>
 
-          {/* Commission section — shown for trainer / nutritionist / physiotherapy */}
+          {/* Trainer commission is automatic now — no manual entry, just a
+              pointer to where it actually shows up. */}
+          {feeType === "trainer" && (
+            <p className="text-xs text-[#7A7A72] bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-3 py-2">
+              Trainer commission for this payment is calculated automatically from the member's PT Fee and the trainer's current rate — see <Link href="/dashboard/commissions" className="text-[#F06418] font-semibold hover:underline">Trainer Commissions</Link>.
+            </p>
+          )}
+
+          {/* Commission section — shown for nutritionist / physiotherapy only */}
           {showCommission && (
             <div className="bg-[#FEF0E8] border border-[#FDDCC8] rounded-lg p-3 space-y-3">
               <p className="text-xs font-semibold text-[#C04E10] uppercase tracking-wide">
@@ -2071,6 +2276,12 @@ export default function MemberDetailPage() {
                   <span className="text-[#7A7A72]">Payment Type</span>
                   <span className="capitalize font-medium">{receiptData.type}</span>
                 </div>
+                {receiptData.coverageStart && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-[#7A7A72]">Covers</span>
+                    <span className="font-medium">{describeCoveredPeriod(receiptData.coverageStart, receiptData.coverageEnd, null, null, receiptData.monthsCovered ?? 1).label}</span>
+                  </div>
+                )}
                 {receiptData.lines.map((l, i) => (
                   <div className="flex justify-between text-sm" key={i}>
                     <span className="text-[#7A7A72]">Payment Method{receiptData.lines.length > 1 ? ` (${l.method})` : ""}</span>
@@ -2142,6 +2353,15 @@ export default function MemberDetailPage() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* ── Payment Detail (view / edit Collection Date & Coverage) ──── */}
+      {detailPaymentId && (
+        <PaymentDetailModal
+          paymentId={detailPaymentId}
+          onClose={() => setDetailPaymentId(null)}
+          onUpdated={fetchMember}
+        />
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { format, formatDistanceToNow, differenceInDays, addMonths } from "date-fns";
+import { format, formatDistanceToNow, differenceInDays, addMonths, addDays } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 
 /** Fetches every row matching a query, paging around Supabase/PostgREST's
@@ -111,78 +111,10 @@ export function isPTPackage(pkg: { name: string }): boolean {
  *  "trainer"). */
 export const RECURRING_FEE_TYPES = ["membership", "trainer", "nutritionist", "physiotherapy"] as const;
 
-/** Counts distinct logical payment *transactions*, not raw fee_payments
- *  rows — a single collection split across multiple payment methods now
- *  produces multiple rows sharing one receipt_no. Used for isFirstPayment
- *  detection: counting raw rows would make a split first payment look like
- *  2+ payments and silently double-extend expiry. Falls back to the row's
- *  own id for older/imported rows with no receipt_no, so those still count
- *  as their own separate transaction rather than collapsing together under
- *  a shared `null`. */
-export function countLogicalPayments(rows: { id: string; receipt_no: string | null }[]): number {
-  return new Set(rows.map((r) => r.receipt_no ?? r.id)).size;
-}
-
-/** fee_payments.payment_type values that count toward a trainer's
- *  commission basis — actual collected recurring dues plus any ad hoc
- *  trainer session fees. Admission fees don't count (one-off joining fee,
- *  not a trainer service). */
+/** fee_payments.payment_type values that qualify a PT payment for trainer
+ *  commission generation (see src/lib/commission.ts) — actual collected
+ *  recurring dues, not one-off charges like admission fees. */
 export const COMMISSION_ELIGIBLE_TYPES = ["membership", "trainer"];
-
-/** A trainer's manually-set commission for one assigned member, for a given
- *  period — either a straight percentage or a flat Rs amount, per
- *  qualifying payment. When the member has a custom Personal Training
- *  price on file (members.training_fee), commission is based on THAT
- *  agreed price, not each payment's own historical amount — PT pricing is
- *  fully custom/negotiated now, and a payment collected under an old price
- *  (before a renegotiation, or before this feature existed) would
- *  otherwise produce a commission figure that doesn't match what staff see
- *  as the member's current price on screen.
- *
- *  For that same reason, when training_fee is set, the qualifying-payment
- *  count is capped at 1 per period — PT billing is monthly, and staff tag
- *  payment_type inconsistently for what's conceptually the same PT due
- *  (sometimes "membership", sometimes "trainer"), so filtering by type
- *  isn't reliable in either direction. A single due can also legitimately
- *  span 2 rows (a split payment, or one mistakenly logged across 2
- *  receipts) without that meaning 2x commission. Confirmed tradeoff: a
- *  member who genuinely pays 2+ months at once in one sitting still only
- *  counts once that period — rare enough to correct manually if it happens.
- *  Falls back to every COMMISSION_ELIGIBLE_TYPES row, uncapped, using each
- *  payment's real amount, only when there's no training_fee to anchor on —
- *  a trainer-commissioned member with no PT package, rare/legacy.
- *
- *  `periodEnd` is optional (omit for an open-ended "from periodStart to
- *  now" range, e.g. "this month" viewed live); pass it when computing a
- *  past, closed period (e.g. a salary slip for a prior month) so later
- *  payments aren't pulled in. */
-export function calculateTrainerCommission(
-  rate: { commission_type: "percent" | "fixed"; commission_percent: number; commission_amount: number | null } | undefined,
-  payments: { id: string; amount: number; payment_date: string; receipt_no: string | null }[],
-  periodStart: string | null,
-  periodEnd: string | null = null,
-  trainingFee?: number | null
-): number {
-  if (!rate) return 0;
-  const rows = payments.filter(
-    (p) => (!periodStart || p.payment_date >= periodStart) && (!periodEnd || p.payment_date <= periodEnd)
-  );
-  const hasTrainingFee = trainingFee != null && trainingFee > 0;
-  const qualifyingCount = hasTrainingFee ? Math.min(1, countLogicalPayments(rows)) : countLogicalPayments(rows);
-
-  if (rate.commission_type === "fixed") {
-    const amount = Number(rate.commission_amount);
-    if (!(amount > 0)) return 0;
-    return qualifyingCount * amount;
-  }
-
-  const percent = Number(rate.commission_percent);
-  if (!(percent > 0)) return 0;
-  if (hasTrainingFee) {
-    return qualifyingCount * (trainingFee as number) * (percent / 100);
-  }
-  return rows.reduce((sum, p) => sum + (p.amount ?? 0) * (percent / 100), 0);
-}
 
 export type CommissionPayload = {
   commission_type: "percent" | "fixed";
@@ -212,37 +144,85 @@ export function buildCommissionPayload(
   return { payload: { commission_type: "fixed", commission_percent: 0, commission_amount: amount } };
 }
 
-/** Computes a member's new expiry date after a recurring-dues payment.
- *  If their current expiry hasn't lapsed yet, the new cycle extends from
- *  it so paying early doesn't cost them the remaining days. Otherwise the
- *  cycle restarts from the payment date.
+/** Coverage Period model for recurring-dues payments. Collection Date
+ *  (payment_date, when the money was actually received) and Coverage
+ *  Period (coverage_start/coverage_end, what period it pays for) are
+ *  completely independent — staff pick the period explicitly, it's never
+ *  inferred from when the payment happened. Three choices:
  *
- *  isFirstPayment must be true for a member's very first recurring payment —
- *  that payment just settles the cycle already granted at registration, so
- *  it must not push expiry into a second, not-yet-earned cycle. It still
- *  extends normally if paid after the granted cycle has already lapsed
- *  (a genuinely late first payment starting a fresh cycle).
+ *  - "Current Period": re-confirms whatever's already on file
+ *    (membership_start_date → expiry_date) — used for a late/backdated
+ *    settlement of a cycle that's already granted. Never moves expiry.
+ *  - "Next Period": starts the day after the member's current expiry (or
+ *    their joining date if they have none yet), extends by durationMonths
+ *    × the chosen number of cycles. Chains correctly for repeat advance
+ *    payments since it always starts from whatever's already paid through.
+ *  - "Custom Period": staff enters explicit start/end dates directly.
  *
- *  joiningDateFallback covers the case where currentExpiry was never set
- *  (registration should always set it now, but this is a safety net): on a
- *  first payment, base off the member's actual joining date rather than the
- *  payment date, so a late-collected first payment doesn't silently make
- *  expiry track the payment date instead of when the member actually joined. */
-export function extendExpiryDate(
-  currentExpiry: string | null | undefined,
-  paymentDate: string,
-  durationMonths: number,
-  isFirstPayment: boolean = false,
+ *  Whichever is chosen, applyCoverageToExpiry() below is the ONE rule that
+ *  turns a coverage_end into a new members.expiry_date — it only ever
+ *  moves expiry forward, and only from an explicit coverage choice. */
+
+/** The first day of "Next Period" — the day after the member's current
+ *  expiry if they have one, else their joining date, else today. */
+export function nextPeriodStart(
+  expiryDate: string | null | undefined,
+  todayStr: string,
   joiningDateFallback?: string | null
 ): string {
-  if (isFirstPayment && currentExpiry && currentExpiry >= paymentDate) {
-    return currentExpiry;
+  if (expiryDate) return format(addDays(new Date(expiryDate), 1), "yyyy-MM-dd");
+  return joiningDateFallback ?? todayStr;
+}
+
+/** The last day covered by `cycles` package cycles starting at
+ *  coverageStart (inclusive) — e.g. start Sep 1, durationMonths 1, cycles 1
+ *  → Sep 30. Matches how members.expiry_date is already treated elsewhere
+ *  (daysUntilExpiry/getMemberStatusDisplay): the last valid day, not the
+ *  first invalid one. */
+export function computeCoverageEnd(coverageStart: string, durationMonths: number, cycles: number): string {
+  return format(addDays(addMonths(new Date(coverageStart), durationMonths * Math.max(cycles, 1)), -1), "yyyy-MM-dd");
+}
+
+/** The single rule for turning a payment's coverage_end into a member's new
+ *  expiry_date — moves forward only, never backward, and only in response
+ *  to an explicit coverage choice (never from payment_date). A "Current
+ *  Period" settlement (coverage_end == existing expiry) is a no-op; a
+ *  "Next"/"Custom" period with a later coverage_end extends; a custom
+ *  period backfilling an earlier/historical gap correctly leaves expiry
+ *  untouched rather than shrinking it. */
+export function applyCoverageToExpiry(currentExpiry: string | null | undefined, coverageEnd: string): string {
+  if (!currentExpiry || coverageEnd > currentExpiry) return coverageEnd;
+  return currentExpiry;
+}
+
+/** Preset "number of months" choices offered when collecting a Next
+ *  Period advance payment. */
+export const MONTHS_PRESET = [1, 2, 3, 6, 12] as const;
+
+/** Formats a fee_payments row's covered period for display — the explicit
+ *  coverage_start/coverage_end range (full dates) when present, falling
+ *  back to the legacy month_covered/payment_date "MMM yyyy" behavior
+ *  (flagged as `inferred`) for older rows written before this column
+ *  existed. */
+export function describeCoveredPeriod(
+  coverageStart: string | null | undefined,
+  coverageEnd: string | null | undefined,
+  monthCovered: string | null | undefined,
+  paymentDate: string | null | undefined,
+  monthsCovered: number | null | undefined
+): { label: string | null; inferred: boolean } {
+  if (coverageStart && coverageEnd) {
+    const label = coverageStart === coverageEnd ? formatDate(coverageStart) : `${formatDate(coverageStart)} – ${formatDate(coverageEnd)}`;
+    return { label, inferred: false };
   }
-  if (isFirstPayment && !currentExpiry && joiningDateFallback) {
-    return addMonthsToDateStr(joiningDateFallback, durationMonths);
-  }
-  const base = currentExpiry && currentExpiry >= paymentDate ? currentExpiry : paymentDate;
-  return addMonthsToDateStr(base, durationMonths);
+  const source = monthCovered ?? paymentDate;
+  if (!source) return { label: null, inferred: false };
+  const inferred = !monthCovered && !!paymentDate;
+  const n = Math.max(monthsCovered ?? 1, 1);
+  const start = format(new Date(source + "T12:00:00"), "MMM yyyy");
+  if (n <= 1) return { label: start, inferred };
+  const end = format(addMonths(new Date(source + "T12:00:00"), n - 1), "MMM yyyy");
+  return { label: `${start} – ${end}`, inferred };
 }
 
 /** A device counts as online if it's checked in (via the ADMS heartbeat)

@@ -24,6 +24,7 @@ import {
   ChevronLeft,
   ChevronRight,
   HeartHandshake,
+  Percent,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
 
@@ -51,6 +52,7 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/packages":    ["owner", "manager"],
   "/dashboard/family-approvals": ["owner", "manager"],
   "/dashboard/staff":       ["owner", "manager"],
+  "/dashboard/commissions": ["owner", "manager"],
   "/dashboard/reports":     ["owner", "manager"],
   "/dashboard/sms":         ["owner", "manager", "receptionist"],
   "/dashboard/settings":    ["owner"],
@@ -136,6 +138,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
         { label: "Add Staff", href: "/dashboard/staff?add=1", icon: UserPlus },
       ],
     },
+    { label: "Trainer Commissions", href: "/dashboard/commissions", icon: Percent },
     { label: "Reports",        href: "/dashboard/reports",    icon: BarChart2   },
     { label: "SMS & Notify",   href: "/dashboard/sms",        icon: MessageSquare },
     { label: "Settings",       href: "/dashboard/settings",   icon: Settings    },

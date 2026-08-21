@@ -21,10 +21,14 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatDateTime, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, extendExpiryDate, RECURRING_FEE_TYPES, countLogicalPayments, safeDateValue } from "@/lib/utils";
+import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, safeDateValue } from "@/lib/utils";
+import { generateCommissionEntry } from "@/lib/commission";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
+import { PaymentDetailModal } from "@/components/forms/PaymentDetailModal";
+
+type PeriodMode = "current" | "next" | "custom";
 
 // ── Types ────────────────────────────────────────────────────────────
 type Tab = "overview" | "transactions" | "outstanding" | "renewals" | "analytics";
@@ -73,16 +77,27 @@ export default function FeesPage() {
   // Shared data
   const [payments, setPayments]           = useState<PaymentRow[]>([]);
   const [members, setMembers]             = useState<MemberWithPackage[]>([]);
-  const [recentPayments30, setRecentP30]  = useState<{ member_id: string }[]>([]);
+  const [recentPayments30, setRecentP30]  = useState<{ member_id: string; payment_date: string }[]>([]);
   const [loading, setLoading]             = useState(true);
 
-  // Transactions filters
+  // Payments table filters — dateField picks WHICH date the range below
+  // applies to: Collection Date (payment_date, when money was received) or
+  // Coverage Period (coverage_start/coverage_end, what period it pays for).
+  // These are kept as two genuinely separate search dimensions per the
+  // Finance redesign — a payment collected in August for September dues
+  // must be findable either way, on purpose.
+  const [txDateField, setTxDateField]         = useState<"collection" | "coverage">("collection");
   const [txDateRange, setTxDateRange]         = useState<DateRange>("thisMonth");
   const [txCustomFrom, setTxCustomFrom]       = useState("");
   const [txCustomTo, setTxCustomTo]           = useState("");
   const [txSearch, setTxSearch]               = useState("");
   const [txTypeFilter, setTxTypeFilter]       = useState("all");
   const [txMethodFilter, setTxMethodFilter]   = useState("all");
+  const [txCollectorFilter, setTxCollectorFilter] = useState("all");
+  const [txBalanceFilter, setTxBalanceFilter] = useState<"all" | "paid" | "partial">("all");
+  const [txAmountMin, setTxAmountMin]         = useState("");
+  const [txAmountMax, setTxAmountMax]         = useState("");
+  const [detailPaymentId, setDetailPaymentId] = useState<string | null>(null);
 
   // Quick Collect
   const [collectModal, setCollectModal]       = useState(false);
@@ -97,6 +112,11 @@ export default function FeesPage() {
   const [feeLines, setFeeLines]               = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
   const [feePartial, setFeePartial]           = useState<PartialPaymentState>(emptyPartialState);
   const [feeNote, setFeeNote]                 = useState("");
+  const [collectionDate, setCollectionDate]   = useState(format(new Date(), "yyyy-MM-dd"));
+  const [periodMode, setPeriodMode]           = useState<PeriodMode>("current");
+  const [monthsCovered, setMonthsCovered]     = useState("1");
+  const [customStart, setCustomStart]         = useState("");
+  const [customEnd, setCustomEnd]             = useState("");
   const [discountType, setDiscountType]       = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue]     = useState("");
   const [collectSaving, setCollectSaving]     = useState(false);
@@ -111,6 +131,32 @@ export default function FeesPage() {
   const discountPct    = discountType === "percent" ? Number(discountValue) || 0 :
     originalAmount > 0 ? Math.round((discountAmount / originalAmount) * 100) : 0;
   const collectingNow  = splitTarget(finalAmount, feePartial);
+
+  // ── Coverage Period — completely independent of Collection Date ──
+  // Staff pick WHAT period this payment covers explicitly; it's never
+  // inferred from today's date. "Current" re-confirms what's already on
+  // file (no expiry change), "Next" starts the day after the member's
+  // existing expiry (chains correctly for repeat advance payments), and
+  // "Custom" is an explicit start/end pair.
+  const monthsCoveredNum = Math.max(Number(monthsCovered) || 1, 1);
+  const coverageTodayStr = format(new Date(), "yyyy-MM-dd");
+  const durationMonths = selectedMember?.packages?.duration_months || 1;
+  const currentPeriodStart = selectedMember?.membership_start_date ?? selectedMember?.joining_date ?? null;
+  const currentPeriodEnd = selectedMember?.expiry_date ?? null;
+  const nextStart = selectedMember ? nextPeriodStart(selectedMember.expiry_date, coverageTodayStr, selectedMember.joining_date) : coverageTodayStr;
+  const nextEnd = computeCoverageEnd(nextStart, durationMonths, monthsCoveredNum);
+  const coverageStartValue = periodMode === "current" ? currentPeriodStart : periodMode === "next" ? nextStart : (customStart || null);
+  const coverageEndValue   = periodMode === "current" ? currentPeriodEnd   : periodMode === "next" ? nextEnd   : (customEnd || null);
+  const coverageLabel = coverageStartValue && coverageEndValue
+    ? describeCoveredPeriod(coverageStartValue, coverageEndValue, null, null, monthsCoveredNum).label
+    : null;
+
+  function applyMonths(n: number) {
+    const months = Math.max(n, 1);
+    setMonthsCovered(String(months));
+    const base = Number(selectedMember?.monthly_fee ?? (selectedMember as any)?.packages?.monthly_fee) || 0;
+    if (base > 0) setFeeAmount(String(base * months));
+  }
 
   // ── Date bounds ─────────────────────────────────────────────────
   function getTxBounds() {
@@ -133,30 +179,43 @@ export default function FeesPage() {
     const supabase = createClient();
     const thirtyDaysAgo = format(subDays(new Date(), 30), "yyyy-MM-dd");
 
-    const [{ data: pays }, { data: mems }, { data: rp }] = await Promise.all([
-      supabase.from("fee_payments")
-        .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url, packages(name, color)), collector:system_users!fee_payments_collected_by_fkey(full_name)")
-        .is("deleted_at", null)
-        .gte("payment_date", from)
-        .lte("payment_date", to)
-        .order("payment_date", { ascending: false })
-        .order("created_at", { ascending: false }),
+    // Collection Date mode filters on payment_date directly (unchanged,
+    // cash-basis, matches every report). Coverage Period mode filters on
+    // ANY overlap between the payment's coverage_start/coverage_end and
+    // the selected range — e.g. picking "September" finds a payment
+    // collected in August that covers Sep–Nov, and vice versa.
+    let paymentsQuery = supabase.from("fee_payments")
+      .select("*, member:members!fee_payments_member_id_fkey(id, full_name, membership_no, photo_url, packages(name, color)), collector:system_users!fee_payments_collected_by_fkey(full_name)")
+      .is("deleted_at", null);
+    paymentsQuery = txDateField === "coverage"
+      ? paymentsQuery.lte("coverage_start", to).gte("coverage_end", from)
+      : paymentsQuery.gte("payment_date", from).lte("payment_date", to);
+
+    const [{ data: pays }, { data: mems }] = await Promise.all([
+      paymentsQuery.order("payment_date", { ascending: false }).order("created_at", { ascending: false }),
       supabase.from("members")
         .select("*, packages(name, monthly_fee, color, duration_months)")
         .eq("status", "active")
         .is("deleted_at", null)
         .order("full_name"),
-      supabase.from("fee_payments")
-        .select("member_id")
-        .gte("payment_date", thirtyDaysAgo)
-        .is("deleted_at", null),
     ]);
+
+    // "Unpaid" lookback is per-member: since membership_start_date (the
+    // start of their CURRENT billing cycle), falling back to the 30-day
+    // window for anyone without one set yet — fetch back to the earliest
+    // boundary any active member could need, then compare per-member below.
+    const boundaries = (mems ?? []).map((m) => m.membership_start_date ?? thirtyDaysAgo);
+    const earliestNeeded = boundaries.length ? boundaries.reduce((min, b) => (b < min ? b : min)) : thirtyDaysAgo;
+    const { data: rp } = await supabase.from("fee_payments")
+      .select("member_id, payment_date")
+      .gte("payment_date", earliestNeeded)
+      .is("deleted_at", null);
 
     setPayments((pays ?? []) as unknown as PaymentRow[]);
     setMembers((mems ?? []) as unknown as MemberWithPackage[]);
     setRecentP30(rp ?? []);
     setLoading(false);
-  }, [txDateRange, txCustomFrom, txCustomTo]);
+  }, [txDateRange, txCustomFrom, txCustomTo, txDateField]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -173,7 +232,7 @@ export default function FeesPage() {
     );
   }, [searchCode, searchPrefix, searchYear, members]);
 
-  async function selectMember(m: MemberWithPackage) {
+  function selectMember(m: MemberWithPackage) {
     setSelectedMember(m);
     setMemberSearch("");
     setSearchCode("");
@@ -187,18 +246,23 @@ export default function FeesPage() {
     setDiscountValue("");
     setFeeLines([{ method: "Cash", amount: "" }]);
     setFeePartial(emptyPartialState);
-    // Check if already paid membership this month
-    const now = new Date();
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
-    const supabase = createClient();
-    const { count } = await supabase
-      .from("fee_payments")
-      .select("*", { count: "exact", head: true })
-      .eq("member_id", m.id)
-      .eq("payment_type", "membership")
-      .gte("payment_date", monthStart)
-      .is("deleted_at", null);
-    setAlreadyPaidWarning((count ?? 0) > 0);
+    setCollectionDate(format(new Date(), "yyyy-MM-dd"));
+    setMonthsCovered("1");
+    setCustomStart(""); setCustomEnd("");
+    // "Current Period" only makes sense once the member has an existing
+    // cycle on file (expiry_date set) — a member with none defaults
+    // straight to "Next Period" instead.
+    setPeriodMode(m.expiry_date ? "current" : "next");
+    // Warn when this member is already paid comfortably ahead — i.e. expiry
+    // is further out than the app's own "renewal due soon" window (the
+    // same 30-day threshold getMemberStatusDisplay() uses for the
+    // "Expiring" badge) — rather than checking whether a payment_date fell
+    // in the current calendar month. That check silently missed an advance
+    // payer: someone who pre-paid last month for a future month has a
+    // stale payment_date but a genuinely-not-yet-due expiry_date, exactly
+    // the case this warning needs to catch.
+    const days = daysUntilExpiry(m.expiry_date);
+    setAlreadyPaidWarning(days !== null && days > 30);
   }
 
   // ── Quick Collect submit ─────────────────────────────────────────
@@ -207,6 +271,11 @@ export default function FeesPage() {
     if (!feeAmount || originalAmount <= 0) { toast.error("Enter a valid amount"); return; }
     const splitError = validatePaymentSplit(finalAmount, feeLines, feePartial);
     if (splitError) { toast.error(splitError); return; }
+    const isRecurring = (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
+    if (isRecurring && periodMode === "custom" && (!customStart || !customEnd)) {
+      toast.error("Enter both a Coverage Start and End date"); return;
+    }
+    if (!collectionDate) { toast.error("Enter a Collection Date"); return; }
     setCollectSaving(true);
     try {
       const supabase = createClient();
@@ -215,20 +284,61 @@ export default function FeesPage() {
         ? `Discount: ${formatPKR(discountAmount)} (${discountPct}% off original ${formatPKR(originalAmount)})`
         : null;
       const fullNote = [discountNote, feeNote].filter(Boolean).join(" · ") || null;
-      const today = format(new Date(), "yyyy-MM-dd");
+      // Collection Date — when the money was actually received. Staff-
+      // editable and defaults to today; entirely independent of Coverage
+      // Period below. Kept separate from the system clock (used only as
+      // the Next Period fallback anchor when a member has no expiry yet).
+      const today = collectionDate;
+      const systemToday = format(new Date(), "yyyy-MM-dd");
       const collected = splitTarget(finalAmount, feePartial);
       const balanceDue = feePartial.isPartial ? Math.max(finalAmount - collected, 0) : 0;
+      const monthsNum = isRecurring ? monthsCoveredNum : null;
+
+      // Fresh snapshot, read BEFORE this payment's own insert — Coverage
+      // Period math and the later expiry update both read from this same
+      // snapshot, rather than trusting selectedMember state, so they can
+      // never disagree with each other or with a change another action
+      // just made to this same member.
+      let freshMemberBefore: { expiry_date: string | null; joining_date: string | null; membership_start_date: string | null } | null = null;
+      if (isRecurring) {
+        const { data } = await supabase.from("members").select("expiry_date, joining_date, membership_start_date").eq("id", selectedMember.id).single();
+        freshMemberBefore = data;
+      }
+
+      // Coverage Period is whatever staff explicitly chose — completely
+      // independent of `today` (Collection Date). "Current" just echoes
+      // the cycle already on file; "Next" chains from the member's real
+      // current expiry; "Custom" is taken as entered.
+      let coverageStart: string | null = null;
+      let coverageEnd: string | null = null;
+      if (isRecurring) {
+        if (periodMode === "current") {
+          coverageStart = freshMemberBefore?.membership_start_date ?? freshMemberBefore?.joining_date ?? null;
+          coverageEnd = freshMemberBefore?.expiry_date ?? null;
+        } else if (periodMode === "custom") {
+          coverageStart = customStart;
+          coverageEnd = customEnd;
+        } else {
+          coverageStart = nextPeriodStart(freshMemberBefore?.expiry_date, systemToday, freshMemberBefore?.joining_date);
+          coverageEnd = computeCoverageEnd(coverageStart, durationMonths, monthsCoveredNum);
+        }
+      }
 
       // One row per payment method, all sharing one receipt_no. Only the
-      // first row carries balance_due, so summing it per member never
-      // double-counts a single split transaction.
+      // first row carries balance_due / coverage / months_covered, so
+      // summing any of them per member never double-counts a split
+      // transaction. month_covered (legacy) kept in sync for backward
+      // compatibility with anything still reading it.
       const rows = feeLines.map((line, i) => ({
         member_id: selectedMember.id,
         amount: Number(line.amount),
         payment_type: feeType as any,
         payment_method: line.method as any,
         payment_date: today,
-        month_covered: feeType === "membership" ? today : null,
+        month_covered: i === 0 ? coverageStart : null,
+        coverage_start: i === 0 ? coverageStart : null,
+        coverage_end: i === 0 ? coverageEnd : null,
+        months_covered: i === 0 ? monthsNum : null,
         receipt_no: receiptNo,
         collected_by: currentUser?.id ?? null,
         note: fullNote,
@@ -240,41 +350,48 @@ export default function FeesPage() {
 
       if (error) throw error;
 
-      // Paying a recurring fee pushes out the expiry date — extend from the
-      // current cycle if it hasn't lapsed yet, so paying early doesn't cost
-      // the member their remaining days. A member's very first recurring
-      // payment is excluded from this: it settles the cycle already granted
-      // at registration, not a new one. A partial payment still extends
-      // expiry fully — the balance owed is a bookkeeping flag, not a hold
-      // on service.
-      if ((RECURRING_FEE_TYPES as readonly string[]).includes(feeType)) {
-        // Counted as distinct transactions (by receipt_no), not raw rows —
-        // this payment may have just inserted 2+ rows if split across
-        // methods. Re-fetch expiry/joining fresh rather than trusting
-        // selectedMember state — if another action just updated this same
-        // member, stale state here would silently compute the new expiry
-        // off outdated data.
-        const [{ data: recurringRows }, { data: freshMember }] = await Promise.all([
-          supabase
-            .from("fee_payments")
-            .select("id, receipt_no")
-            .eq("member_id", selectedMember.id)
-            .in("payment_type", RECURRING_FEE_TYPES as readonly string[])
-            .is("deleted_at", null),
-          supabase.from("members").select("expiry_date, joining_date").eq("id", selectedMember.id).single(),
-        ]);
+      // Coverage End is the ONE thing that can move a member's expiry
+      // forward — never Collection Date. Only ever moves forward, so a
+      // "Current Period" settlement (coverageEnd == existing expiry) is a
+      // no-op, and a "Custom" period backfilling a past gap doesn't shrink
+      // it. A partial payment still extends expiry fully — the balance
+      // owed is a bookkeeping flag, not a hold on service.
+      if (isRecurring && coverageEnd) {
+        const newExpiry = applyCoverageToExpiry(freshMemberBefore?.expiry_date, coverageEnd);
+        if (newExpiry !== freshMemberBefore?.expiry_date) {
+          await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", selectedMember.id);
+        }
+      }
 
-        const durationMonths = selectedMember.packages?.duration_months || 1;
-        const isFirstPayment = countLogicalPayments(recurringRows ?? []) <= 1;
-        const newExpiry = extendExpiryDate(freshMember?.expiry_date, today, durationMonths, isFirstPayment, freshMember?.joining_date);
-        await supabase.from("members").update({ expiry_date: newExpiry }).eq("id", selectedMember.id);
+      // Trainer commission is generated automatically from the PT Fee +
+      // the trainer's current rate — never typed in manually here. Uses
+      // this payment's own coverage_start as the qualifying date (not
+      // today), and is idempotent per (member, cycle) so this can never
+      // double-generate a split payment's extra rows.
+      if ((COMMISSION_ELIGIBLE_TYPES as readonly string[]).includes(feeType) && selectedMember.trainer_id && selectedMember.training_fee && coverageStart) {
+        const { data: rate } = await supabase
+          .from("trainer_member_commissions")
+          .select("*")
+          .eq("trainer_id", selectedMember.trainer_id)
+          .eq("member_id", selectedMember.id)
+          .is("deleted_at", null)
+          .maybeSingle();
+        await generateCommissionEntry({
+          memberId: selectedMember.id,
+          trainerId: selectedMember.trainer_id,
+          ptFee: selectedMember.training_fee,
+          rate: rate as any,
+          qualifyingDate: coverageStart,
+          feePaymentId: newPayments?.[0]?.id ?? null,
+          createdBy: currentUser?.id ?? null,
+        });
       }
 
       await supabase.from("activity_logs").insert({
         user_id: currentUser?.id ?? null,
         action: "paid_fee", entity_type: "member", entity_id: selectedMember.id,
-        description: `${selectedMember.full_name} paid ${formatPKR(collected)} (${feeType}) — ${receiptNo}${balanceDue > 0 ? ` — ${formatPKR(balanceDue)} balance due` : ""}`,
-        metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected, balanceDue, receipt_no: receiptNo },
+        description: `${selectedMember.full_name} paid ${formatPKR(collected)} (${feeType}${monthsNum && monthsNum > 1 ? `, ${monthsNum} months` : ""}) — ${receiptNo}${balanceDue > 0 ? ` — ${formatPKR(balanceDue)} balance due` : ""}`,
+        metadata: { original: originalAmount, discount: discountAmount, final: finalAmount, collected, balanceDue, receipt_no: receiptNo, months_covered: monthsNum, coverage_start: coverageStart, coverage_end: coverageEnd },
       });
 
       toast.success(`Payment recorded — ${receiptNo}`);
@@ -282,6 +399,8 @@ export default function FeesPage() {
       setSelectedMember(null); setMemberSearch(""); setFeeAmount(""); setFeeNote("");
       setDiscountType("none"); setDiscountValue("");
       setFeeLines([{ method: "Cash", amount: "" }]); setFeePartial(emptyPartialState);
+      setCollectionDate(format(new Date(), "yyyy-MM-dd"));
+      setMonthsCovered("1"); setPeriodMode("current"); setCustomStart(""); setCustomEnd("");
       setCollectSaving(false);
       fetchAll();
       router.push(`/dashboard/fees/receipt/${newPayments[0].id}`);
@@ -292,9 +411,24 @@ export default function FeesPage() {
 
   // ── Derived data ─────────────────────────────────────────────────
   const todayStr = format(new Date(), "yyyy-MM-dd");
-  const paidMemberIds = new Set(recentPayments30.map((p) => p.member_id));
+  const thirtyDaysAgoStr = format(subDays(new Date(), 30), "yyyy-MM-dd");
+  // "Unpaid" lookback is per-member (since membership_start_date, i.e. the
+  // start of their current billing cycle) rather than a fixed 30-day
+  // window — a member who advance-paid for future months has an old
+  // payment_date but is still legitimately covered, and a fixed window
+  // would incorrectly flag them as delinquent.
+  const latestPaymentByMember = new Map<string, string>();
+  for (const p of recentPayments30) {
+    const cur = latestPaymentByMember.get(p.member_id);
+    if (!cur || p.payment_date > cur) latestPaymentByMember.set(p.member_id, p.payment_date);
+  }
+  function paidSinceCycleStart(m: MemberWithPackage) {
+    const boundary = m.membership_start_date ?? thirtyDaysAgoStr;
+    const latest = latestPaymentByMember.get(m.id);
+    return !!latest && latest >= boundary;
+  }
   const expired       = members.filter((m) => m.expiry_date && m.expiry_date < todayStr);
-  const unpaidActive  = members.filter((m) => (!m.expiry_date || m.expiry_date >= todayStr) && !paidMemberIds.has(m.id));
+  const unpaidActive  = members.filter((m) => (!m.expiry_date || m.expiry_date >= todayStr) && !paidSinceCycleStart(m));
   // Renewals reminders — two heads-up windows before a membership lapses,
   // mutually exclusive so each member shows in exactly one bucket.
   const dueSoon3 = members.filter((m) => {
@@ -309,21 +443,32 @@ export default function FeesPage() {
   const totalRevenue  = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
   const todayRevenue  = todayPayments.reduce((s, p) => s + (p.amount ?? 0), 0);
 
+  const collectorNames = [...new Set(payments.map((p) => p.collector?.full_name).filter(Boolean))] as string[];
+
   const txFiltered = payments.filter((p) => {
     if (txTypeFilter !== "all" && p.payment_type !== txTypeFilter) return false;
     if (txMethodFilter !== "all" && p.payment_method !== txMethodFilter) return false;
+    if (txCollectorFilter !== "all" && p.collector?.full_name !== txCollectorFilter) return false;
+    if (txBalanceFilter === "paid" && (p.balance_due ?? 0) > 0) return false;
+    if (txBalanceFilter === "partial" && (p.balance_due ?? 0) <= 0) return false;
+    if (txAmountMin && p.amount < Number(txAmountMin)) return false;
+    if (txAmountMax && p.amount > Number(txAmountMax)) return false;
     if (txSearch) {
       const q = txSearch.toLowerCase();
       const m = (p as any).member;
-      if (!m?.full_name?.toLowerCase().includes(q) && !m?.membership_no?.toLowerCase().includes(q)) return false;
+      if (
+        !m?.full_name?.toLowerCase().includes(q) &&
+        !m?.membership_no?.toLowerCase().includes(q) &&
+        !p.receipt_no?.toLowerCase().includes(q)
+      ) return false;
     }
     return true;
   });
 
   const TABS: { key: Tab; label: string; badge?: number }[] = [
-    { key: "overview",     label: "Overview" },
-    { key: "transactions", label: "Transactions", badge: payments.length },
-    { key: "outstanding",  label: "Outstanding Dues", badge: expired.length + unpaidActive.length },
+    { key: "overview",     label: "Summary" },
+    { key: "transactions", label: "Payments", badge: payments.length },
+    { key: "outstanding",  label: "Outstanding Balances", badge: expired.length + unpaidActive.length },
     { key: "renewals",    label: "Renewals", badge: dueSoon3.length + dueSoon7.length },
     // Analytics is entirely revenue breakdowns — not shown to receptionists.
     ...(hideRevenue ? [] : [{ key: "analytics" as Tab, label: "Analytics" }]),
@@ -372,9 +517,16 @@ export default function FeesPage() {
 
         {/* ── Tab content ───────────────────────────────────────── */}
         {tab === "overview"     && <OverviewTab payments={payments} todayPayments={todayPayments} expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={() => setCollectModal(true)} onSelectMember={selectMember} onRefresh={fetchAll} hideRevenue={hideRevenue} />}
-        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading} dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo} search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter} onRefresh={fetchAll} hideRevenue={hideRevenue} />}
-        {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
-        {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { setSelectedMember(m); setFeeAmount(String(m.monthly_fee ?? (m as any).packages?.monthly_fee ?? "")); setDiscountType("none"); setDiscountValue(""); setCollectModal(true); }} />}
+        {tab === "transactions" && <TransactionsTab payments={txFiltered} totalRevenue={totalRevenue} loading={loading}
+          dateField={txDateField} setDateField={setTxDateField}
+          dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo}
+          search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter}
+          collectorFilter={txCollectorFilter} setCollectorFilter={setTxCollectorFilter} collectorNames={collectorNames}
+          balanceFilter={txBalanceFilter} setBalanceFilter={setTxBalanceFilter}
+          amountMin={txAmountMin} setAmountMin={setTxAmountMin} amountMax={txAmountMax} setAmountMax={setTxAmountMax}
+          onRefresh={fetchAll} hideRevenue={hideRevenue} onOpenDetail={setDetailPaymentId} />}
+        {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
+        {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
         {tab === "analytics" && !hideRevenue && <AnalyticsTab payments={payments} />}
       </div>
 
@@ -457,27 +609,102 @@ export default function FeesPage() {
                 </button>
               </div>
 
-              {/* Already paid this month warning */}
-              {alreadyPaidWarning && feeType === "membership" && (
+              {/* Already paid ahead warning */}
+              {alreadyPaidWarning && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 mb-1">
                   <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
                   <div>
-                    <p className="text-xs font-semibold text-amber-800">Already paid this month</p>
-                    <p className="text-xs text-amber-700 mt-0.5">This member has a membership payment recorded for the current month. You can still proceed if this is a correction or advance payment.</p>
+                    <p className="text-xs font-semibold text-amber-800">Already paid through {formatDate(selectedMember.expiry_date)}</p>
+                    <p className="text-xs text-amber-700 mt-0.5">This member's current cycle doesn't end for a while. You can still proceed if this is a correction or a further advance payment.</p>
                   </div>
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="grid grid-cols-2 gap-3 mb-3">
                 <Input label="Amount (Rs)" type="number" required
                   value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} />
-                <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); if (e.target.value !== "membership") setAlreadyPaidWarning(false); }}>
+                <div>
+                  <label className="text-sm font-medium text-[#1A1A16] block mb-1.5">Collection Date <span className="text-[#F06418]">*</span></label>
+                  <input type="date" value={collectionDate} min="1900-01-01" max="2099-12-31"
+                    onChange={(e) => { const v = safeDateValue(e.target.value); if (v) setCollectionDate(v); }}
+                    className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                </div>
+              </div>
+              <div className="mb-4">
+                <Select label="Payment Type" value={feeType} onChange={(e) => setFeeType(e.target.value)}>
                   <option value="membership">Monthly Membership</option>
                   <option value="admission">Admission Fee</option>
                   <option value="trainer">Trainer Fee</option>
                   <option value="other">Other</option>
                 </Select>
               </div>
+
+              {/* Payment For / Coverage Period — completely independent of
+                  when the money is being collected (always "today" below) */}
+              {(RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+                <div className="rounded-xl border border-[#E4E4DE] bg-white p-3 space-y-2.5 mb-3">
+                  <p className="text-xs font-semibold text-[#1A1A16]">Payment For</p>
+                  <div className="flex gap-2">
+                    {([
+                      { key: "current", label: "Current Period" },
+                      { key: "next", label: "Next Period" },
+                      { key: "custom", label: "Custom Period" },
+                    ] as { key: PeriodMode; label: string }[]).map((opt) => (
+                      <button key={opt.key} type="button"
+                        disabled={opt.key === "current" && !selectedMember?.expiry_date}
+                        onClick={() => setPeriodMode(opt.key)}
+                        className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                          periodMode === opt.key ? "bg-[#F06418] text-white border-[#F06418]" : "bg-white text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418]"
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {periodMode === "next" && (
+                    <div className="flex items-center gap-2">
+                      {MONTHS_PRESET.map((n) => (
+                        <button key={n} type="button" onClick={() => applyMonths(n)}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                            monthsCoveredNum === n ? "bg-[#F06418] text-white border-[#F06418]" : "bg-white text-[#4A4A44] border-[#E4E4DE] hover:border-[#F06418]"
+                          }`}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                      <input type="number" min={1} placeholder="Custom" value={monthsCovered}
+                        onChange={(e) => applyMonths(Math.max(Number(e.target.value) || 1, 1))}
+                        className="w-16 px-2 py-1.5 text-xs text-center rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                    </div>
+                  )}
+
+                  {periodMode === "custom" && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="text-[10px] text-[#7A7A72] block mb-1">Coverage Start</label>
+                        <input type="date" value={customStart} min="1900-01-01" max="2099-12-31"
+                          onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomStart(v); }}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-[#7A7A72] block mb-1">Coverage End</label>
+                        <input type="date" value={customEnd} min="1900-01-01" max="2099-12-31"
+                          onChange={(e) => { const v = safeDateValue(e.target.value); if (v !== null) setCustomEnd(v); }}
+                          className="w-full px-2 py-1.5 text-xs rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between bg-[#F8F8F6] rounded-lg border border-[#E4E4DE] px-3 py-2">
+                    <span className="text-xs text-[#4A4A44]">Coverage Period</span>
+                    <span className="text-xs font-bold text-[#F06418]">{coverageLabel ?? "—"}</span>
+                  </div>
+                  {periodMode === "current" && (
+                    <p className="text-[11px] text-[#7A7A72]">Settles the cycle already on file — this won't change the member's membership expiry.</p>
+                  )}
+                </div>
+              )}
 
               {/* Discount section */}
               <div className="rounded-xl border-2 border-dashed border-[#F06418] bg-[#FEF0E8]/40 p-4 space-y-3 mb-3">
@@ -548,6 +775,15 @@ export default function FeesPage() {
           )}
         </div>
       </Modal>
+
+      {/* ── Payment Detail (view / edit Collection Date & Coverage) ──── */}
+      {detailPaymentId && (
+        <PaymentDetailModal
+          paymentId={detailPaymentId}
+          onClose={() => setDetailPaymentId(null)}
+          onUpdated={fetchAll}
+        />
+      )}
     </div>
   );
 }
@@ -658,7 +894,7 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
                       <div>
                         <p className="text-sm font-semibold text-[#1A1A16]">{m.full_name}</p>
                         <p className="text-xs text-[#7A7A72]">
-                          {isExpired ? `Expired ${Math.abs(days ?? 0)}d ago` : "No payment in 30 days"}
+                          {isExpired ? `Expired ${Math.abs(days ?? 0)}d ago` : (m.membership_start_date ? `No payment since ${formatDate(m.membership_start_date)}` : "No payment in 30+ days")}
                         </p>
                       </div>
                     </div>
@@ -711,16 +947,27 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
 }
 
 // ── Tab 2: Transactions ──────────────────────────────────────────────
-function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo, search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, onRefresh, hideRevenue }: {
+function TransactionsTab({ payments, totalRevenue, loading,
+  dateField, setDateField, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo,
+  search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter,
+  collectorFilter, setCollectorFilter, collectorNames, balanceFilter, setBalanceFilter,
+  amountMin, setAmountMin, amountMax, setAmountMax,
+  onRefresh, hideRevenue, onOpenDetail }: {
   payments: PaymentRow[]; totalRevenue: number; loading: boolean;
+  dateField: "collection" | "coverage"; setDateField: (v: "collection" | "coverage") => void;
   dateRange: DateRange; setDateRange: (v: DateRange) => void;
   customFrom: string; setCustomFrom: (v: string) => void;
   customTo: string; setCustomTo: (v: string) => void;
   search: string; setSearch: (v: string) => void;
   typeFilter: string; setTypeFilter: (v: string) => void;
   methodFilter: string; setMethodFilter: (v: string) => void;
+  collectorFilter: string; setCollectorFilter: (v: string) => void; collectorNames: string[];
+  balanceFilter: "all" | "paid" | "partial"; setBalanceFilter: (v: "all" | "paid" | "partial") => void;
+  amountMin: string; setAmountMin: (v: string) => void;
+  amountMax: string; setAmountMax: (v: string) => void;
   onRefresh: () => void;
   hideRevenue: boolean;
+  onOpenDetail: (id: string) => void;
 }) {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -731,8 +978,9 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
   function getSortValue(p: PaymentRow, key: string): string | number | null {
     switch (key) {
       case "member":       return (p as any).member?.full_name ?? null;
-      case "month":        return p.month_covered ?? p.payment_date ?? null;
+      case "coverage":     return p.coverage_start ?? p.month_covered ?? p.payment_date ?? null;
       case "collected_by": return p.collector?.full_name ?? null;
+      case "balance":      return p.balance_due ?? 0;
       default:             return (p as any)[key] ?? null;
     }
   }
@@ -772,10 +1020,19 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
 
   return (
     <div className="space-y-4">
-      {/* ── Filter bar ── */}
+      {/* ── Search & Filters ── */}
       <div className="bg-white border border-[#E4E4DE] rounded-xl p-4 space-y-3">
-        {/* Row 1 — date range + search + refresh */}
+        {/* Row 1 — which date field the range below applies to */}
         <div className="flex flex-wrap items-center gap-3">
+          <span className="text-xs font-semibold text-[#7A7A72]">Filter by</span>
+          <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5">
+            <button onClick={() => setDateField("collection")}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${dateField === "collection" ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
+            >Collection Date</button>
+            <button onClick={() => setDateField("coverage")}
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${dateField === "coverage" ? "bg-[#F06418] text-white" : "text-[#4A4A44] hover:bg-white"}`}
+            >Coverage Period</button>
+          </div>
           <div className="flex bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg p-0.5 gap-0.5 flex-wrap">
             {(["thisMonth", "lastMonth", "3months", "alltime", "custom"] as DateRange[]).map((d) => (
               <button key={d} onClick={() => setDateRange(d)}
@@ -783,12 +1040,7 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
               >{DATE_LABELS[d]}</button>
             ))}
           </div>
-          <div className="flex-1 min-w-48 max-w-sm relative">
-            <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
-            <input type="text" placeholder="Search by name or membership no..." value={search} onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
-          </div>
-          <Button variant="ghost" size="sm" onClick={onRefresh}><RefreshCw className="w-4 h-4" /></Button>
+          <Button variant="ghost" size="sm" onClick={onRefresh} className="ml-auto"><RefreshCw className="w-4 h-4" /></Button>
         </div>
 
         {/* Row 2 — custom range inputs (only when custom selected) */}
@@ -809,7 +1061,14 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
           </div>
         )}
 
-        {/* Row 3 — type + method filters + count */}
+        {/* Row 3 — free-text search */}
+        <div className="relative max-w-sm">
+          <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input type="text" placeholder="Search member, membership no., or receipt #..." value={search} onChange={(e) => setSearch(e.target.value)}
+            className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+        </div>
+
+        {/* Row 4 — type / method / collected by / balance / amount filters */}
         <div className="flex flex-wrap items-center gap-2">
           <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
             className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
@@ -821,6 +1080,21 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
             <option value="all">All Methods</option>
             {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
+          <select value={collectorFilter} onChange={(e) => setCollectorFilter(e.target.value)}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
+            <option value="all">All Collected By</option>
+            {collectorNames.map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+          <select value={balanceFilter} onChange={(e) => setBalanceFilter(e.target.value as any)}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white text-[#4A4A44] focus:outline-none focus:ring-2 focus:ring-[#F06418]">
+            <option value="all">All Balances</option>
+            <option value="paid">Fully Paid</option>
+            <option value="partial">Partial / Balance Due</option>
+          </select>
+          <input type="number" placeholder="Min Rs" value={amountMin} onChange={(e) => setAmountMin(e.target.value)}
+            className="w-20 text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
+          <input type="number" placeholder="Max Rs" value={amountMax} onChange={(e) => setAmountMax(e.target.value)}
+            className="w-20 text-xs px-2.5 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
           <span className="text-xs text-[#7A7A72]">{payments.length} records</span>
           {!hideRevenue && (
             <span className="ml-auto text-sm font-bold text-[#1A1A16]">Total: {formatPKR(grandTotal)}</span>
@@ -853,36 +1127,32 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
             <table className="w-full">
               <thead className="bg-[#F8F8F6] border-b border-[#E4E4DE]">
                 <tr>
-                  <SortableTh label="Member" sortKey="member" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
-                  <SortableTh label="Receipt No" sortKey="receipt_no" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="For Month" sortKey="month" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Receipt #" sortKey="receipt_no" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
+                  <SortableTh label="Member" sortKey="member" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Collection Date" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Coverage Period" sortKey="coverage" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Payment Type" sortKey="payment_type" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Method" sortKey="payment_method" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="Paid On" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  <SortableTh label="Balance" sortKey="balance" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Collected By" sortKey="collected_by" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Note</th>
+                  <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3 whitespace-nowrap">Status</th>
                   <th className="px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E4E4DE]">
                 {sortedPayments.map((p) => {
                   const mem = (p as any).member;
-                  const hasDiscount = p.note?.includes("Discount:");
-                  // Extract user note (after the discount part if present)
-                  const cleanNote = hasDiscount
-                    ? p.note?.split(" · ").slice(1).join(" · ") || null
-                    : p.note;
-                  // Format month covered — use explicit month_covered if set,
-                  // else fall back to the payment_date month
-                  const monthSource = p.month_covered ?? p.payment_date;
-                  const monthLabel = monthSource
-                    ? format(new Date(monthSource + "T12:00:00"), "MMM yyyy")
-                    : null;
-                  const monthInferred = !p.month_covered && !!p.payment_date;
+                  const { label: coverageLabel, inferred: coverageInferred } = describeCoveredPeriod(p.coverage_start, p.coverage_end, p.month_covered, p.payment_date, p.months_covered);
+                  const isPartial = (p.balance_due ?? 0) > 0;
                   return (
-                    <tr key={p.id} className="hover:bg-[#F8F8F6] transition-colors">
+                    <tr key={p.id} onClick={() => onOpenDetail(p.id)} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer">
                       <td className="px-5 py-3">
+                        <span className="text-[11px] font-mono font-semibold text-[#F06418]">
+                          {p.receipt_no ?? `RCP-${p.id.slice(-8, -4).toUpperCase()}-${p.id.slice(-4).toUpperCase()}`}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
                           <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
                             {mem?.full_name?.charAt(0) ?? "?"}
@@ -893,19 +1163,15 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                           </div>
                         </div>
                       </td>
+                      <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
                       <td className="px-4 py-3">
-                        <span className="text-[11px] font-mono font-semibold text-[#F06418]">
-                          {p.receipt_no ?? `RCP-${p.id.slice(-8, -4).toUpperCase()}-${p.id.slice(-4).toUpperCase()}`}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {monthLabel ? (
+                        {coverageLabel ? (
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
-                            monthInferred
+                            coverageInferred
                               ? "text-[#7A7A72] bg-[#F8F8F6] border-[#E4E4DE]"
                               : "text-[#1A1A16] bg-[#F8F8F6] border-[#E4E4DE]"
                           }`}>
-                            {monthLabel}
+                            {coverageLabel}
                           </span>
                         ) : (
                           <span className="text-[#7A7A72] text-xs">—</span>
@@ -917,35 +1183,33 @@ function TransactionsTab({ payments, totalRevenue, loading, dateRange, setDateRa
                         </span>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
-                          {hasDiscount && (
-                            <span className="text-[9px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-bold">DISC</span>
-                          )}
-                        </div>
+                        <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
                       </td>
                       <td className="px-4 py-3">
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${METHOD_BADGE[p.payment_method ?? ""] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
                           {p.payment_method ?? "—"}
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
+                      <td className="px-4 py-3 text-sm whitespace-nowrap">
+                        {isPartial ? <span className="font-bold text-[#C04E10]">{formatPKR(p.balance_due)}</span> : <span className="text-[#7A7A72]">—</span>}
+                      </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {p.collector?.full_name ? (
-                          <>
-                            <p className="text-sm text-[#1A1A16]">{p.collector.full_name}</p>
-                            <p className="text-[10px] text-[#7A7A72]">{formatDateTime(p.created_at)}</p>
-                          </>
+                          <p className="text-sm text-[#1A1A16]">{p.collector.full_name}</p>
                         ) : (
                           <span className="text-xs text-[#7A7A72] italic">Not recorded</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-[#7A7A72] max-w-[140px] truncate">{cleanNote ?? "—"}</td>
                       <td className="px-4 py-3">
+                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${isPartial ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-green-50 text-green-700 border-green-200"}`}>
+                          {isPartial ? "Partial" : "Paid"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center gap-2">
                           <Link href={`/dashboard/fees/receipt/${p.id}`}>
-                            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E4E4DE] text-xs font-semibold text-[#4A4A44] hover:border-[#F06418] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors whitespace-nowrap">
-                              <Receipt className="w-3.5 h-3.5" /> View Receipt
+                            <span className="flex items-center gap-1.5 p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors" title="Printable receipt">
+                              <Receipt className="w-3.5 h-3.5" />
                             </span>
                           </Link>
                           <button onClick={() => setDeleteId(p.id)}
@@ -1028,7 +1292,7 @@ function OutstandingTab({ expired, unpaidActive, loading, onCollect }: {
             {m.membership_no}
             {pkg?.name && <span> · {pkg.name}</span>}
             {isExpired && days !== null && <span className="text-red-600 font-medium"> · Expired {Math.abs(days)}d ago</span>}
-            {!isExpired && <span className="text-amber-600 font-medium"> · No payment in 30+ days</span>}
+            {!isExpired && <span className="text-amber-600 font-medium"> · {m.membership_start_date ? `No payment since ${formatDate(m.membership_start_date)}` : "No payment in 30+ days"}</span>}
           </p>
         </div>
         <span className="text-sm font-bold text-[#1A1A16] flex-shrink-0">{formatPKR(pkg?.monthly_fee ?? m.monthly_fee)}</span>

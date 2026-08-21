@@ -97,6 +97,7 @@ export default function ReportsPage() {
       { data: trainers },
       { data: expenses },
       { data: dailyMembers },
+      { data: commissionLedger },
     ] = await Promise.all([
       supabase.from("fee_payments").select("id, amount, payment_type, payment_method, payment_date, member_id, commission_staff_id, commission_rate, commission_amount").is("deleted_at", null).gte("payment_date", from).lte("payment_date", to),
       // Archived (soft-deleted) members are intentionally excluded — reports
@@ -111,6 +112,12 @@ export default function ReportsPage() {
       supabase.from("staff_members").select("id, full_name, role, salary").in("role", ["Trainer", "Nutritionist", "Other"]).eq("status", "active").is("deleted_at", null),
       supabase.from("expenses").select("id, amount, expense_date, expense_head").is("deleted_at", null).gte("expense_date", from).lte("expense_date", to),
       supabase.from("daily_members").select("id, fee_paid, visit_date, gender, converted_to_member_id").is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
+      // Trainer commission — sourced from the historical ledger (frozen PT
+      // Fee × rate at generation time), NOT from fee_payments.commission_*
+      // (which was entered manually per-payment against the wrong basis).
+      // Scoped by qualifying_date to match how every other section here is
+      // scoped by its own natural date field within the period.
+      supabase.from("trainer_commission_ledger").select("trainer_id, commission_amount, status, qualifying_date").is("deleted_at", null).gte("qualifying_date", from).lte("qualifying_date", to),
     ]);
 
     // For trainers: count members per trainer
@@ -119,7 +126,7 @@ export default function ReportsPage() {
       if (m.trainer_id) trainerMemberCounts[m.trainer_id] = (trainerMemberCounts[m.trainer_id] || 0) + 1;
     });
 
-    setData({ payments: payments ?? [], members: members ?? [], attendances: attendances ?? [], submissions: submissions ?? [], trainers: trainers ?? [], expenses: expenses ?? [], dailyMembers: dailyMembers ?? [], trainerMemberCounts, today });
+    setData({ payments: payments ?? [], members: members ?? [], attendances: attendances ?? [], submissions: submissions ?? [], trainers: trainers ?? [], expenses: expenses ?? [], dailyMembers: dailyMembers ?? [], commissionLedger: commissionLedger ?? [], trainerMemberCounts, today });
     setLoading(false);
   }, [from, to]);
 
@@ -891,7 +898,7 @@ function SubmissionsReport({ data }: { data: any }) {
 
 // ── 6. Trainer Report ────────────────────────────────────────────────
 function TrainersReport({ data }: { data: any }) {
-  const { trainers = [], members = [], payments = [], trainerMemberCounts = {} } = data;
+  const { trainers = [], members = [], payments = [], trainerMemberCounts = {}, commissionLedger = [] } = data;
 
   const trainerOnly = trainers.filter((t: any) => t.role === "Trainer");
 
@@ -905,15 +912,28 @@ function TrainersReport({ data }: { data: any }) {
       const m = members.find((mem: any) => mem.id === p.member_id);
       return m?.trainer_id === t.id && p.payment_type === "trainer";
     }).reduce((s: number, p: any) => s + (p.amount ?? 0), 0),
-    commission: payments.filter((p: any) => p.commission_staff_id === t.id)
-      .reduce((s: number, p: any) => s + (p.commission_amount ?? 0), 0),
+    // Sourced from the trainer_commission_ledger (PTF x rate, frozen at
+    // generation time), not fee_payments.commission_* — see /dashboard/commissions.
+    commission: commissionLedger.filter((l: any) => l.trainer_id === t.id)
+      .reduce((s: number, l: any) => s + (l.commission_amount ?? 0), 0),
   })).sort((a: any, b: any) => b.members - a.members);
 
-  // Commission summary for all staff with any commission in the period
+  // Commission summary for all staff with any commission in the period.
+  // Trainer commission comes from the ledger; nutritionist/physiotherapy
+  // commission is a separate, untouched manual-entry feature still sourced
+  // from fee_payments.commission_* (excluding Trainer role here so a
+  // historical trainer payment's frozen commission_amount is never
+  // double-counted alongside its backfilled ledger entry).
   const commissionByStaff: Record<string, { name: string; role: string; total: number; count: number }> = {};
+  for (const t of trainerOnly) {
+    const rows = commissionLedger.filter((l: any) => l.trainer_id === t.id);
+    if (rows.length === 0) continue;
+    commissionByStaff[t.id] = { name: t.full_name, role: t.role, total: rows.reduce((s: number, l: any) => s + (l.commission_amount ?? 0), 0), count: rows.length };
+  }
   for (const p of payments) {
     if (!p.commission_staff_id || !p.commission_amount) continue;
     const staff = trainers.find((t: any) => t.id === p.commission_staff_id);
+    if (staff?.role === "Trainer") continue;
     const staffName = staff?.full_name ?? "Unknown";
     const staffRole = staff?.role ?? "—";
     if (!commissionByStaff[p.commission_staff_id]) {

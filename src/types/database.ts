@@ -225,7 +225,18 @@ export interface FeePayment {
   payment_type: "membership" | "trainer" | "admission" | "other" | null;
   payment_method: PaymentMethod | null;
   payment_date: string;
+  // Legacy — superseded by coverage_start below as the read source of
+  // truth, but still written for backward compatibility.
   month_covered: string | null;
+  // The period this payment covers — explicitly chosen by staff (Current /
+  // Next / Custom Period), never inferred from payment_date. First-row-only
+  // convention like balance_due below. Null for admission/other and every
+  // row written before this column existed.
+  coverage_start: string | null;
+  coverage_end: string | null;
+  // How many recurring cycles coverage_start..coverage_end spans — display
+  // only. Same first-row-only convention.
+  months_covered: number | null;
   receipt_no: string | null;
   collected_by: string | null;
   note: string | null;
@@ -274,6 +285,35 @@ export interface TrainerMemberCommission {
   commission_type: "percent" | "fixed";
   commission_amount: number | null;
   updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+}
+
+// One historical earning record per member per commission cycle — the PT
+// Fee and commission rate are FROZEN here at generation time, independent
+// of whatever trainer_member_commissions (the CURRENT rule) says later.
+// See src/lib/commission.ts for how these are generated and the 15-day
+// cycle rule.
+export interface TrainerCommissionLedger {
+  id: string;
+  member_id: string;
+  trainer_id: string;
+  fee_payment_id: string | null;
+  pt_fee: number;
+  commission_type: "percent" | "fixed";
+  commission_percent: number | null;
+  commission_amount: number;
+  qualifying_date: string;
+  cycle_start: string;
+  cycle_end: string;
+  payout_date: string;
+  status: "pending" | "paid";
+  paid_date: string | null;
+  paid_amount: number | null;
+  payout_reference: string | null;
+  processed_by: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -374,6 +414,7 @@ export interface Database {
       expenses: { Row: Expense; Insert: Omit<Expense, "id" | "created_at">; Update: Partial<Expense> };
       daily_members: { Row: DailyMember; Insert: Omit<DailyMember, "id" | "created_at">; Update: Partial<DailyMember> };
       sms_log: { Row: SmsLog; Insert: Omit<SmsLog, "id" | "created_at">; Update: Partial<SmsLog> };
+      trainer_commission_ledger: { Row: TrainerCommissionLedger; Insert: Omit<TrainerCommissionLedger, "id" | "created_at" | "updated_at">; Update: Partial<TrainerCommissionLedger> };
     };
   };
 }

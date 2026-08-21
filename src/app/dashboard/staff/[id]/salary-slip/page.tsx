@@ -9,12 +9,12 @@ import { format, endOfMonth } from "date-fns";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
-import { formatDate, formatPKR, calculateTrainerCommission, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR } from "@/lib/utils";
 import { PrintButton } from "@/app/dashboard/fees/receipt/[id]/PrintButton";
 import { ReceiptStyles } from "@/app/dashboard/fees/receipt/ReceiptStyles";
-import type { StaffMember, Member, TrainerMemberCommission } from "@/types/database";
+import type { StaffMember, Member } from "@/types/database";
 
-type PaymentRow = { id: string; member_id: string; amount: number; payment_date: string; receipt_no: string | null };
+type LedgerRow = { member_id: string; commission_amount: number; qualifying_date: string };
 
 export default function SalarySlipPage() {
   useRoleGuard(["owner", "manager"]);
@@ -23,8 +23,7 @@ export default function SalarySlipPage() {
 
   const [staff, setStaff] = useState<StaffMember | null>(null);
   const [assignedMembers, setAssignedMembers] = useState<Member[]>([]);
-  const [commissionRates, setCommissionRates] = useState<TrainerMemberCommission[]>([]);
-  const [memberPayments, setMemberPayments] = useState<PaymentRow[]>([]);
+  const [ledgerRows, setLedgerRows] = useState<LedgerRow[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [month, setMonth] = useState(() => format(new Date(), "yyyy-MM"));
@@ -41,23 +40,14 @@ export default function SalarySlipPage() {
     }
 
     if (staffData?.role === "Trainer") {
-      const [{ data: members }, { data: rates }] = await Promise.all([
+      const [{ data: members }, { data: ledger }] = await Promise.all([
         supabase.from("members").select("*").eq("trainer_id", id).eq("status", "active").is("deleted_at", null).order("full_name"),
-        supabase.from("trainer_member_commissions").select("*").eq("trainer_id", id).is("deleted_at", null),
+        // Historical commission ledger — frozen PT Fee x rate per cycle, not
+        // a live sum of fee_payments. See src/lib/commission.ts.
+        supabase.from("trainer_commission_ledger").select("member_id, commission_amount, qualifying_date").eq("trainer_id", id).is("deleted_at", null),
       ]);
-      const membersList = (members as Member[]) ?? [];
-      setAssignedMembers(membersList);
-      setCommissionRates((rates as TrainerMemberCommission[]) ?? []);
-
-      if (membersList.length > 0) {
-        const { data: payments } = await supabase
-          .from("fee_payments")
-          .select("id, member_id, amount, payment_date, receipt_no")
-          .in("member_id", membersList.map((m) => m.id))
-          .in("payment_type", COMMISSION_ELIGIBLE_TYPES)
-          .is("deleted_at", null);
-        setMemberPayments(payments ?? []);
-      }
+      setAssignedMembers((members as Member[]) ?? []);
+      setLedgerRows(ledger ?? []);
     }
     setLoading(false);
   }, [id]);
@@ -70,9 +60,9 @@ export default function SalarySlipPage() {
 
   const commissionBreakdown = assignedMembers
     .map((m) => {
-      const rate = commissionRates.find((r) => r.member_id === m.id);
-      const rows = memberPayments.filter((p) => p.member_id === m.id);
-      const amount = calculateTrainerCommission(rate, rows, periodStart, periodEnd, m.training_fee);
+      const amount = ledgerRows
+        .filter((l) => l.member_id === m.id && l.qualifying_date >= periodStart && l.qualifying_date <= periodEnd)
+        .reduce((sum, l) => sum + l.commission_amount, 0);
       return { member: m, amount };
     })
     .filter((row) => row.amount > 0);

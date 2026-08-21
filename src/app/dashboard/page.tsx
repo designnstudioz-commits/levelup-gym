@@ -67,7 +67,6 @@ export default async function DashboardPage() {
     { data: monthlyRevenueData },
     { count: pendingSubmissionsCount },
     { data: membersData },
-    { data: recentPayments30 },
     { data: expiringMembers },
     { data: recentActivity },
     { data: expensesData },
@@ -95,14 +94,8 @@ export default async function DashboardPage() {
 
     supabase
       .from("members")
-      .select("id, full_name, expiry_date, monthly_fee, packages(monthly_fee)")
+      .select("id, full_name, expiry_date, monthly_fee, membership_start_date, packages(monthly_fee)")
       .eq("status", "active")
-      .is("deleted_at", null),
-
-    supabase
-      .from("fee_payments")
-      .select("member_id")
-      .gte("payment_date", thirtyDaysAgo)
       .is("deleted_at", null),
 
     supabase
@@ -142,18 +135,41 @@ export default async function DashboardPage() {
     supabase.from("devices").select("id, last_seen"),
   ]);
 
+  // "Unpaid" lookback is per-member: since membership_start_date (the start
+  // of their CURRENT billing cycle), falling back to the 30-day window for
+  // anyone without one set yet — a member who advance-paid for future
+  // months would otherwise get incorrectly flagged once their (real, but
+  // old) payment_date ages past a fixed 30-day cutoff. Fetch back to the
+  // earliest boundary any active member needs, then compare per-member.
+  const boundaries = (membersData ?? []).map((m) => m.membership_start_date ?? thirtyDaysAgo);
+  const earliestNeeded = boundaries.length ? boundaries.reduce((min, b) => (b < min ? b : min)) : thirtyDaysAgo;
+  const { data: recentPayments } = await supabase
+    .from("fee_payments")
+    .select("member_id, payment_date")
+    .gte("payment_date", earliestNeeded)
+    .is("deleted_at", null);
+
   const monthlyRevenue =
     monthlyRevenueData?.reduce((sum, row) => sum + (row.amount ?? 0), 0) ?? 0;
   const monthlyExpenses =
     expensesData?.reduce((sum, row) => sum + (row.amount ?? 0), 0) ?? 0;
 
   // Split active members into paid vs unpaid — mirrors the Fees page's own
-  // "Outstanding Dues" definition (expired + no payment in the last 30 days)
-  // so the numbers agree everywhere in the app.
-  const paidMemberIds = new Set((recentPayments30 ?? []).map((p) => p.member_id));
+  // "Outstanding Dues" definition (expired + no payment since their current
+  // cycle started) so the numbers agree everywhere in the app.
+  const latestPaymentByMember = new Map<string, string>();
+  for (const p of recentPayments ?? []) {
+    const cur = latestPaymentByMember.get(p.member_id);
+    if (!cur || p.payment_date > cur) latestPaymentByMember.set(p.member_id, p.payment_date);
+  }
+  function paidSinceCycleStart(m: { id: string; membership_start_date: string | null }) {
+    const boundary = m.membership_start_date ?? thirtyDaysAgo;
+    const latest = latestPaymentByMember.get(m.id);
+    return !!latest && latest >= boundary;
+  }
   const expiredMembers = (membersData ?? []).filter((m) => m.expiry_date && m.expiry_date < today);
   const unpaidActiveMembers = (membersData ?? []).filter(
-    (m) => (!m.expiry_date || m.expiry_date >= today) && !paidMemberIds.has(m.id)
+    (m) => (!m.expiry_date || m.expiry_date >= today) && !paidSinceCycleStart(m)
   );
   const unpaidRaw = [...expiredMembers, ...unpaidActiveMembers];
   const unpaidIds = new Set(unpaidRaw.map((m) => m.id));
@@ -166,6 +182,9 @@ export default async function DashboardPage() {
       expiry_date: m.expiry_date,
       amount: m.monthly_fee ?? (m as any).packages?.monthly_fee ?? 0,
       isExpired: !!(m.expiry_date && m.expiry_date < today),
+      unpaidSinceLabel: m.membership_start_date
+        ? `No payment since ${formatDate(m.membership_start_date)}`
+        : "No payment in 30+ days",
     }))
     .sort((a, b) => Number(b.isExpired) - Number(a.isExpired));
   const totalUnpaidAmount = unpaidMembers.reduce((s, m) => s + m.amount, 0);

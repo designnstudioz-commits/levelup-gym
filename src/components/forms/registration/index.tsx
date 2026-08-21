@@ -388,6 +388,8 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             payment_method: line.method as any,
             payment_date: today,
             month_covered: today,
+            coverage_start: i === 0 ? (values.joining_date || null) : null,
+            coverage_end: i === 0 ? (values.expiry_date || null) : null,
             receipt_no: receiptNo,
             note,
             balance_due: i === 0 ? membershipBalanceDue : 0,

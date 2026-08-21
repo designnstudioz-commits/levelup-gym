@@ -12,6 +12,7 @@ export interface UnpaidMember {
   expiry_date: string | null;
   amount: number;
   isExpired: boolean;
+  unpaidSinceLabel: string;
 }
 
 interface DashboardStatsProps {
@@ -132,7 +133,7 @@ export function DashboardStats({
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-[#1A1A16] truncate">{m.full_name}</p>
                     <p className="text-xs text-[#7A7A72]">
-                      {m.isExpired ? `Expired ${formatDate(m.expiry_date)}` : "No payment in 30 days"}
+                      {m.isExpired ? `Expired ${formatDate(m.expiry_date)}` : m.unpaidSinceLabel}
                     </p>
                   </div>
                   <span className="text-sm font-bold text-red-600 flex-shrink-0">

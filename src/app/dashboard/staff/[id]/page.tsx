@@ -18,7 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { StatsCard } from "@/components/ui/StatsCard";
-import { formatDate, formatPKR, getMemberStatusDisplay, calculateTrainerCommission, buildCommissionPayload, isPTPackage, COMMISSION_ELIGIBLE_TYPES } from "@/lib/utils";
+import { formatDate, formatPKR, getMemberStatusDisplay, buildCommissionPayload, isPTPackage } from "@/lib/utils";
 import type { StaffMember, Member, StaffRole, TrainerMemberCommission } from "@/types/database";
 import { differenceInMonths, subMonths, startOfMonth, endOfMonth, format } from "date-fns";
 
@@ -64,11 +64,10 @@ export default function StaffDetailPage() {
   const [packagesById, setPackagesById] = useState<Record<string, { name: string; monthly_fee: number | null }>>({});
   // Manually-set commission % per assigned member (independent of package).
   const [commissionRates, setCommissionRates] = useState<TrainerMemberCommission[]>([]);
-  // This member's actual collected membership/trainer fee_payments — the
-  // basis the manual %/fixed-amount is applied against. id + receipt_no are
-  // needed to dedupe a split (Cash+Bank) payment into one logical
-  // transaction via countLogicalPayments() for the fixed-amount mode.
-  const [memberPayments, setMemberPayments] = useState<{ id: string; member_id: string; amount: number; payment_date: string; receipt_no: string | null }[]>([]);
+  // Historical commission ledger entries for this trainer's assigned
+  // members — the frozen PT Fee x rate earned per cycle (see
+  // src/lib/commission.ts), not a live re-sum of fee_payments.
+  const [commissionLedgerRows, setCommissionLedgerRows] = useState<{ member_id: string; commission_amount: number; qualifying_date: string; status: "pending" | "paid" }[]>([]);
   const [commissionInputs, setCommissionInputs] = useState<Record<string, string>>({});
   const [commissionTypeInputs, setCommissionTypeInputs] = useState<Record<string, "percent" | "fixed">>({});
   const [commissionAmountInputs, setCommissionAmountInputs] = useState<Record<string, string>>({});
@@ -143,19 +142,20 @@ export default function StaffDetailPage() {
       Object.fromEntries(membersList.map((m) => [m.id, String(ratesList.find((r) => r.member_id === m.id)?.commission_amount ?? "")]))
     );
 
-    // Each assigned member's own collected membership/trainer fee_payments —
-    // fetched separately since it depends on membersList, which isn't known
-    // until the Promise.all above resolves.
+    // Each assigned member's historical commission ledger entries — fetched
+    // separately since it depends on membersList, which isn't known until
+    // the Promise.all above resolves. This is the source of truth for
+    // commission figures now (frozen PT Fee x rate per cycle), not a live
+    // sum of fee_payments.
     if (membersList.length > 0) {
-      const { data: payments } = await supabase
-        .from("fee_payments")
-        .select("id, member_id, amount, payment_date, receipt_no")
-        .in("member_id", membersList.map((m) => m.id))
-        .in("payment_type", COMMISSION_ELIGIBLE_TYPES)
+      const { data: ledgerRows } = await supabase
+        .from("trainer_commission_ledger")
+        .select("member_id, commission_amount, qualifying_date, status")
+        .eq("trainer_id", id)
         .is("deleted_at", null);
-      setMemberPayments(payments ?? []);
+      setCommissionLedgerRows(ledgerRows ?? []);
     } else {
-      setMemberPayments([]);
+      setCommissionLedgerRows([]);
     }
 
     setLoading(false);
@@ -492,10 +492,13 @@ export default function StaffDetailPage() {
   }
 
   function commissionForMember(memberId: string, periodStart: string | null, periodEnd: string | null = null): number {
-    const rate = commissionRates.find((r) => r.member_id === memberId);
-    const rows = memberPayments.filter((p) => p.member_id === memberId);
-    const trainingFee = assignedMembers.find((m) => m.id === memberId)?.training_fee;
-    return calculateTrainerCommission(rate, rows, periodStart, periodEnd, trainingFee);
+    return commissionLedgerRows
+      .filter((l) =>
+        l.member_id === memberId &&
+        (!periodStart || l.qualifying_date >= periodStart) &&
+        (!periodEnd || l.qualifying_date <= periodEnd)
+      )
+      .reduce((sum, l) => sum + l.commission_amount, 0);
   }
   const commissionThisMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, monthStart), 0);
   const commissionLastMonth = assignedMembers.reduce((sum, m) => sum + commissionForMember(m.id, lastMonthStart, lastMonthEnd), 0);
