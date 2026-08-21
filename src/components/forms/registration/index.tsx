@@ -206,6 +206,10 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             package_ids: values.package_ids?.length ? values.package_ids : null,
             trainer_id: values.trainer_id || null,
             joining_date: values.joining_date || null,
+            // Normally the same as joining_date (the common case), but
+            // kept as its own field since staff can set it separately —
+            // see Step3Services.tsx.
+            membership_start_date: values.membership_start_date || values.joining_date || null,
             expiry_date: values.expiry_date || null,
             admission_fee: values.admission_fee || null,
             monthly_fee: values.monthly_fee || null,

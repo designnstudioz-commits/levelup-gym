@@ -193,7 +193,8 @@ export function Step4Review({ form, mode }: Step4Props) {
             {mode === "staff" && (
               <>
                 <ReviewField label="Joining Date" value={data.joining_date} />
-                <ReviewField label="Expiry Date" value={data.expiry_date} />
+                <ReviewField label="Membership Start Date" value={data.membership_start_date} />
+                <ReviewField label="Membership End Date" value={data.expiry_date} />
                 <FeeBreakdownRow
                   label="Admission Fee"
                   original={Number(data.admission_fee) || 0}

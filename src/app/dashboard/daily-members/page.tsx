@@ -181,6 +181,10 @@ export default function DailyMembersPage() {
         package_id: convertForm.package_id,
         trainer_id: convertForm.trainer_id || null,
         joining_date: convertForm.joining_date,
+        // Defaults to Joining Date — the normal case per the business
+        // rule; no separate input here, matching this form's existing
+        // scope (adjustable afterward on the member's profile if needed).
+        membership_start_date: convertForm.joining_date,
         expiry_date: convertForm.expiry_date,
         admission_fee: Number(convertForm.admission_fee),
         monthly_fee: Number(convertForm.monthly_fee) || pkg?.monthly_fee,
@@ -528,7 +532,7 @@ export default function DailyMembersPage() {
               </Select>
               <Input label="Joining Date" type="date" value={convertForm.joining_date}
                 onChange={(e) => { setConvertForm({ ...convertForm, joining_date: e.target.value, expiry_date: format(addMonths(new Date(e.target.value), 1), "yyyy-MM-dd") }); }} />
-              <Input label="Expiry Date" type="date" value={convertForm.expiry_date}
+              <Input label="Membership End Date" type="date" value={convertForm.expiry_date}
                 onChange={(e) => setConvertForm({ ...convertForm, expiry_date: e.target.value })} />
               <Input label="Admission Fee (Rs)" type="number" value={convertForm.admission_fee}
                 onChange={(e) => setConvertForm({ ...convertForm, admission_fee: e.target.value })} />

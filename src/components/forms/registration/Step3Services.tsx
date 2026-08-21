@@ -108,6 +108,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
 
   const joiningDate        = watch("joining_date");
+  const membershipStartDate = watch("membership_start_date");
   const selectedPackageIds = watch("package_ids") ?? [];
   const packageSelections: PackageSelection[] = watch("package_selections") ?? [];
   const admissionFee              = watch("admission_fee") ?? 0;
@@ -142,21 +143,33 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
     }
   }, [mode, currentUser, setValue]);
 
-  // Auto-calculate expiry from joining date + the longest selected package's
-  // duration, so combining a short add-on with a longer plan doesn't cut the
-  // member short. Recomputes whenever either input changes; staff can still
-  // hand-edit the result afterward, but doing so again after changing the
-  // joining date or package selection will recompute over it.
+  // Membership Start Date normally matches Joining Date (the common case:
+  // a brand-new member's billing cycle starts the day they join), but the
+  // two are distinct fields — staff can hand-edit Membership Start Date
+  // away from Joining Date afterward. Same recompute-but-overridable
+  // convention as Membership End Date below: changing Joining Date again
+  // resets the mirror.
   useEffect(() => {
-    if (joiningDate) {
+    if (joiningDate) setValue("membership_start_date", joiningDate);
+  }, [joiningDate, setValue]);
+
+  // Auto-calculate Membership End Date from Membership Start Date (NOT
+  // Joining Date — they can differ) + the longest selected package's
+  // duration, so combining a short add-on with a longer plan doesn't cut
+  // the member short. Recomputes whenever either input changes; staff can
+  // still hand-edit the result afterward, but doing so again after
+  // changing Membership Start Date or the package selection will
+  // recompute over it.
+  useEffect(() => {
+    if (membershipStartDate) {
       const durationMonths = selectedPackageIds.reduce((max, id) => {
         const pkg = packages.find((p) => p.id === id);
         return Math.max(max, pkg?.duration_months ?? 1);
       }, 1);
-      const expiry = format(addMonths(new Date(joiningDate), durationMonths), "yyyy-MM-dd");
+      const expiry = format(addMonths(new Date(membershipStartDate), durationMonths), "yyyy-MM-dd");
       setValue("expiry_date", expiry);
     }
-  }, [joiningDate, selectedPackageIds, packages, setValue]);
+  }, [membershipStartDate, selectedPackageIds, packages, setValue]);
 
   // Recalculate total monthly fee whenever selected packages OR their
   // per-package selections (discount / PT custom price) change.
@@ -541,7 +554,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
       </div>
 
       {/* Enrollment details */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[#E4E4DE]">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 border-t border-[#E4E4DE]">
         <Input
           label="Joining Date"
           type="date"
@@ -550,10 +563,18 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
           {...register("joining_date")}
         />
         <Input
-          label="Expiry Date"
+          label="Membership Start Date"
+          type="date"
+          required
+          error={errors.membership_start_date?.message}
+          {...register("membership_start_date")}
+          hint="Normally the same as Joining Date — adjust if this member's billing cycle starts later"
+        />
+        <Input
+          label="Membership End Date"
           type="date"
           {...register("expiry_date")}
-          hint="Auto-calculated from joining date + package duration — adjust if needed"
+          hint="Membership End Date is calculated from Membership Start Date + package duration."
         />
       </div>
 

@@ -743,7 +743,7 @@ export default function StaffDetailPage() {
                         {staff.role === "Trainer" && <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Commission</th>}
                         {staff.role === "Trainer" && <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">This Month</th>}
                         {staff.role === "Trainer" && <th className="text-right text-xs font-semibold text-[#7A7A72] px-4 py-3">Last Month</th>}
-                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Expiry</th>
+                        <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Membership End Date</th>
                         <th className="text-left text-xs font-semibold text-[#7A7A72] px-5 py-3">Status</th>
                       </tr>
                     </thead>

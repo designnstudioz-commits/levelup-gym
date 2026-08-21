@@ -682,7 +682,7 @@ function MembershipReport({ data }: { data: any }) {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-[#E4E4DE]">
-                {["Member", "Membership No", "Package", "Expiry Date", "Days Left"].map((h) => (
+                {["Member", "Membership No", "Package", "Membership End Date", "Days Left"].map((h) => (
                   <th key={h} className="text-left text-xs font-semibold text-[#7A7A72] pb-2 pr-4">{h}</th>
                 ))}
               </tr>

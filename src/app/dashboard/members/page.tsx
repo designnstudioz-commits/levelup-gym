@@ -379,12 +379,12 @@ export default function MembersPage() {
               </optgroup>
               <optgroup label="Membership / Year">
                 <option value="membership_asc">Membership No (A → Z)</option>
-                <option value="join_newest">Join Date: Newest</option>
-                <option value="join_oldest">Join Date: Oldest</option>
+                <option value="join_newest">Joining Date: Newest</option>
+                <option value="join_oldest">Joining Date: Oldest</option>
               </optgroup>
-              <optgroup label="Expiry">
-                <option value="expiry_asc">Expiry: Soonest</option>
-                <option value="expiry_desc">Expiry: Latest</option>
+              <optgroup label="Membership End Date">
+                <option value="expiry_asc">Membership End Date: Soonest</option>
+                <option value="expiry_desc">Membership End Date: Latest</option>
               </optgroup>
             </select>
 
@@ -618,7 +618,7 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
               <SortableTh label="Package" sortKey="package" currentKey={sortKey} direction={sortDir} onSort={onSort} />
               <SortableTh label="Trainer" sortKey="trainer" currentKey={sortKey} direction={sortDir} onSort={onSort} />
               <SortableTh label="Phone" sortKey="phone" currentKey={sortKey} direction={sortDir} onSort={onSort} />
-              <SortableTh label="Expiry" sortKey="expiry_date" currentKey={sortKey} direction={sortDir} onSort={onSort} />
+              <SortableTh label="Membership End Date" sortKey="expiry_date" currentKey={sortKey} direction={sortDir} onSort={onSort} />
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Fee</th>
               <th className="text-left text-xs font-semibold text-[#7A7A72] px-4 py-3">Status</th>
               <th className="px-5 py-3" />
@@ -755,7 +755,7 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, 
                   </div>
                   {m.expiry_date && (
                     <p className={`text-xs mb-2 ${days !== null && days <= 7 ? "text-red-600 font-semibold" : days !== null && days <= 30 ? "text-[#C04E10] font-medium" : "text-[#7A7A72]"}`}>
-                      Exp: {formatDate(m.expiry_date)}{days !== null && days >= 0 && ` (${days}d)`}
+                      Membership End Date: {formatDate(m.expiry_date)}{days !== null && days >= 0 && ` (${days}d)`}
                     </p>
                   )}
                 </>

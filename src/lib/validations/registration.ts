@@ -126,6 +126,7 @@ export const step3Schema = z.object({
   commission_percent: z.number().optional(),
   commission_amount: z.number().optional(),
   joining_date: z.string().optional(),
+  membership_start_date: z.string().optional(),
   expiry_date: z.string().optional(),
   admission_fee: z.number().optional(),
   monthly_fee: z.number().optional(),
@@ -144,9 +145,10 @@ export const step3Schema = z.object({
 });
 
 // Staff registrations create a member directly (skipping the approval
-// queue), so joining_date must be set — otherwise expiry_date is left null
-// at creation, and whatever fee payment comes in first silently becomes the
-// basis for expiry instead of the member's actual joining date.
+// queue), so joining_date and membership_start_date must both be set —
+// otherwise expiry_date is left null at creation, and whatever fee payment
+// comes in first silently becomes the basis for expiry instead of the
+// member's actual Membership Start Date.
 //
 // Staff registrations also collect the member's first payment on the spot
 // (admission + membership fee, each with its own optional discount and
@@ -155,6 +157,7 @@ export const step3Schema = z.object({
 export const step3StaffSchema = step3Schema
   .extend({
     joining_date: z.string().min(1, "Joining date is required"),
+    membership_start_date: z.string().min(1, "Membership start date is required"),
   })
   .refine((data) => (Number(data.admission_fee) || 0) > 0 || (Number(data.monthly_fee) || 0) > 0, {
     message: "Enter at least one fee amount to record a payment",

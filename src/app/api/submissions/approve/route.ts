@@ -73,6 +73,11 @@ export async function POST(req: NextRequest) {
       package_id: sub.package_id,
       trainer_id: sub.trainer_id,
       joining_date: sub.joining_date,
+      // submissions has no separate Membership Start Date field to source
+      // a different value from, so this defaults to Joining Date — the
+      // normal case per the business rule (a manager can still adjust it
+      // afterward on the member's profile).
+      membership_start_date: sub.joining_date,
       expiry_date: sub.expiry_date,
       admission_fee: sub.admission_fee,
       monthly_fee: sub.monthly_fee,

@@ -492,7 +492,7 @@ export default function SubmissionsPage() {
                 ["Referral Source", viewSubmission.referral_source],
                 ["Package", (viewSubmission as any).packages?.name],
                 ["Joining Date", viewSubmission.joining_date ? formatDate(viewSubmission.joining_date) : null],
-                ["Expiry Date", viewSubmission.expiry_date ? formatDate(viewSubmission.expiry_date) : null],
+                ["Membership End Date", viewSubmission.expiry_date ? formatDate(viewSubmission.expiry_date) : null],
                 ["Monthly Fee", viewSubmission.monthly_fee ? formatPKR(viewSubmission.monthly_fee) : null],
                 ["Admission Fee", viewSubmission.admission_fee ? formatPKR(viewSubmission.admission_fee) : null],
                 ["Payment Method", viewSubmission.payment_method],

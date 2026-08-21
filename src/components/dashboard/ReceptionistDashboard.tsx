@@ -341,7 +341,7 @@ function GlobalSearch({ balanceByMember, lastVisitByMember }: {
                           </Badge>
                         </div>
                         <p className="text-xs text-[#7A7A72]">
-                          {m.membership_no} · {m.packages?.name ?? "No package"} · Expires {formatDate(m.expiry_date)}
+                          {m.membership_no} · {m.packages?.name ?? "No package"} · Membership End Date {formatDate(m.expiry_date)}
                           {balance > 0 && <span className="text-red-600 font-semibold"> · {formatPKR(balance)} due</span>}
                           {lastVisit && <span> · Last visit {formatDate(lastVisit)}</span>}
                           {m.trainer?.full_name && <span> · Trainer: {m.trainer.full_name}</span>}
@@ -551,7 +551,7 @@ function ExpiringMembers({ loading, expiringToday, expiring3, expiring7, already
                     <span className="text-xs text-[#7A7A72]">{m.packages?.name ?? "—"}</span>
                   </div>
                   <p className="text-xs text-[#7A7A72] mt-0.5">
-                    {subTab === "expired" ? `Expired ${formatDate(m.expiry_date)}` : `Expires ${formatDate(m.expiry_date)}`}
+                    {subTab === "expired" ? `Membership Ended ${formatDate(m.expiry_date)}` : `Membership End Date ${formatDate(m.expiry_date)}`}
                     {lastVisit && ` · Visited ${formatDate(lastVisit)}`}
                     {balance > 0 && <span className="text-red-600 font-semibold"> · {formatPKR(balance)} due</span>}
                   </p>

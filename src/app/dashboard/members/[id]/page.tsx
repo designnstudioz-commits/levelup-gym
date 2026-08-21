@@ -324,7 +324,13 @@ export default function MemberDetailPage() {
   const [savingPTPricing, setSavingPTPricing] = useState(false);
   const [editPTPricing, setEditPTPricing] = useState(false);
   const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  // Renew Membership modal state. joiningDate is only actually edited/used
+  // for the Reactivate case (an archived member coming back, which also
+  // gets a fresh membership number — a genuine restart, unlike a routine
+  // renewal) — a normal renewal must never touch the member's historical
+  // Joining Date, only their current Membership Start/End Date.
   const [joiningDate, setJoiningDate] = useState("");
+  const [membershipStartDate, setMembershipStartDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
   const [feeType, setFeeType] = useState("membership");
@@ -412,6 +418,7 @@ export default function MemberDetailPage() {
       );
       setSelectedTrainer(memberData.trainer_id ?? "");
       setJoiningDate(memberData.joining_date ?? "");
+      setMembershipStartDate(memberData.membership_start_date ?? memberData.joining_date ?? "");
       setExpiryDate(memberData.expiry_date ?? "");
     }
     setPackages(pkgs ?? []);
@@ -910,8 +917,8 @@ export default function MemberDetailPage() {
   }
 
   async function renewMembership() {
-    if (!joiningDate || !expiryDate) {
-      toast.error("Set joining and expiry dates");
+    if (!membershipStartDate || !expiryDate) {
+      toast.error("Set Membership Start Date and Membership End Date");
       return;
     }
     setSaving(true);
@@ -927,13 +934,23 @@ export default function MemberDetailPage() {
     // leaves the member stuck half-archived.
     const { data: freshMember } = await supabase.from("members").select("deleted_at, gender").eq("id", id).single();
     const isReactivation = !!freshMember?.deleted_at;
+    if (isReactivation && !joiningDate) {
+      toast.error("Set a Joining Date");
+      setSaving(false);
+      return;
+    }
     const newMembershipNo = isReactivation ? await generateMembershipNo(freshMember?.gender ?? member?.gender) : null;
 
+    // A routine renewal only ever moves the CURRENT membership cycle
+    // forward — it must never touch the member's historical Joining Date.
+    // Reactivation is a genuine restart (a fresh membership number too),
+    // so Joining Date is legitimately reset there, and Membership Start
+    // Date is set to match it (the normal case, same as registration).
     await supabase.from("members").update({
-      joining_date: joiningDate,
+      membership_start_date: membershipStartDate,
       expiry_date: expiryDate,
       status: "active",
-      ...(isReactivation ? { membership_no: newMembershipNo, deleted_at: null } : {}),
+      ...(isReactivation ? { joining_date: joiningDate, membership_no: newMembershipNo, deleted_at: null } : {}),
     }).eq("id", id);
 
     await supabase.from("activity_logs").insert({
@@ -943,7 +960,7 @@ export default function MemberDetailPage() {
       entity_id: id,
       description: isReactivation
         ? `Reactivated ${member?.full_name} (was archived) — assigned ${newMembershipNo}, active until ${formatDate(expiryDate)}`
-        : `Renewed membership for ${member?.full_name} until ${formatDate(expiryDate)}`,
+        : `Renewed membership for ${member?.full_name} — Membership Start Date ${formatDate(membershipStartDate)}, Membership End Date ${formatDate(expiryDate)}`,
     });
 
     toast.success(isReactivation ? `Reactivated — new membership number: ${newMembershipNo}` : "Membership renewed");
@@ -1242,7 +1259,7 @@ export default function MemberDetailPage() {
                 </p>
               </div>
               <div className={`border rounded-xl p-4 ${daysLeft !== null && daysLeft <= 7 ? "bg-red-50 border-red-200" : daysLeft !== null && daysLeft <= 30 ? "bg-[#FEF0E8] border-[#FDDCC8]" : "bg-white border-[#E4E4DE]"}`}>
-                <p className="text-xs text-[#7A7A72] font-medium">Expiry Date</p>
+                <p className="text-xs text-[#7A7A72] font-medium">Membership End Date</p>
                 <p className="text-base font-bold text-[#1A1A16] mt-1">
                   {member.expiry_date ? formatDate(member.expiry_date) : "—"}
                 </p>
@@ -1849,7 +1866,7 @@ export default function MemberDetailPage() {
                 disabled
                 hint="Original signup date — not editable here"
               />
-              <Input label="Start Date" type="date" value={profileForm.membership_start_date}
+              <Input label="Membership Start Date" type="date" value={profileForm.membership_start_date}
                 onChange={(e) => {
                   const newStart = e.target.value;
                   const durationMonths = member?.packages?.duration_months || 1;
@@ -1860,11 +1877,11 @@ export default function MemberDetailPage() {
                   }));
                 }} />
               <Input
-                label="End Date"
+                label="Membership End Date"
                 type="date"
                 value={profileForm.expiry_date}
                 onChange={(e) => setProfileForm((f) => ({ ...f, expiry_date: e.target.value }))}
-                hint="Auto-calculated from start date + package duration"
+                hint="Membership End Date is calculated from Membership Start Date + package duration."
               />
               <Input label="Admission Fee (Rs)" type="number" placeholder="e.g. 15000" value={profileForm.admission_fee}
                 onChange={(e) => setProfileForm((f) => ({ ...f, admission_fee: e.target.value }))} />
@@ -2177,11 +2194,30 @@ export default function MemberDetailPage() {
               This member is archived. A new membership number will be assigned automatically.
             </p>
           )}
-          <Input label="New Joining Date" type="date" value={joiningDate} onChange={(e) => {
-            setJoiningDate(e.target.value);
+          {!member?.deleted_at && (
+            <div className="bg-[#F8F8F6] border border-[#E4E4DE] rounded-lg px-4 py-3 grid grid-cols-2 gap-3">
+              <div>
+                <p className="text-[10px] text-[#7A7A72] font-medium">Current Membership Start Date</p>
+                <p className="text-sm font-semibold text-[#1A1A16]">{formatDate(member?.membership_start_date ?? member?.joining_date)}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-[#7A7A72] font-medium">Current Membership End Date</p>
+                <p className="text-sm font-semibold text-[#1A1A16]">{formatDate(member?.expiry_date)}</p>
+              </div>
+            </div>
+          )}
+          {member?.deleted_at && (
+            <Input label="New Joining Date" type="date" value={joiningDate} onChange={(e) => {
+              setJoiningDate(e.target.value);
+              setMembershipStartDate(e.target.value);
+              if (e.target.value) setExpiryDate(addMonthsToDateStr(e.target.value, member?.packages?.duration_months || 1));
+            }} />
+          )}
+          <Input label="Membership Start Date" type="date" value={membershipStartDate} onChange={(e) => {
+            setMembershipStartDate(e.target.value);
             if (e.target.value) setExpiryDate(addMonthsToDateStr(e.target.value, member?.packages?.duration_months || 1));
           }} />
-          <Input label="New Expiry Date" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+          <Input label="Membership End Date" type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
           <div className="flex gap-3 pt-2">
             <Button variant="secondary" onClick={() => setRenewModal(false)} className="flex-1">Cancel</Button>
             <Button onClick={renewMembership} loading={saving} className="flex-1">{member?.deleted_at ? "Reactivate" : "Renew"}</Button>

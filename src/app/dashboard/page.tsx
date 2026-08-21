@@ -726,7 +726,7 @@ function TrainerDashboard({ header }: { header: React.ReactNode }) {
                       <p className="text-xs text-[#7A7A72]">{m.packages?.name ?? "—"}</p>
                     </div>
                     <span className={`text-xs font-medium ${days !== null && days < 0 ? "text-red-600" : days !== null && days <= 7 ? "text-amber-600" : "text-[#7A7A72]"}`}>
-                      {m.expiry_date ? `Expires ${formatDate(m.expiry_date)}` : "—"}
+                      {m.expiry_date ? `Membership End Date: ${formatDate(m.expiry_date)}` : "—"}
                     </span>
                   </Link>
                 );
