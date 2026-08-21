@@ -298,14 +298,20 @@ const CustomTooltip = ({ active, payload, label, isCurrency = false }: any) => {
 
 // ── 1. Overview Report ───────────────────────────────────────────────
 function OverviewReport({ data, from, to }: { data: any; from: string; to: string }) {
-  const { payments = [], members = [], attendances = [], submissions = [] } = data;
+  const { payments = [], members = [], attendances = [], submissions = [], dailyMembers = [] } = data;
 
-  const totalRevenue    = payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
+  // Revenue = fee_payments (memberships/PT/admission/etc.) + walk-in day
+  // passes (daily_members.fee_paid) — walk-in money is real collected
+  // revenue and belongs in this total; it was previously tracked only on
+  // the separate Daily Summary tab and silently excluded everywhere else.
+  const walkInRevenue   = dailyMembers.reduce((s: number, d: any) => s + (d.fee_paid ?? 0), 0);
+  const totalRevenue    = payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0) + walkInRevenue;
   const activeMembers   = members.filter((m: any) => m.status === "active").length;
   const totalCheckIns   = attendances.filter((a: any) => a.punch_type === "in").length;
   const approvedSubs    = submissions.filter((s: any) => s.status === "approved").length;
 
-  // Last 12 months revenue for sparkline
+  // Last 12 months revenue for sparkline — includes walk-in revenue too,
+  // so the trend line matches the KPI total above.
   const revenueByMonth: Record<string, number> = {};
   payments.forEach((p: any) => {
     if (!p.payment_date) return;
@@ -313,6 +319,13 @@ function OverviewReport({ data, from, to }: { data: any; from: string; to: strin
     if (isNaN(parsed.getTime())) return;
     const label = format(parsed, "MMM");
     revenueByMonth[label] = (revenueByMonth[label] || 0) + (p.amount ?? 0);
+  });
+  dailyMembers.forEach((d: any) => {
+    if (!d.visit_date) return;
+    const parsed = parseISO(d.visit_date);
+    if (isNaN(parsed.getTime())) return;
+    const label = format(parsed, "MMM");
+    revenueByMonth[label] = (revenueByMonth[label] || 0) + (d.fee_paid ?? 0);
   });
   const sparkData = Object.entries(revenueByMonth).map(([label, value]) => ({ label, value }));
 
@@ -335,7 +348,7 @@ function OverviewReport({ data, from, to }: { data: any; from: string; to: strin
     <div className="space-y-5">
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 report-section">
-        <KpiCard label="Revenue (Period)" value={formatPKR(totalRevenue)} color={BRAND} />
+        <KpiCard label="Revenue (Period)" value={formatPKR(totalRevenue)} color={BRAND} sub={walkInRevenue > 0 ? `incl. ${formatPKR(walkInRevenue)} walk-in` : undefined} />
         <KpiCard label="Active Members" value={activeMembers} color="#2563EB" />
         <KpiCard label="Check-ins" value={totalCheckIns} color="#059669" />
         <KpiCard label="New Members" value={approvedSubs} color="#7C3AED" sub="approved submissions" />
@@ -408,13 +421,17 @@ function OverviewReport({ data, from, to }: { data: any; from: string; to: strin
 
 // ── 2. Revenue Report ────────────────────────────────────────────────
 function RevenueReport({ data, from, to }: { data: any; from: string; to: string }) {
-  const { payments = [], expenses = [] } = data;
+  const { payments = [], expenses = [], dailyMembers = [] } = data;
 
-  const totalRevenue  = payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
+  // Revenue = fee_payments + walk-in day passes (daily_members.fee_paid) —
+  // real collected money that was previously excluded from every total
+  // except the separate Daily Summary tab.
+  const walkInRevenue = dailyMembers.reduce((s: number, d: any) => s + (d.fee_paid ?? 0), 0);
+  const totalRevenue  = payments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0) + walkInRevenue;
   const totalExpenses = expenses.reduce((s: number, e: any) => s + (e.amount ?? 0), 0);
   const netProfit     = totalRevenue - totalExpenses;
 
-  // Revenue by day
+  // Revenue by day — includes walk-ins so the chart matches the KPI total.
   const byDay: Record<string, number> = {};
   payments.forEach((p: any) => {
     if (!p.payment_date) return;
@@ -423,17 +440,27 @@ function RevenueReport({ data, from, to }: { data: any; from: string; to: string
     const d = format(parsed, "dd MMM");
     byDay[d] = (byDay[d] || 0) + (p.amount ?? 0);
   });
+  dailyMembers.forEach((d: any) => {
+    if (!d.visit_date) return;
+    const parsed = parseISO(d.visit_date);
+    if (isNaN(parsed.getTime())) return;
+    const label = format(parsed, "dd MMM");
+    byDay[label] = (byDay[label] || 0) + (d.fee_paid ?? 0);
+  });
   const dayData = Object.entries(byDay).map(([label, value]) => ({ label, value }));
 
-  // By payment method
+  // By payment method — walk-ins pay by method too, same as fee_payments.
   const byMethod: Record<string, number> = {};
   payments.forEach((p: any) => { if (p.payment_method) byMethod[p.payment_method] = (byMethod[p.payment_method] || 0) + (p.amount ?? 0); });
+  dailyMembers.forEach((d: any) => { if (d.payment_method) byMethod[d.payment_method] = (byMethod[d.payment_method] || 0) + (d.fee_paid ?? 0); });
   const methodData = Object.entries(byMethod).map(([name, value]) => ({ name, value }));
 
-  // By payment type
+  // By payment type — walk-ins get their own clearly-labeled "Day Pass"
+  // slice rather than being silently missing from this breakdown.
   const byType: Record<string, number> = {};
   payments.forEach((p: any) => { if (p.payment_type) byType[p.payment_type] = (byType[p.payment_type] || 0) + (p.amount ?? 0); });
-  const typeData = Object.entries(byType).map(([name, value]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), value }));
+  if (walkInRevenue > 0) byType["Day Pass"] = (byType["Day Pass"] || 0) + walkInRevenue;
+  const typeData = Object.entries(byType).map(([name, value]) => ({ name: name === "Day Pass" ? name : name.charAt(0).toUpperCase() + name.slice(1), value }));
 
   // By package (needs member lookup)
   const packageRevenue: Record<string, number> = {};
@@ -447,7 +474,7 @@ function RevenueReport({ data, from, to }: { data: any; from: string; to: string
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 report-section">
-        <KpiCard label="Total Collected" value={formatPKR(totalRevenue)} />
+        <KpiCard label="Total Collected" value={formatPKR(totalRevenue)} sub={walkInRevenue > 0 ? `incl. ${formatPKR(walkInRevenue)} walk-in` : undefined} />
         <KpiCard label="Total Expenses" value={formatPKR(totalExpenses)} color="#DC2626" />
         <KpiCard label="Net Profit" value={formatPKR(netProfit)} color={netProfit >= 0 ? "#059669" : "#DC2626"} />
         <KpiCard label="Transactions" value={payments.length} color="#2563EB" />

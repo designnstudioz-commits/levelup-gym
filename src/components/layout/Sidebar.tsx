@@ -44,7 +44,7 @@ interface SidebarProps {
 }
 
 const NAV_ROLES: Record<string, SystemRole[]> = {
-  "/dashboard":             ["owner", "manager", "receptionist", "viewer"],
+  "/dashboard":             ["owner", "manager", "receptionist", "trainer", "viewer"],
   "/dashboard/members":     ["owner", "manager", "receptionist", "viewer"],
   "/dashboard/submissions": ["owner", "manager", "receptionist"],
   "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],

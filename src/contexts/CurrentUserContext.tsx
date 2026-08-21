@@ -7,6 +7,7 @@ export interface CurrentUser {
   id: string;
   full_name: string | null;
   role: SystemRole | null;
+  staff_id: string | null;
 }
 
 const CurrentUserContext = createContext<CurrentUser | null>(null);

@@ -104,6 +104,91 @@ export function isPTPackage(pkg: { name: string }): boolean {
   return pkg.name.startsWith("Personal Training");
 }
 
+/** One logical payment/receipt — a split Cash+Bank collection produces
+ *  multiple fee_payments rows sharing one receipt_no, and callers that
+ *  display payments (not just sum them) need those collapsed into a
+ *  single row rather than shown as duplicates. */
+export interface LogicalPayment {
+  receiptKey: string;
+  receiptNo: string | null;
+  memberId: string;
+  paymentType: string | null;
+  totalAmount: number;
+  methods: { method: string; amount: number }[];
+  methodLabel: string;
+  paymentDate: string;
+  collectedBy: string | null;
+  coverageStart: string | null;
+  coverageEnd: string | null;
+  monthCovered: string | null;
+  monthsCovered: number | null;
+  balanceDue: number;
+  balanceDueDate: string | null;
+  note: string | null;
+  earliestCreatedAt: string;
+  anchorId: string;
+}
+
+interface RawPaymentRow {
+  id: string;
+  receipt_no: string | null;
+  member_id: string;
+  payment_type: string | null;
+  amount: number;
+  payment_method: string | null;
+  payment_date: string;
+  collected_by: string | null;
+  coverage_start?: string | null;
+  coverage_end?: string | null;
+  month_covered?: string | null;
+  months_covered?: number | null;
+  balance_due?: number | null;
+  balance_due_date?: string | null;
+  note?: string | null;
+  created_at: string;
+}
+
+/** Groups raw fee_payments rows by receipt_no (falling back to each row's
+ *  own id for older/imported rows with none) into one LogicalPayment per
+ *  real transaction — the first-row-only fields (balance_due, coverage,
+ *  months_covered) are read from whichever row in the group was created
+ *  first, matching the established convention. */
+export function groupPaymentsByReceipt(rows: RawPaymentRow[]): LogicalPayment[] {
+  const groups = new Map<string, RawPaymentRow[]>();
+  for (const r of rows) {
+    const key = r.receipt_no ?? r.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+  return [...groups.entries()].map(([key, group]) => {
+    const sorted = [...group].sort((a, b) => a.created_at.localeCompare(b.created_at));
+    const anchor = sorted[0];
+    const totalAmount = group.reduce((s, r) => s + (r.amount ?? 0), 0);
+    const methods = group.map((r) => ({ method: r.payment_method ?? "—", amount: r.amount ?? 0 }));
+    const methodLabel = [...new Set(methods.map((m) => m.method))].join(" + ");
+    return {
+      receiptKey: key,
+      receiptNo: anchor.receipt_no,
+      memberId: anchor.member_id,
+      paymentType: anchor.payment_type,
+      totalAmount,
+      methods,
+      methodLabel,
+      paymentDate: anchor.payment_date,
+      collectedBy: anchor.collected_by,
+      coverageStart: anchor.coverage_start ?? null,
+      coverageEnd: anchor.coverage_end ?? null,
+      monthCovered: anchor.month_covered ?? null,
+      monthsCovered: anchor.months_covered ?? null,
+      balanceDue: anchor.balance_due ?? 0,
+      balanceDueDate: anchor.balance_due_date ?? null,
+      note: anchor.note ?? null,
+      earliestCreatedAt: anchor.created_at,
+      anchorId: anchor.id,
+    };
+  });
+}
+
 /** Fee types that count as a member's recurring dues (as opposed to
  *  one-off charges like admission fees). Paying any of these is what
  *  keeps a member's status current — staff don't always pick "membership"
@@ -273,11 +358,16 @@ export async function generateReceiptNo(): Promise<string> {
   return `PMT-${year}-${String(next).padStart(4, "0")}`;
 }
 
+/** `client` defaults to the browser client (every existing call site keeps
+ *  working unchanged) — pass the service-role client explicitly when
+ *  calling this from a server-side API route, since the browser client
+ *  factory relies on browser cookie APIs that don't exist there. */
 export async function generateMembershipNo(
   gender?: string | null,
-  type: "member" | "staff" = "member"
+  type: "member" | "staff" = "member",
+  client?: ReturnType<typeof createClient>
 ): Promise<string> {
-  const supabase = createClient();
+  const supabase = client ?? createClient();
   const year = new Date().getFullYear();
 
   if (type === "staff") {

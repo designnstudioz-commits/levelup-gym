@@ -24,7 +24,7 @@ export default async function DashboardLayout({
       .is("deleted_at", null),
     supabase
       .from("system_users")
-      .select("id, full_name, role, status")
+      .select("id, full_name, role, status, staff_id")
       .eq("email", user.email!.toLowerCase())
       .eq("status", "active")
       .is("deleted_at", null)
@@ -40,7 +40,7 @@ export default async function DashboardLayout({
         userRole={systemUser?.role ?? "viewer"}
       />
       <main className="flex-1 overflow-y-auto flex flex-col">
-        <CurrentUserProvider value={systemUser ? { id: systemUser.id, full_name: systemUser.full_name, role: systemUser.role } : null}>
+        <CurrentUserProvider value={systemUser ? { id: systemUser.id, full_name: systemUser.full_name, role: systemUser.role, staff_id: systemUser.staff_id } : null}>
           <DeviceStatusBanner />
           {children}
         </CurrentUserProvider>
