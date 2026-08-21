@@ -75,9 +75,19 @@ app.post("/iclock/cdata", async (req, res) => {
       return sendText(res, "OK");
     }
 
-    const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
-
-    for (const line of lines) {
+    // Parsing is pure/no I/O — do it all up front so the rest of this
+    // handler can batch its DB work instead of doing several sequential
+    // round trips PER LINE. A device stuck re-sending its whole local
+    // cache (hundreds of lines) on every heartbeat used to take 1-2+
+    // minutes to process that way, blowing past nginx's default 60s
+    // proxy_read_timeout — the device never got its "OK" in time, so it
+    // just kept re-sending the same batch forever (confirmed via nginx
+    // access logs: 499/504 on ~99% of one device's ATTLOG uploads). This
+    // version processes a full resend in well under a second regardless
+    // of line count.
+    const rawLines = body.split("\n").map((l) => l.trim()).filter(Boolean);
+    const parsed = [];
+    for (const line of rawLines) {
       let uid = null, time = null, state = null, verify = null;
 
       if (line.includes("\t")) {
@@ -101,123 +111,173 @@ app.post("/iclock/cdata", async (req, res) => {
         continue;
       }
 
-      console.log(`[ADMS POST] Record: uid=${uid} time=${time} state=${state} verify=${verify}`);
-
       // Device sends PKT (UTC+5) local time — convert to UTC
       const localDate = new Date(time.replace(" ", "T") + "+05:00");
       if (isNaN(localDate.getTime())) {
         console.error(`[ADMS POST] Invalid date: ${time}`);
         continue;
       }
-      const punchTimeUTC = localDate.toISOString();
+      parsed.push({ uid, state, verify, localDate, punchTimeUTC: localDate.toISOString() });
+    }
 
-      const { data: enrollment } = await supabase
+    if (parsed.length === 0) {
+      sendText(res, "OK");
+      return;
+    }
+
+    const distinctUids = [...new Set(parsed.map((p) => p.uid))];
+    const minTime = new Date(Math.min(...parsed.map((p) => p.localDate.getTime())) - 30 * 1000).toISOString();
+    const maxTime = new Date(Math.max(...parsed.map((p) => p.localDate.getTime()))).toISOString();
+
+    // Resolve every uid in this body to a member or staff record — one
+    // query each, instead of one device_enrollments + one staff_members
+    // query per line.
+    const [{ data: enrollments }, { data: staffRows }] = await Promise.all([
+      supabase
         .from("device_enrollments")
-        .select("member_id, members(id, full_name, status)")
+        .select("device_user_id, members(id, full_name, status)")
         .eq("device_serial", serialNo)
-        .eq("device_user_id", uid)
-        .is("deleted_at", null)
-        .single();
-      const member = enrollment ? enrollment.members : null;
+        .in("device_user_id", distinctUids)
+        .is("deleted_at", null),
+      supabase
+        .from("staff_members")
+        .select("id, full_name, device_user_id")
+        .in("device_user_id", distinctUids)
+        .is("deleted_at", null),
+    ]);
+    const memberByUid = new Map((enrollments ?? []).filter((e) => e.members).map((e) => [e.device_user_id, e.members]));
+    const staffByUid = new Map((staffRows ?? []).map((s) => [s.device_user_id, s]));
 
-      // Dedup check runs BEFORE computing punch_type and is intentionally
-      // type-agnostic. The device re-sends its whole local ATTLOG cache on
-      // every heartbeat if it never sees its upload cursor advance (a known
-      // failure mode after a reset), so the same line can arrive hundreds of
-      // times. The old check scoped this to punch_type, but punch_type was
-      // itself computed by toggling off the member's most-recent row — once
-      // a few duplicates got in, that row toggled every re-send, so the
-      // type-scoped check missed roughly every other duplicate. Checking
-      // purely by (member/staff, time proximity) closes that gap regardless
-      // of how many times a record gets replayed.
-      const thirtySecAgo = new Date(localDate.getTime() - 30 * 1000).toISOString();
+    const memberIds = [...new Set(parsed.map((p) => memberByUid.get(p.uid)?.id).filter(Boolean))];
+    const staffIds = [...new Set(parsed.map((p) => staffByUid.get(p.uid)?.id).filter(Boolean))];
+    const unmatchedUids = distinctUids.filter((uid) => !memberByUid.has(uid) && !staffByUid.has(uid));
+
+    // Dedup check is intentionally type-agnostic (member/staff, time
+    // proximity only) — see the note on withinWindow() below. Batch-fetch
+    // every existing row in this body's time range (+/- the dedup window)
+    // once, instead of a live "any duplicate?" query per line, plus each
+    // member's single most-recent row for the in/out toggle.
+    const [{ data: existingMemberAtt }, { data: existingStaffAtt }, { data: existingUnverified }, { data: lastPunchRows }] = await Promise.all([
+      memberIds.length
+        ? supabase.from("attendances").select("member_id, punch_time").in("member_id", memberIds).gte("punch_time", minTime).lte("punch_time", maxTime)
+        : Promise.resolve({ data: [] }),
+      staffIds.length
+        ? supabase.from("attendances").select("staff_id, punch_time").in("staff_id", staffIds).gte("punch_time", minTime).lte("punch_time", maxTime)
+        : Promise.resolve({ data: [] }),
+      unmatchedUids.length
+        ? supabase.from("unverified_attendances").select("raw_id, punch_time").eq("device_id", serialNo).in("raw_id", unmatchedUids).gte("punch_time", minTime).lte("punch_time", maxTime)
+        : Promise.resolve({ data: [] }),
+      memberIds.length
+        ? supabase.from("attendances").select("member_id, punch_type, punch_time").in("member_id", memberIds).order("punch_time", { ascending: false })
+        : Promise.resolve({ data: [] }),
+    ]);
+
+    // Same rule as before: an existing row counts as a duplicate if it's
+    // at or up to 30s before the target time. Type-agnostic on purpose —
+    // the device re-sends its whole local cache on every heartbeat if it
+    // never sees its upload cursor advance, so the same line can arrive
+    // hundreds of times, and scoping this to punch_type let the toggle
+    // itself (which flips as duplicates land) mask roughly every other
+    // repeat.
+    function withinWindow(existingTimes, targetIso) {
+      const target = new Date(targetIso).getTime();
+      return existingTimes.some((t) => {
+        const dt = target - new Date(t).getTime();
+        return dt >= 0 && dt <= 30 * 1000;
+      });
+    }
+    const memberTimesById = new Map();
+    for (const row of existingMemberAtt ?? []) {
+      if (!memberTimesById.has(row.member_id)) memberTimesById.set(row.member_id, []);
+      memberTimesById.get(row.member_id).push(row.punch_time);
+    }
+    const staffTimesById = new Map();
+    for (const row of existingStaffAtt ?? []) {
+      if (!staffTimesById.has(row.staff_id)) staffTimesById.set(row.staff_id, []);
+      staffTimesById.get(row.staff_id).push(row.punch_time);
+    }
+    const unverifiedTimesByUid = new Map();
+    for (const row of existingUnverified ?? []) {
+      if (!unverifiedTimesByUid.has(row.raw_id)) unverifiedTimesByUid.set(row.raw_id, []);
+      unverifiedTimesByUid.get(row.raw_id).push(row.punch_time);
+    }
+    // Most-recent known punch_type per member, seeded from the DB. Updated
+    // in-memory as this batch decides new inserts (below) so the in/out
+    // toggle advances correctly across repeated members within one body,
+    // matching how the old per-line version re-read this after every insert.
+    const lastTypeByMember = new Map();
+    for (const row of lastPunchRows ?? []) {
+      if (!lastTypeByMember.has(row.member_id)) lastTypeByMember.set(row.member_id, row.punch_type);
+    }
+
+    const memberInserts = [];
+    const staffInserts = [];
+    const unverifiedInserts = [];
+    let skippedDupes = 0;
+
+    // Process oldest-first so the in/out toggle for a member appearing
+    // more than once in this body advances in the same order the device
+    // actually recorded the punches.
+    const chronological = [...parsed].sort((a, b) => a.localDate - b.localDate);
+
+    for (const p of chronological) {
+      console.log(`[ADMS POST] Record: uid=${p.uid} time=${p.punchTimeUTC} state=${p.state} verify=${p.verify}`);
+      const member = memberByUid.get(p.uid);
+      const staff = staffByUid.get(p.uid);
 
       if (member) {
-        const { count: recentCount } = await supabase
-          .from("attendances")
-          .select("*", { count: "exact", head: true })
-          .eq("member_id", member.id)
-          .gte("punch_time", thirtySecAgo)
-          .lte("punch_time", punchTimeUTC);
-
-        if ((recentCount || 0) > 0) {
+        const times = memberTimesById.get(member.id) ?? [];
+        if (withinWindow(times, p.punchTimeUTC)) {
+          skippedDupes++;
           console.log(`[ADMS POST] Duplicate within 30s — skipped for ${member.full_name}`);
-        } else {
-          const { data: lastPunch } = await supabase
-            .from("attendances")
-            .select("punch_type, punch_time")
-            .eq("member_id", member.id)
-            .order("punch_time", { ascending: false })
-            .limit(1)
-            .single();
-
-          let punchType;
-          if (state === "1" || state === "5") {
-            punchType = "out";
-          } else {
-            punchType = lastPunch?.punch_type === "in" ? "out" : "in";
-          }
-
-          const { error } = await supabase.from("attendances").insert({
-            member_id: member.id,
-            device_id: serialNo,
-            punch_time: punchTimeUTC,
-            punch_type: punchType,
-            verified: true,
-          });
-          if (error) console.error("[ADMS POST] Insert error:", error);
-          else console.log(`[ADMS POST] ✓ ${member.full_name} → ${punchType.toUpperCase()}`);
+          continue;
         }
+        let punchType;
+        if (p.state === "1" || p.state === "5") {
+          punchType = "out";
+        } else {
+          punchType = lastTypeByMember.get(member.id) === "in" ? "out" : "in";
+        }
+        lastTypeByMember.set(member.id, punchType);
+        times.push(p.punchTimeUTC);
+        memberTimesById.set(member.id, times);
+        memberInserts.push({ member_id: member.id, device_id: serialNo, punch_time: p.punchTimeUTC, punch_type: punchType, verified: true });
+        console.log(`[ADMS POST] ✓ ${member.full_name} → ${punchType.toUpperCase()}`);
+      } else if (staff) {
+        const times = staffTimesById.get(staff.id) ?? [];
+        if (withinWindow(times, p.punchTimeUTC)) {
+          skippedDupes++;
+          console.log(`[ADMS POST] Duplicate within 30s — skipped for staff ${staff.full_name}`);
+          continue;
+        }
+        times.push(p.punchTimeUTC);
+        staffTimesById.set(staff.id, times);
+        staffInserts.push({ staff_id: staff.id, device_id: serialNo, punch_time: p.punchTimeUTC, punch_type: "in", verified: true });
+        console.log(`[ADMS POST] ✓ Saved attendance for staff: ${staff.full_name}`);
       } else {
-        const { data: staff } = await supabase
-          .from("staff_members")
-          .select("id, full_name")
-          .eq("device_user_id", uid)
-          .is("deleted_at", null)
-          .single();
-
-        if (staff) {
-          const { count: recentStaffCount } = await supabase
-            .from("attendances")
-            .select("*", { count: "exact", head: true })
-            .eq("staff_id", staff.id)
-            .gte("punch_time", thirtySecAgo)
-            .lte("punch_time", punchTimeUTC);
-
-          if ((recentStaffCount || 0) > 0) {
-            console.log(`[ADMS POST] Duplicate within 30s — skipped for staff ${staff.full_name}`);
-          } else {
-            await supabase.from("attendances").insert({
-              staff_id: staff.id,
-              device_id: serialNo,
-              punch_time: punchTimeUTC,
-              punch_type: "in",
-              verified: true,
-            });
-            console.log(`[ADMS POST] ✓ Saved attendance for staff: ${staff.full_name}`);
-          }
-        } else {
-          const { count: recentUnverifiedCount } = await supabase
-            .from("unverified_attendances")
-            .select("*", { count: "exact", head: true })
-            .eq("device_id", serialNo)
-            .eq("raw_id", uid)
-            .gte("punch_time", thirtySecAgo)
-            .lte("punch_time", punchTimeUTC);
-
-          if ((recentUnverifiedCount || 0) > 0) {
-            console.log(`[ADMS POST] Duplicate unverified punch within 30s — skipped for uid=${uid}`);
-          } else {
-            await supabase.from("unverified_attendances").insert({
-              device_id: serialNo,
-              raw_id: uid,
-              punch_time: punchTimeUTC,
-            });
-            console.log(`[ADMS POST] ⚠ Unverified punch: uid=${uid}`);
-          }
+        const times = unverifiedTimesByUid.get(p.uid) ?? [];
+        if (withinWindow(times, p.punchTimeUTC)) {
+          skippedDupes++;
+          console.log(`[ADMS POST] Duplicate unverified punch within 30s — skipped for uid=${p.uid}`);
+          continue;
         }
+        times.push(p.punchTimeUTC);
+        unverifiedTimesByUid.set(p.uid, times);
+        unverifiedInserts.push({ device_id: serialNo, raw_id: p.uid, punch_time: p.punchTimeUTC });
+        console.log(`[ADMS POST] ⚠ Unverified punch: uid=${p.uid}`);
       }
     }
+
+    console.log(`[ADMS POST] Batch summary: ${parsed.length} lines, ${skippedDupes} duplicates skipped, ${memberInserts.length} member + ${staffInserts.length} staff + ${unverifiedInserts.length} unverified new rows`);
+
+    const [memberResult, staffResult, unverifiedResult] = await Promise.all([
+      memberInserts.length ? supabase.from("attendances").insert(memberInserts) : Promise.resolve({ error: null }),
+      staffInserts.length ? supabase.from("attendances").insert(staffInserts) : Promise.resolve({ error: null }),
+      unverifiedInserts.length ? supabase.from("unverified_attendances").insert(unverifiedInserts) : Promise.resolve({ error: null }),
+    ]);
+    if (memberResult.error) console.error("[ADMS POST] Member insert error:", memberResult.error);
+    if (staffResult.error) console.error("[ADMS POST] Staff insert error:", staffResult.error);
+    if (unverifiedResult.error) console.error("[ADMS POST] Unverified insert error:", unverifiedResult.error);
 
     sendText(res, "OK");
   } catch (err) {
