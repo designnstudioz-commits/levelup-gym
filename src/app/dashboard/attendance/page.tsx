@@ -289,6 +289,28 @@ export default function AttendancePage() {
     if (!member.device_user_id) {
       await supabase.from("members").update({ device_user_id: resolveModal.raw_id, thumb_registered: true }).eq("id", member.id);
     }
+
+    // Without this, resolving only backfills THIS punch — the same member
+    // scanning on this same device again would still come back unverified,
+    // since device_enrollments (not members.device_user_id above) is what
+    // every future punch is actually matched against. Most common cause in
+    // practice: a member enrolled on one device scans at another one they
+    // were never formally enrolled on there.
+    if (resolveModal.device_id) {
+      const { data: existingEnrollment } = await supabase
+        .from("device_enrollments")
+        .select("id")
+        .eq("device_serial", resolveModal.device_id)
+        .eq("device_user_id", resolveModal.raw_id)
+        .is("deleted_at", null)
+        .maybeSingle();
+      if (!existingEnrollment) {
+        await supabase.from("device_enrollments").insert({
+          member_id: member.id, device_serial: resolveModal.device_id, device_user_id: resolveModal.raw_id,
+        });
+      }
+    }
+
     await supabase.from("attendances").insert({
       member_id: member.id, device_id: resolveModal.device_id,
       punch_time: resolveModal.punch_time, punch_type: "in", verified: true,
