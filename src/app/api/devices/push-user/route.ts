@@ -71,6 +71,12 @@ export async function POST(req: NextRequest) {
 
     // ZKTeco ADMS user push command (tab-separated fields)
     // PIN = user ID on device, Pri = privilege (0=normal), Grp = group (1=default)
+    // TZ1/TZ2/TZ3 = the per-user time-zone/schedule slots the device actually
+    // reads for access-control decisions (confirmed on hardware 2026-08-29:
+    // the generic bare TZ= field acks successfully but the device silently
+    // ignores it — only TZ1/TZ2/TZ3 changed real on-device behavior).
+    // 0 = Time Schedule 1 (full 24/7 access, the only configured schedule
+    // besides the deny-all one used for blocking).
     const truncatedName = name.substring(0, 24); // device name field limit
     const command = [
       "DATA UPDATE USERINFO",
@@ -81,6 +87,9 @@ export async function POST(req: NextRequest) {
       `Card=`,
       `Grp=1`,
       `TZ=0`,
+      `TZ1=0`,
+      `TZ2=0`,
+      `TZ3=0`,
       `Verify=0`,
       `ViceCard=`,
     ].join("\t");

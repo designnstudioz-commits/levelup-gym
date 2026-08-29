@@ -327,6 +327,48 @@ export function daysUntilExpiry(expiryDate: string | null | undefined): number |
   }
 }
 
+export type LatestPaymentMap = Map<string, string>;
+
+/** THE shared definition of "paid up" for an active member's current
+ *  billing cycle — used by the Dashboard/Fees "Unpaid" buckets and by
+ *  device-access blocking so they can never silently disagree. */
+export function paidSinceCycleStart(
+  member: { id: string; membership_start_date: string | null },
+  latestPaymentByMember: LatestPaymentMap,
+  fallbackBoundaryStr: string
+): boolean {
+  const boundary = member.membership_start_date ?? fallbackBoundaryStr;
+  const latest = latestPaymentByMember.get(member.id);
+  return !!latest && latest >= boundary;
+}
+
+/** Expired, or no qualifying payment since cycle start. Deliberately does
+ *  NOT consider access_exempt — an exempt-but-unpaid member must still
+ *  show up in the Dashboard/Fees "Unpaid"/"Outstanding" buckets; exemption
+ *  only affects whether their device access gets blocked for it. */
+export function isPaymentDelinquent(
+  member: { id: string; expiry_date: string | null; membership_start_date: string | null },
+  latestPaymentByMember: LatestPaymentMap,
+  todayStr: string,
+  fallbackBoundaryStr: string
+): boolean {
+  if (member.expiry_date && member.expiry_date < todayStr) return true;
+  return !paidSinceCycleStart(member, latestPaymentByMember, fallbackBoundaryStr);
+}
+
+/** Combines payment delinquency with the exemption override — the one
+ *  function that decides device-access blocking (the access-sweep cron and
+ *  the post-payment unblock hook both call this, nothing else should). */
+export function shouldHaveDeviceAccess(
+  member: { id: string; expiry_date: string | null; membership_start_date: string | null; access_exempt: boolean },
+  latestPaymentByMember: LatestPaymentMap,
+  todayStr: string,
+  fallbackBoundaryStr: string
+): boolean {
+  if (member.access_exempt) return true;
+  return !isPaymentDelinquent(member, latestPaymentByMember, todayStr, fallbackBoundaryStr);
+}
+
 export function getMemberStatusDisplay(status: string, expiryDate?: string | null): {
   label: string;
   variant: "active" | "inactive" | "expiring" | "frozen" | "archived" | "pending";

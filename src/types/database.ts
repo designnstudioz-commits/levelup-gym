@@ -195,6 +195,14 @@ export interface Member {
   family_pricing_note: string | null;
   family_approved_by: string | null;
   family_approved_at: string | null;
+  // Access control (auto-block on unpaid/expired + manual owner/manager
+  // exemption) — see supabase/migrations/20260829000000_member_access_control.sql
+  access_exempt: boolean;
+  access_exempt_reason: string | null;
+  access_exempt_by: string | null;
+  access_exempt_at: string | null;
+  access_blocked_at: string | null;
+  access_blocked_reason: "expired" | "unpaid" | null;
   // Meta
   comment: string | null;
   created_at: string;

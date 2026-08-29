@@ -22,7 +22,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Card } from "@/components/ui/Card";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
-import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, safeDateValue } from "@/lib/utils";
+import { formatDate, formatPKR, daysUntilExpiry, generateReceiptNo, getMemberStatusDisplay, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, safeDateValue, paidSinceCycleStart } from "@/lib/utils";
 import { generateCommissionEntry } from "@/lib/commission";
 import Link from "next/link";
 import type { FeePayment, Member, Package } from "@/types/database";
@@ -377,6 +377,17 @@ export default function FeesPage() {
         }
       }
 
+      // Restore device access if this payment brings a blocked member back
+      // into good standing — best-effort, fire-and-forget: a device sync
+      // failure must never fail or delay the payment transaction.
+      if (isRecurring) {
+        fetch("/api/devices/sync-access", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ member_id: selectedMember.id }),
+        }).catch((err) => console.warn("[AccessSync] Failed to sync device access after payment:", err));
+      }
+
       // Trainer commission is generated automatically from the PT Fee +
       // the trainer's current rate — never typed in manually here. Uses
       // this payment's own coverage_start as the qualifying date (not
@@ -436,13 +447,8 @@ export default function FeesPage() {
     const cur = latestPaymentByMember.get(p.member_id);
     if (!cur || p.payment_date > cur) latestPaymentByMember.set(p.member_id, p.payment_date);
   }
-  function paidSinceCycleStart(m: MemberWithPackage) {
-    const boundary = m.membership_start_date ?? thirtyDaysAgoStr;
-    const latest = latestPaymentByMember.get(m.id);
-    return !!latest && latest >= boundary;
-  }
   const expired       = members.filter((m) => m.expiry_date && m.expiry_date < todayStr);
-  const unpaidActive  = members.filter((m) => (!m.expiry_date || m.expiry_date >= todayStr) && !paidSinceCycleStart(m));
+  const unpaidActive  = members.filter((m) => (!m.expiry_date || m.expiry_date >= todayStr) && !paidSinceCycleStart(m, latestPaymentByMember, thirtyDaysAgoStr));
   // Renewals reminders — two heads-up windows before a membership lapses,
   // mutually exclusive so each member shows in exactly one bucket.
   const dueSoon3 = members.filter((m) => {

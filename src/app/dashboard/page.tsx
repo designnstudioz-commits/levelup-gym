@@ -20,6 +20,7 @@ import { PaymentDetailModal } from "@/components/forms/PaymentDetailModal";
 import {
   formatDate, formatPKR, daysUntilExpiry, describeCoveredPeriod,
   groupPaymentsByReceipt, type LogicalPayment, isDeviceOnline, safeDateValue,
+  isPaymentDelinquent,
 } from "@/lib/utils";
 import { currentAndNextCycle, formatCycleLabel } from "@/lib/commission";
 import ReceptionistDashboard from "@/components/dashboard/ReceptionistDashboard";
@@ -210,13 +211,8 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
       const cur = latestByMember.get(p.member_id);
       if (!cur || p.payment_date > cur) latestByMember.set(p.member_id, p.payment_date);
     }
-    function paidSinceCycleStart(m: { id: string; membership_start_date: string | null }) {
-      const boundary = m.membership_start_date ?? thirtyDaysAgo;
-      const latest = latestByMember.get(m.id);
-      return !!latest && latest >= boundary;
-    }
     const cycleRows = (activeMembers ?? [])
-      .filter((m) => (m.expiry_date && m.expiry_date < today) || !paidSinceCycleStart(m))
+      .filter((m) => isPaymentDelinquent(m, latestByMember, today, thirtyDaysAgo))
       .map((m) => {
         const isExpired = !!(m.expiry_date && m.expiry_date < today);
         const dueDate = m.expiry_date ?? null;

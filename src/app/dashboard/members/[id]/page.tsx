@@ -8,7 +8,7 @@ import {
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
   Percent, Minus, Fingerprint, Printer, Camera, Trash2, Loader2,
-  Send, Clock,
+  Send, Clock, Lock, ShieldCheck,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -166,6 +166,8 @@ export default function MemberDetailPage() {
   const [feeModal, setFeeModal] = useState(false);
   const [renewModal, setRenewModal] = useState(false);
   const [freezeModal, setFreezeModal] = useState(false);
+  const [exemptModal, setExemptModal] = useState(false);
+  const [exemptSaving, setExemptSaving] = useState(false);
   const [receiptModal, setReceiptModal] = useState(false);
   const [detailPaymentId, setDetailPaymentId] = useState<string | null>(null);
   const [receiptData, setReceiptData] = useState<{
@@ -394,6 +396,7 @@ export default function MemberDetailPage() {
   }
   const [freezeUntil, setFreezeUntil] = useState("");
   const [freezeReason, setFreezeReason] = useState("");
+  const [exemptReason, setExemptReason] = useState("");
 
   const fetchMember = useCallback(async () => {
     const supabase = createClient();
@@ -758,6 +761,17 @@ export default function MemberDetailPage() {
       }
     }
 
+    // Restore device access if this payment brings a blocked member back
+    // into good standing — best-effort, fire-and-forget: a device sync
+    // failure must never fail or delay the payment transaction.
+    if (isRecurring) {
+      fetch("/api/devices/sync-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: id }),
+      }).catch((err) => console.warn("[AccessSync] Failed to sync device access after payment:", err));
+    }
+
     // Trainer commission is generated automatically from the PT Fee + the
     // trainer's current rate — never typed in manually here. Uses this
     // payment's own coverage_start as the qualifying date (not today), and
@@ -1015,6 +1029,36 @@ export default function MemberDetailPage() {
     fetchMember();
   }
 
+  async function submitExemption(exempt: boolean, reason?: string) {
+    setExemptSaving(true);
+    try {
+      const res = await fetch("/api/members/set-access-exemption", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: id, exempt, reason }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update exemption");
+      toast.success(
+        exempt
+          ? (data.forceUnlocked ? "Member exempted and device access restored" : "Member exempted from auto-blocking")
+          : "Access-blocking exemption removed"
+      );
+      setExemptModal(false);
+      setExemptReason("");
+      fetchMember();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update exemption");
+    } finally {
+      setExemptSaving(false);
+    }
+  }
+
+  function removeExemption() {
+    if (!confirm(`Remove ${member?.full_name}'s access-blocking exemption? Future unpaid/expired status will resume auto-blocking their device access.`)) return;
+    submitExemption(false);
+  }
+
   async function archiveMember() {
     if (!confirm(`Archive ${member?.full_name}? They will be hidden from active lists.`)) return;
     const supabase = createClient();
@@ -1208,6 +1252,47 @@ export default function MemberDetailPage() {
             <div className="mt-4 pt-4 border-t border-[#E4E4DE]">
               <DeviceEnrollmentsField memberId={member.id} membershipNo={member.membership_no} onSaved={fetchMember} />
             </div>
+
+            {/* Access control — automatic fee-based device blocking +
+                owner/manager exemption override */}
+            {(member.access_blocked_at || member.access_exempt || currentUser?.role === "owner" || currentUser?.role === "manager") && (
+              <div className="mt-4 pt-4 border-t border-[#E4E4DE] space-y-2">
+                {member.access_blocked_at && (
+                  <div className="flex items-center gap-2 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                    <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                    Access blocked since {formatDate(member.access_blocked_at)}
+                  </div>
+                )}
+                {member.access_exempt && (
+                  <div className="flex items-center gap-2 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+                    <ShieldCheck className="w-3.5 h-3.5 flex-shrink-0" />
+                    Exempt from auto-blocking{member.access_exempt_reason ? ` — ${member.access_exempt_reason}` : ""}
+                  </div>
+                )}
+                {(currentUser?.role === "owner" || currentUser?.role === "manager") && (
+                  member.access_exempt ? (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full justify-start text-[#7A7A72] hover:bg-[#F8F8F6]"
+                      onClick={removeExemption}
+                      loading={exemptSaving}
+                    >
+                      <ShieldCheck className="w-4 h-4" /> Remove Exemption
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="w-full justify-start"
+                      onClick={() => setExemptModal(true)}
+                    >
+                      <ShieldCheck className="w-4 h-4" /> Exempt from Auto-Blocking
+                    </Button>
+                  )
+                )}
+              </div>
+            )}
 
             {/* Quick actions */}
             <div className="mt-4 pt-4 border-t border-[#E4E4DE] space-y-2">
@@ -2234,6 +2319,23 @@ export default function MemberDetailPage() {
           <div className="flex gap-3 pt-2">
             <Button variant="secondary" onClick={() => setFreezeModal(false)} className="flex-1">Cancel</Button>
             <Button onClick={freezeMembership} loading={saving} className="flex-1"><Snowflake className="w-4 h-4" /> Freeze</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Exempt from Auto-Blocking Modal */}
+      <Modal open={exemptModal} onClose={() => setExemptModal(false)} title="Exempt from Auto-Blocking" size="sm">
+        <div className="p-5 space-y-4">
+          <p className="text-sm text-[#4A4A44]">
+            This member will be exempt from automatic fee-based access blocking.
+            {member?.access_blocked_at && " If they're currently blocked, this immediately restores their fingerprint access on all enrolled devices."}
+          </p>
+          <Input label="Reason (optional)" placeholder="e.g. Owner's friend, staff family..." value={exemptReason} onChange={(e) => setExemptReason(e.target.value)} />
+          <div className="flex gap-3 pt-2">
+            <Button variant="secondary" onClick={() => setExemptModal(false)} className="flex-1">Cancel</Button>
+            <Button onClick={() => submitExemption(true, exemptReason)} loading={exemptSaving} className="flex-1">
+              <ShieldCheck className="w-4 h-4" /> Exempt
+            </Button>
           </div>
         </div>
       </Modal>
