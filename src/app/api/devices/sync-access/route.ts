@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
-import { format } from "date-fns";
 import { shouldHaveDeviceAccess } from "@/lib/utils";
 import { pushAccessToAllDevices } from "@/lib/server/devicePush";
 
@@ -29,7 +28,7 @@ export async function POST(req: NextRequest) {
 
     const { data: member } = await admin
       .from("members")
-      .select("id, full_name, expiry_date, membership_start_date, access_exempt, access_blocked_at")
+      .select("id, full_name, expiry_date, access_exempt, access_blocked_at")
       .eq("id", member_id)
       .single();
 
@@ -40,22 +39,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ changed: false });
     }
 
-    const todayStr = format(new Date(), "yyyy-MM-dd");
-    const thirtyDaysAgoStr = format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), "yyyy-MM-dd");
-
-    const { data: recentPayments } = await admin
-      .from("fee_payments")
-      .select("payment_date")
-      .eq("member_id", member_id)
-      .is("deleted_at", null)
-      .order("payment_date", { ascending: false })
-      .limit(1);
-
-    const latestPaymentByMember = new Map<string, string>();
-    if (recentPayments?.[0]) latestPaymentByMember.set(member_id, recentPayments[0].payment_date);
-
-    const nowGood = shouldHaveDeviceAccess(member, latestPaymentByMember, todayStr, thirtyDaysAgoStr);
-    if (!nowGood) {
+    if (!shouldHaveDeviceAccess(member)) {
       return NextResponse.json({ changed: false });
     }
 

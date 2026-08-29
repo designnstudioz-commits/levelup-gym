@@ -356,17 +356,26 @@ export function isPaymentDelinquent(
   return !paidSinceCycleStart(member, latestPaymentByMember, fallbackBoundaryStr);
 }
 
-/** Combines payment delinquency with the exemption override — the one
- *  function that decides device-access blocking (the access-sweep cron and
- *  the post-payment unblock hook both call this, nothing else should). */
+/** The one function that decides device-access blocking (the access-sweep
+ *  cron and the post-payment unblock hook both call this, nothing else
+ *  should). Deliberately narrower than isPaymentDelinquent() — only a
+ *  genuinely lapsed expiry_date blocks access, never the "no recent
+ *  payment" signal alone. Confirmed on real data (2026-08-29): 57 of 201
+ *  members flagged by isPaymentDelinquent() had simply renewed a few days
+ *  to ~4 months early (lump-sum/multi-month payments, not necessarily
+ *  tagged with months_covered) — their expiry_date already correctly
+ *  reflects paid-through coverage, so isPaymentDelinquent()'s payment-
+ *  recency check was a false positive for all of them. That check remains
+ *  valuable as a staff-facing dashboard warning (it does catch genuine
+ *  data gaps, like a member with an expiry_date but zero payment history),
+ *  but it's too noisy a basis to physically lock someone out while their
+ *  own membership record says they're still covered — only a hard expiry
+ *  is unambiguous enough for that. */
 export function shouldHaveDeviceAccess(
-  member: { id: string; expiry_date: string | null; membership_start_date: string | null; access_exempt: boolean },
-  latestPaymentByMember: LatestPaymentMap,
-  todayStr: string,
-  fallbackBoundaryStr: string
+  member: { expiry_date: string | null; access_exempt: boolean }
 ): boolean {
   if (member.access_exempt) return true;
-  return !isPaymentDelinquent(member, latestPaymentByMember, todayStr, fallbackBoundaryStr);
+  return !member.expiry_date || member.expiry_date >= format(new Date(), "yyyy-MM-dd");
 }
 
 export function getMemberStatusDisplay(status: string, expiryDate?: string | null): {
