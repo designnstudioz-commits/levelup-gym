@@ -168,6 +168,7 @@ export default function MemberDetailPage() {
   const [freezeModal, setFreezeModal] = useState(false);
   const [exemptModal, setExemptModal] = useState(false);
   const [exemptSaving, setExemptSaving] = useState(false);
+  const [unblockSaving, setUnblockSaving] = useState(false);
   const [receiptModal, setReceiptModal] = useState(false);
   const [detailPaymentId, setDetailPaymentId] = useState<string | null>(null);
   const [receiptData, setReceiptData] = useState<{
@@ -1059,6 +1060,26 @@ export default function MemberDetailPage() {
     submitExemption(false);
   }
 
+  async function unblockAccess() {
+    if (!confirm(`Restore ${member?.full_name}'s device access now? This is a one-time unlock — if they're still unpaid/expired, the next daily sweep can block them again.`)) return;
+    setUnblockSaving(true);
+    try {
+      const res = await fetch("/api/members/unblock-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to unblock access");
+      toast.success("Device access restored");
+      fetchMember();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to unblock access");
+    } finally {
+      setUnblockSaving(false);
+    }
+  }
+
   async function archiveMember() {
     if (!confirm(`Archive ${member?.full_name}? They will be hidden from active lists.`)) return;
     const supabase = createClient();
@@ -1270,26 +1291,38 @@ export default function MemberDetailPage() {
                   </div>
                 )}
                 {(currentUser?.role === "owner" || currentUser?.role === "manager") && (
-                  member.access_exempt ? (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full justify-start text-[#7A7A72] hover:bg-[#F8F8F6]"
-                      onClick={removeExemption}
-                      loading={exemptSaving}
-                    >
-                      <ShieldCheck className="w-4 h-4" /> Remove Exemption
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="w-full justify-start"
-                      onClick={() => setExemptModal(true)}
-                    >
-                      <ShieldCheck className="w-4 h-4" /> Exempt from Auto-Blocking
-                    </Button>
-                  )
+                  <>
+                    {member.access_blocked_at && (
+                      <Button
+                        size="sm"
+                        className="w-full justify-start bg-[#F06418] text-white hover:bg-[#C04E10]"
+                        onClick={unblockAccess}
+                        loading={unblockSaving}
+                      >
+                        <Lock className="w-4 h-4" /> Unblock (One-Time)
+                      </Button>
+                    )}
+                    {member.access_exempt ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="w-full justify-start text-[#7A7A72] hover:bg-[#F8F8F6]"
+                        onClick={removeExemption}
+                        loading={exemptSaving}
+                      >
+                        <ShieldCheck className="w-4 h-4" /> Remove Exemption
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="w-full justify-start"
+                        onClick={() => setExemptModal(true)}
+                      >
+                        <ShieldCheck className="w-4 h-4" /> Exempt from Auto-Blocking
+                      </Button>
+                    )}
+                  </>
                 )}
               </div>
             )}

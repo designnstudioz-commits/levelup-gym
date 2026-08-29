@@ -23,7 +23,7 @@ type MemberWithJoins = Member & {
   trainer?: { full_name: string } | null;
 };
 
-type StatusFilter = "all" | "active" | "inactive" | "frozen" | "archived";
+type StatusFilter = "all" | "active" | "unpaid" | "inactive" | "frozen" | "archived";
 // Dropdown presets map onto the same flat (sortKey, sortDir) state that
 // drives the clickable column headers, so both controls stay in sync.
 const SORT_PRESETS: Record<string, { key: string; dir: "asc" | "desc" }> = {
@@ -58,7 +58,7 @@ export default function MembersPage() {
   const [members, setMembers]   = useState<MemberWithJoins[]>([]);
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
-  const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null; deleted_at: string | null }[]>([]);
+  const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null; deleted_at: string | null; expiry_date: string | null }[]>([]);
   const [page, setPage] = useState(1);
 
   // Filters
@@ -120,6 +120,11 @@ export default function MembersPage() {
           // like every other tab does.
           if (statusFilter === "archived") {
             q = q.eq("status", "archived").not("deleted_at", "is", null);
+          } else if (statusFilter === "unpaid") {
+            // Not a real status column value — active members whose paid
+            // coverage has lapsed. Same population the daily access-sweep
+            // (src/app/api/cron/access-sweep) blocks device entry for.
+            q = q.is("deleted_at", null).eq("status", "active").lt("expiry_date", todayStr());
           } else {
             q = q.is("deleted_at", null);
             if (statusFilter !== "all") q = q.eq("status", statusFilter);
@@ -130,8 +135,8 @@ export default function MembersPage() {
         // No deleted_at filter here — this feeds the status-tab counts, and
         // the "Archived" tab's count needs to include the deleted_at-set
         // rows too.
-        fetchAllRows<{ status: string | null; gender: string | null; deleted_at: string | null }>((from, to) =>
-          supabase.from("members").select("status, gender, deleted_at").range(from, to) as any
+        fetchAllRows<{ status: string | null; gender: string | null; deleted_at: string | null; expiry_date: string | null }>((from, to) =>
+          supabase.from("members").select("status, gender, deleted_at, expiry_date").range(from, to) as any
         ),
       ]);
 
@@ -280,21 +285,26 @@ export default function MembersPage() {
   // Contextual counts: status counts respect gender filter, gender counts respect status filter
   const statusCounts = useMemo(() => {
     const base = genderFilter === "all" ? allCounts : allCounts.filter((c) => c.gender === genderFilter);
-    const map: Record<string, number> = { active: 0, inactive: 0, frozen: 0, archived: 0, all: 0 };
+    const map: Record<string, number> = { active: 0, unpaid: 0, inactive: 0, frozen: 0, archived: 0, all: 0 };
+    const today = todayStr();
     base.forEach((c) => {
       if (c.status === "archived") { map.archived++; return; }
       if (c.deleted_at) return; // shouldn't happen outside archived, but stay consistent with the main query
       if (c.status && map[c.status] !== undefined) map[c.status]++;
+      if (c.status === "active" && c.expiry_date && c.expiry_date < today) map.unpaid++;
       map.all++;
     });
     return map;
   }, [allCounts, genderFilter]);
 
   const genderCounts = useMemo(() => {
+    const today = todayStr();
     const base = statusFilter === "archived"
       ? allCounts.filter((c) => c.status === "archived")
       : statusFilter === "all"
       ? allCounts.filter((c) => !c.deleted_at)
+      : statusFilter === "unpaid"
+      ? allCounts.filter((c) => c.status === "active" && !c.deleted_at && c.expiry_date && c.expiry_date < today)
       : allCounts.filter((c) => c.status === statusFilter && !c.deleted_at);
     return {
       all: base.length,
@@ -306,6 +316,7 @@ export default function MembersPage() {
   const STATUS_TABS: { key: StatusFilter; label: string; count: number }[] = [
     { key: "all",      label: "All",      count: statusCounts.all },
     { key: "active",   label: "Active",   count: statusCounts.active },
+    { key: "unpaid",   label: "Unpaid",   count: statusCounts.unpaid },
     { key: "inactive", label: "Inactive", count: statusCounts.inactive },
     { key: "frozen",   label: "Frozen",   count: statusCounts.frozen },
     { key: "archived", label: "Archived", count: statusCounts.archived },
@@ -671,7 +682,13 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
                       {feePaid ? "Paid" : "Pending"}
                     </span>
                   </td>
-                  <td className="px-4 py-3"><Badge variant={variant}>{label}</Badge></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge variant={variant}>{label}</Badge>
+                      {m.access_blocked_at && <Badge variant="overdue">Blocked</Badge>}
+                      {m.access_exempt && <Badge variant="active">Exempt</Badge>}
+                    </div>
+                  </td>
                   <td className="px-5 py-3" onClick={(e) => e.stopPropagation()}>
                     <Link href={`/dashboard/members/${m.id}`}>
                       <button className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8] transition-colors">
@@ -762,8 +779,10 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, 
               )}
 
               <div className="flex items-center justify-between gap-1.5 flex-wrap">
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <Badge variant={variant}>{label}</Badge>
+                  {m.access_blocked_at && <Badge variant="overdue">Blocked</Badge>}
+                  {m.access_exempt && <Badge variant="active">Exempt</Badge>}
                   <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${feePaid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
                     <span className={`w-1.5 h-1.5 rounded-full ${feePaid ? "bg-green-500" : "bg-red-500"}`} />
                     {feePaid ? "Paid" : "Pending"}
