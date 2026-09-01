@@ -62,6 +62,11 @@ export async function GET(req: NextRequest) {
 
     const blocked: { id: string; full_name: string }[] = [];
     const unblocked: { id: string; full_name: string }[] = [];
+    // "pending" = the device hasn't confirmed yet (its own poll cycle is
+    // ~30s, longer under load) — not an error, just unconfirmed. Left
+    // alone, so the next sweep run naturally retries with a fresh command
+    // instead of assuming success like the old code did.
+    const pending: { id: string; full_name: string }[] = [];
     const failures: { id: string; full_name: string; error: string }[] = [];
 
     if (!dryRun) {
@@ -81,6 +86,8 @@ export async function GET(req: NextRequest) {
             description: `${m.full_name}'s device access was automatically blocked (expired)`,
           });
           blocked.push({ id: m.id, full_name: m.full_name });
+        } else if (results.some((r) => r.pending) && !results.some((r) => !r.ok && !r.pending)) {
+          pending.push({ id: m.id, full_name: m.full_name });
         } else {
           failures.push({ id: m.id, full_name: m.full_name, error: results.find((r) => !r.ok)?.error ?? "push failed" });
         }
@@ -99,6 +106,8 @@ export async function GET(req: NextRequest) {
             description: `${m.full_name}'s device access was automatically restored`,
           });
           unblocked.push({ id: m.id, full_name: m.full_name });
+        } else if (results.some((r) => r.pending) && !results.some((r) => !r.ok && !r.pending)) {
+          pending.push({ id: m.id, full_name: m.full_name });
         } else {
           failures.push({ id: m.id, full_name: m.full_name, error: results.find((r) => !r.ok)?.error ?? "push failed" });
         }
@@ -110,6 +119,7 @@ export async function GET(req: NextRequest) {
       scanned: activeMembers.length,
       blocked: dryRun ? needsBlock.map((m) => ({ id: m.id, full_name: m.full_name })) : blocked,
       unblocked: dryRun ? needsUnblock.map((m) => ({ id: m.id, full_name: m.full_name })) : unblocked,
+      pending,
       failures,
     });
   } catch (err) {

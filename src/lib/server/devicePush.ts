@@ -27,9 +27,49 @@ export function buildUserInfoCommand(uid: string, name: string, access: AccessLe
   ].join("\t");
 }
 
-// Queues one device_commands row, retrying on command_id collision exactly
+// Blocks until device_commands shows this command acked (or fails/times
+// out) — polls rather than trusting the insert alone, because "queued
+// successfully" and "the device actually applied it" turned out to be two
+// different things in production (2026-08-29: some access-sweep pushes
+// sat in "sent" forever and were never retried, since the old code treated
+// a successful INSERT as proof of a real block).
+async function waitForAck(
+  supabase: SupabaseClient,
+  deviceSerial: string,
+  commandId: number,
+  timeoutMs: number,
+  pollIntervalMs: number
+): Promise<{ ok: boolean; pending: boolean; error?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { data } = await supabase
+      .from("device_commands")
+      .select("status, return_code, error")
+      .eq("device_serial", deviceSerial)
+      .eq("command_id", commandId)
+      .maybeSingle();
+
+    if (data?.status === "acked") {
+      const success = data.return_code === 0;
+      return { ok: success, pending: false, error: success ? undefined : (data.error ?? `device returned code ${data.return_code}`) };
+    }
+    if (data?.status === "failed") {
+      return { ok: false, pending: false, error: data.error ?? "command failed" };
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+  // Not an error — the device just hasn't polled/processed it yet (its own
+  // cycle is ~30s, and it can fall behind under load). Not confirmed, so
+  // the caller must not treat this as a successful block/unblock — but it's
+  // still queued, and a later sweep run will find it still unconfirmed and
+  // naturally issue a fresh attempt.
+  return { ok: false, pending: true, error: "device has not acknowledged the command yet" };
+}
+
+// Queues one device_commands row (retrying on command_id collision exactly
 // like /api/devices/push-user — command_id is count(*)+1 scoped to
-// device_serial, so this retry loop runs once PER DEVICE.
+// device_serial), then waits for the device to actually confirm it before
+// reporting success.
 export async function pushAccessCommand(
   supabase: SupabaseClient,
   params: {
@@ -39,8 +79,9 @@ export async function pushAccessCommand(
     access: AccessLevel;
     member_id?: string | null;
     created_by?: string | null;
-  }
-): Promise<{ ok: true; commandId: number } | { ok: false; error: string }> {
+  },
+  opts?: { ackTimeoutMs?: number; pollIntervalMs?: number }
+): Promise<{ ok: true; commandId: number } | { ok: false; pending: boolean; error: string }> {
   const command = buildUserInfoCommand(params.uid, params.name, params.access);
   let commandId: number | null = null;
   let lastError: { code?: string; message: string } | null = null;
@@ -71,35 +112,51 @@ export async function pushAccessCommand(
     if (error.code !== "23505") break; // not a unique-violation — don't retry
   }
 
-  if (lastError) return { ok: false, error: lastError.message };
+  if (lastError) return { ok: false, pending: false, error: lastError.message };
+
+  const ack = await waitForAck(
+    supabase,
+    params.device_serial,
+    commandId!,
+    opts?.ackTimeoutMs ?? 15000,
+    opts?.pollIntervalMs ?? 2000
+  );
+  if (!ack.ok) return { ok: false, pending: ack.pending, error: ack.error ?? "not acknowledged" };
   return { ok: true, commandId: commandId! };
 }
 
 // Pushes an access-level command to every device the member is currently
-// enrolled on.
+// enrolled on, in parallel (bounds the wait to one ack timeout regardless
+// of device count — members are still processed one at a time by the
+// caller, so this never creates a burst across different members' devices).
 export async function pushAccessToAllDevices(
   supabase: SupabaseClient,
   member: { id: string; full_name: string },
   access: AccessLevel,
   createdBy?: string | null
-): Promise<{ device_serial: string; ok: boolean; error?: string }[]> {
+): Promise<{ device_serial: string; ok: boolean; pending?: boolean; error?: string }[]> {
   const { data: enrollments } = await supabase
     .from("device_enrollments")
     .select("device_serial, device_user_id")
     .eq("member_id", member.id)
     .is("deleted_at", null);
 
-  const results: { device_serial: string; ok: boolean; error?: string }[] = [];
-  for (const e of enrollments ?? []) {
-    const res = await pushAccessCommand(supabase, {
-      device_serial: e.device_serial,
-      uid: e.device_user_id,
-      name: member.full_name,
-      access,
-      member_id: member.id,
-      created_by: createdBy ?? null,
-    });
-    results.push({ device_serial: e.device_serial, ok: res.ok, error: res.ok ? undefined : res.error });
-  }
-  return results;
+  return Promise.all(
+    (enrollments ?? []).map(async (e) => {
+      const res = await pushAccessCommand(supabase, {
+        device_serial: e.device_serial,
+        uid: e.device_user_id,
+        name: member.full_name,
+        access,
+        member_id: member.id,
+        created_by: createdBy ?? null,
+      });
+      return {
+        device_serial: e.device_serial,
+        ok: res.ok,
+        pending: res.ok ? undefined : res.pending,
+        error: res.ok ? undefined : res.error,
+      };
+    })
+  );
 }
