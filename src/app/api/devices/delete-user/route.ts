@@ -41,12 +41,17 @@ export async function POST(req: NextRequest) {
     let insertError: { code?: string; message: string } | null = null;
 
     for (let attempt = 0; attempt < 3; attempt++) {
-      const { count } = await supabase
+      // MAX(command_id), not count(*) — a row count silently breaks forever
+      // once any gap exists in the sequence (see push-user/route.ts).
+      const { data: maxRow } = await supabase
         .from("device_commands")
-        .select("*", { count: "exact", head: true })
-        .eq("device_serial", device_serial);
+        .select("command_id")
+        .eq("device_serial", device_serial)
+        .order("command_id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      commandId = (count ?? 0) + 1;
+      commandId = (maxRow?.command_id ?? 0) + 1;
 
       const { error } = await supabase.from("device_commands").insert({
         device_serial,

@@ -87,12 +87,20 @@ export async function pushAccessCommand(
   let lastError: { code?: string; message: string } | null = null;
 
   for (let attempt = 0; attempt < 3; attempt++) {
-    const { count } = await supabase
+    // MAX(command_id)+1, not count(*)+1 — a row count silently breaks the
+    // moment any gap exists in the sequence (a deleted duplicate, a failed
+    // insert that still consumed an id elsewhere), permanently colliding on
+    // the same number every retry. Confirmed live 2026-08-29: Male Door had
+    // drifted to a 100,000+ gap between its row count and real max id.
+    const { data: maxRow } = await supabase
       .from("device_commands")
-      .select("*", { count: "exact", head: true })
-      .eq("device_serial", params.device_serial);
+      .select("command_id")
+      .eq("device_serial", params.device_serial)
+      .order("command_id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
-    commandId = (count ?? 0) + 1;
+    commandId = (maxRow?.command_id ?? 0) + 1;
 
     const { error } = await supabase.from("device_commands").insert({
       device_serial: params.device_serial,

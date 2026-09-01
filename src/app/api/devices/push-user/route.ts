@@ -94,20 +94,27 @@ export async function POST(req: NextRequest) {
       `ViceCard=`,
     ].join("\t");
 
-    // command_id is sequential per device (count()+1) with no way to reserve
-    // it atomically — a unique constraint on (device_serial, command_id)
-    // catches a collision from a concurrent push instead of silently
-    // corrupting command/ack tracking, and we just retry with a fresh count.
+    // command_id is sequential per device (MAX+1) with no way to reserve it
+    // atomically — a unique constraint on (device_serial, command_id) catches
+    // a collision from a concurrent push instead of silently corrupting
+    // command/ack tracking, and we just retry with a fresh max. MAX(command_id),
+    // not count(*) — a row count silently breaks forever the moment any gap
+    // exists in the sequence (a deleted duplicate, a failed insert that still
+    // consumed an id elsewhere) — confirmed live 2026-08-29, one device had
+    // drifted to a 100,000+ gap between its row count and real max id.
     let commandId: number | null = null;
     let insertError: { code?: string; message: string } | null = null;
 
     for (let attempt = 0; attempt < 3; attempt++) {
-      const { count } = await supabase
+      const { data: maxRow } = await supabase
         .from("device_commands")
-        .select("*", { count: "exact", head: true })
-        .eq("device_serial", device_serial);
+        .select("command_id")
+        .eq("device_serial", device_serial)
+        .order("command_id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-      commandId = (count ?? 0) + 1;
+      commandId = (maxRow?.command_id ?? 0) + 1;
 
       const { error } = await supabase.from("device_commands").insert({
         device_serial,
