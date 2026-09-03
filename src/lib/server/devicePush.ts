@@ -3,11 +3,18 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type AccessLevel = "allow" | "block"; // TZ1=0 vs TZ1=2
 
-// ADMS DATA UPDATE USERINFO command — TZ1 is the field this firmware
-// actually reads for per-user access-schedule assignment (confirmed on
-// hardware 2026-08-29; the generic bare TZ= field acks but is ignored).
-// Time Schedule 2 is pre-configured deny-all on every device; Time
-// Schedule 1 (the default, TZ1=0) is full 24/7 access.
+// ADMS DATA UPDATE USERINFO command. TZ1 alone (confirmed 2026-08-29) is
+// NOT sufficient to block a real member — found live on hardware
+// 2026-09-03: real members had "Apply Group Time Period" enabled on-device,
+// which makes the device follow the user's Access Group schedule instead of
+// (or in addition to) their personal Time Zone fields. Group 1 (the default
+// every normal push assigns via Grp=1) has an open, 24/7 Time Period, so
+// TZ1=2 alone silently did nothing for anyone in that state — this is why
+// the original rollout appeared to leak for a subset of real members
+// despite a fully device-acknowledged push. Fix: blocking now ALSO
+// reassigns the user to Access Group 2 (Grp=2), which has been configured
+// on-device to use the same deny-all Time Schedule 2. Verified on hardware,
+// both directions (Grp=2+TZ1=2 denies, Grp=1+TZ1=0 restores).
 export function buildUserInfoCommand(uid: string, name: string, access: AccessLevel): string {
   const truncatedName = name.substring(0, 24); // device name field limit
   return [
@@ -17,7 +24,7 @@ export function buildUserInfoCommand(uid: string, name: string, access: AccessLe
     `Pri=0`,
     `Passwd=`,
     `Card=`,
-    `Grp=1`,
+    `Grp=${access === "block" ? 2 : 1}`,
     `TZ=0`,
     `TZ1=${access === "block" ? 2 : 0}`,
     `TZ2=0`,
