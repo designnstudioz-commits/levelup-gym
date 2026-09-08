@@ -36,9 +36,48 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
-  // Redirect logged-in users away from /login
+  // Phase 3: /pos and /api/pos sit outside /dashboard, so the guard above
+  // does not cover them. Without this the touch terminal and every POS API
+  // route would be reachable with no session at all.
+  //
+  // Only authentication is checked here. Role authorisation happens in the
+  // page/route itself (see src/lib/pos/permissions.ts and
+  // src/lib/pos/auth.ts) because the middleware would need a database
+  // round-trip per request to resolve the caller's role, on every asset and
+  // navigation. API routes return 401 rather than redirecting so the
+  // terminal can surface a real error instead of parsing a login page.
+  if (!user && (pathname === "/pos" || pathname.startsWith("/pos/"))) {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+  if (!user && pathname.startsWith("/api/pos")) {
+    return NextResponse.json({ error: "Not signed in" }, { status: 401 });
+  }
+
+  // Redirect logged-in users away from /login.
+  //
+  // Role-aware as of Phase 3: a cashier belongs at /pos and HealthBox staff
+  // at their scoped landing page, not on the gym dashboard. The role lookup
+  // is worth one query here because it runs only on the /login path, not on
+  // every request.
   if (pathname === "/login" && user) {
-    return NextResponse.redirect(new URL("/dashboard", request.url));
+    let destination = "/dashboard";
+    if (user.email) {
+      const { data: systemUser } = await supabase
+        .from("system_users")
+        .select("role")
+        .eq("email", user.email.toLowerCase())
+        .eq("status", "active")
+        .is("deleted_at", null)
+        .maybeSingle();
+
+      // landingRouteForRole is not imported here: middleware runs on the
+      // edge runtime and this keeps the bundle free of app-layer imports.
+      // The mapping is intentionally duplicated in exactly one other place
+      // (src/lib/pos/permissions.ts) and both are two lines long.
+      if (systemUser?.role === "cashier") destination = "/pos";
+      else if (systemUser?.role === "healthbox_staff") destination = "/dashboard/pos/healthbox";
+    }
+    return NextResponse.redirect(new URL(destination, request.url));
   }
 
   return supabaseResponse;

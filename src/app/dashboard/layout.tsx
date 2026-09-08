@@ -31,6 +31,21 @@ export default async function DashboardLayout({
       .maybeSingle(),
   ]);
 
+  // Phase 3: a cashier's workplace is the touch terminal. Redirect before
+  // rendering rather than relying on the sidebar to hide links — a direct
+  // URL or an old bookmark walks straight past nav visibility, which is the
+  // pre-existing weakness this must not repeat.
+  //
+  // Safe to do unconditionally for the whole /dashboard tree: no POS admin
+  // route admits a cashier (see POS_ROUTE_ROLES), so there is nothing under
+  // /dashboard for them to reach and no redirect loop is possible.
+  //
+  // healthbox_staff are deliberately NOT redirected here. They legitimately
+  // use /dashboard/pos/* pages, and a layout cannot see the pathname in the
+  // App Router, so an unconditional redirect would loop them on their own
+  // landing page. Their routing is handled in dashboard/page.tsx instead.
+  if (systemUser?.role === "cashier") redirect("/pos");
+
   return (
     <div className="flex h-screen overflow-hidden bg-[#F8F8F6]">
       <Sidebar

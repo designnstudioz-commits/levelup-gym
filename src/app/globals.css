@@ -64,6 +64,45 @@ input[type="number"] {
   -moz-appearance: textfield;
 }
 
+/* ── POS terminal (Phase 3) ───────────────────────────────────────────
+   Every rule here is scoped under .pos-root, which is set once on the
+   /pos layout wrapper. Nothing may be written as a bare element selector:
+   the management dashboard shares this stylesheet, and disabling text
+   selection or overscroll there would be a regression.
+
+   The terminal is a fixed touch monitor with no mouse and no keyboard. */
+.pos-root {
+  /* Removes the ~300ms tap delay without disabling pinch-zoom elsewhere. */
+  touch-action: manipulation;
+  /* A mis-swipe must never pull-to-refresh a half-built order away. */
+  overscroll-behavior: contain;
+  /* Dragging across product tiles should not select their labels. */
+  -webkit-user-select: none;
+  user-select: none;
+  /* Suppress the grey tap flash on Android/Chrome; we draw our own
+     pressed states, which are the operator's only feedback given there is
+     no printer chirp and no cash-drawer clunk. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Text the cashier may legitimately need to select or type into. */
+.pos-root input,
+.pos-root textarea,
+.pos-root [contenteditable="true"] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* WCAG 2.5.5 floor. Individual POS controls are specified well above this
+   (56px for ordinary controls, 96px for PAY); this is the backstop so no
+   control can ever ship below the accessible minimum. */
+.pos-root button,
+.pos-root a[role="button"],
+.pos-root [data-pos-target] {
+  min-height: 44px;
+  min-width: 44px;
+}
+
 /* Global print rule — every dashboard page shares one layout (Sidebar +
    DeviceStatusBanner, see src/app/dashboard/layout.tsx), so without this,
    printing any receipt/slip page (fee receipts, registration receipts,

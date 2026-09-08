@@ -1,10 +1,24 @@
+// Phase 3 POS row types live in ./pos so this file stays the gym domain.
+// The import is type-only, so the circular reference (pos.ts imports Json
+// from here) is erased at compile time and never reaches the bundle.
+import type * as Pos from "./pos";
+
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type MemberStatus = "active" | "inactive" | "archived" | "frozen" | "pending_family_approval";
 export type SubmissionStatus = "pending" | "approved" | "rejected";
 export type PackageType = "Individual" | "Family" | "Couple" | "Daily";
 export type PaymentMethod = "Cash" | "Bank" | "Card" | "EasyPaisa" | "JazzCash";
-export type SystemRole = "owner" | "manager" | "receptionist" | "trainer" | "viewer";
+// "cashier" and "healthbox_staff" added in Phase 3 (POS).
+//   cashier         — operates /pos only; never lands on the gym dashboard
+//   healthbox_staff — third-party HealthBox staff, scoped to their
+//                     department via system_users.pos_department_scope
+// Both are additive: no existing role's behaviour changes. Anything that
+// switches on SystemRole must handle them explicitly — notably
+// dashboard/page.tsx, which otherwise falls through to the owner cockpit.
+export type SystemRole =
+  | "owner" | "manager" | "receptionist" | "trainer" | "viewer"
+  | "cashier" | "healthbox_staff";
 export type StaffRole = "Trainer" | "Receptionist" | "Manager" | "Nutritionist" | "Software Developer" | "Designer" | "Freelancer" | "Other";
 export type PunchType = "in" | "out" | "unknown";
 // "prepared" = logged from the Front Desk dashboard's Send Reminder action
@@ -60,6 +74,13 @@ export interface SystemUser {
   role: SystemRole | null;
   status: "active" | "inactive";
   last_active_at: string | null;
+  /** Phase 3. POS departments this user is limited to; null = unrestricted.
+   *  Set for healthbox_staff. Not a FK — Postgres cannot constrain array
+   *  elements — so integrity is enforced in app code and RLS. */
+  pos_department_scope: string[] | null;
+  /** Phase 3. Hashed manager override PIN for POS void/refund/over-limit
+   *  discount approval. Verified server-side only; never sent to a client. */
+  manager_pin_hash: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -444,6 +465,33 @@ export interface Database {
       sms_log: { Row: SmsLog; Insert: Omit<SmsLog, "id" | "created_at">; Update: Partial<SmsLog> };
       trainer_commission_ledger: { Row: TrainerCommissionLedger; Insert: Omit<TrainerCommissionLedger, "id" | "created_at" | "updated_at">; Update: Partial<TrainerCommissionLedger> };
       staff_tasks: { Row: StaffTask; Insert: Omit<StaffTask, "id" | "created_at" | "updated_at">; Update: Partial<StaffTask> };
+
+      // ── Phase 3: POS, Inventory, HealthBox ────────────────────────
+      // Every new table is registered here. The pre-existing gap where
+      // devices / device_commands / device_enrollments / pt_commission_rates
+      // / trainer_member_commissions were never added is deliberately not
+      // extended — untyped tables mean TypeScript cannot catch column typos.
+      pos_settings: { Row: Pos.PosSetting; Insert: Omit<Pos.PosSetting, "created_at" | "updated_at">; Update: Partial<Pos.PosSetting> };
+      pos_departments: { Row: Pos.PosDepartment; Insert: Omit<Pos.PosDepartment, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosDepartment> };
+      pos_categories: { Row: Pos.PosCategory; Insert: Omit<Pos.PosCategory, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosCategory> };
+      pos_suppliers: { Row: Pos.PosSupplier; Insert: Omit<Pos.PosSupplier, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosSupplier> };
+      pos_products: { Row: Pos.PosProduct; Insert: Omit<Pos.PosProduct, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosProduct> };
+      pos_product_variants: { Row: Pos.PosProductVariant; Insert: Omit<Pos.PosProductVariant, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosProductVariant> };
+      pos_modifier_groups: { Row: Pos.PosModifierGroup; Insert: Omit<Pos.PosModifierGroup, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosModifierGroup> };
+      pos_modifiers: { Row: Pos.PosModifier; Insert: Omit<Pos.PosModifier, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosModifier> };
+      pos_product_modifier_groups: { Row: Pos.PosProductModifierGroup; Insert: Omit<Pos.PosProductModifierGroup, "id" | "created_at">; Update: Partial<Pos.PosProductModifierGroup> };
+      pos_register_sessions: { Row: Pos.PosRegisterSession; Insert: Omit<Pos.PosRegisterSession, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosRegisterSession> };
+      pos_orders: { Row: Pos.PosOrder; Insert: Omit<Pos.PosOrder, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosOrder> };
+      pos_order_items: { Row: Pos.PosOrderItem; Insert: Omit<Pos.PosOrderItem, "id" | "created_at">; Update: Partial<Pos.PosOrderItem> };
+      pos_payments: { Row: Pos.PosPayment; Insert: Omit<Pos.PosPayment, "id" | "created_at">; Update: Partial<Pos.PosPayment> };
+      pos_stock_receipts: { Row: Pos.PosStockReceipt; Insert: Omit<Pos.PosStockReceipt, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosStockReceipt> };
+      pos_stock_receipt_items: { Row: Pos.PosStockReceiptItem; Insert: Omit<Pos.PosStockReceiptItem, "id" | "created_at">; Update: Partial<Pos.PosStockReceiptItem> };
+      pos_stock_counts: { Row: Pos.PosStockCount; Insert: Omit<Pos.PosStockCount, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosStockCount> };
+      pos_stock_count_items: { Row: Pos.PosStockCountItem; Insert: Omit<Pos.PosStockCountItem, "id" | "created_at">; Update: Partial<Pos.PosStockCountItem> };
+      pos_stock_movements: { Row: Pos.PosStockMovement; Insert: Omit<Pos.PosStockMovement, "id" | "created_at">; Update: Partial<Pos.PosStockMovement> };
+      pos_approvals: { Row: Pos.PosApproval; Insert: Omit<Pos.PosApproval, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosApproval> };
+      pos_healthbox_expenses: { Row: Pos.PosHealthBoxExpense; Insert: Omit<Pos.PosHealthBoxExpense, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosHealthBoxExpense> };
+      pos_settlements: { Row: Pos.PosSettlement; Insert: Omit<Pos.PosSettlement, "id" | "created_at" | "updated_at">; Update: Partial<Pos.PosSettlement> };
     };
   };
 }

@@ -25,8 +25,17 @@ import {
   ChevronRight,
   HeartHandshake,
   Percent,
+  ShoppingCart,
+  Boxes,
+  Warehouse,
+  Truck,
+  Wallet,
+  Salad,
+  Receipt,
+  Monitor,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
+import { POS_ROUTE_ROLES } from "@/lib/pos/permissions";
 
 interface NavItem {
   label: string;
@@ -56,8 +65,22 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/reports":     ["owner", "manager"],
   "/dashboard/sms":         ["owner", "manager", "receptionist"],
   "/dashboard/settings":    ["owner"],
+
+  // Phase 3 POS routes are spread in from the single source of truth in
+  // src/lib/pos/permissions.ts rather than restated here. Duplicating them
+  // would mean two lists that drift, and given canAccess() fails open
+  // (below), a route missing from this map becomes visible to EVERY role —
+  // including the two new ones. One list, imported.
+  ...POS_ROUTE_ROLES,
 };
 
+// NOTE: this returns true for any href not present in NAV_ROLES — it fails
+// OPEN. That is pre-existing behaviour relied on by unlisted routes such as
+// /dashboard/register and /dashboard/staff?add=1, so it is not changed here.
+// The consequence to remember: every NEW route must be added to NAV_ROLES
+// or it is shown to all roles. All POS routes are covered by the spread
+// above, and POS pages additionally enforce their own access server-side —
+// this function is cosmetic, never the security boundary.
 function canAccess(href: string, role: string): boolean {
   const allowed = NAV_ROLES[href];
   if (!allowed) return true;
@@ -139,12 +162,50 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
       ],
     },
     { label: "Trainer Commissions", href: "/dashboard/commissions", icon: Percent },
+    {
+      label: "POS & Inventory",
+      href: "/dashboard/pos",
+      icon: ShoppingCart,
+      children: [
+        { label: "Overview",      href: "/dashboard/pos",                   icon: LayoutDashboard },
+        { label: "Orders",        href: "/dashboard/pos/orders",            icon: Receipt         },
+        { label: "Catalog",       href: "/dashboard/pos/catalog/products",  icon: Boxes           },
+        { label: "Inventory",     href: "/dashboard/pos/inventory",         icon: Warehouse       },
+        { label: "Suppliers",     href: "/dashboard/pos/suppliers",         icon: Truck           },
+        { label: "Cash Sessions", href: "/dashboard/pos/sessions",          icon: Wallet          },
+        { label: "POS Reports",   href: "/dashboard/pos/reports",           icon: BarChart2       },
+        { label: "HealthBox",     href: "/dashboard/pos/healthbox",         icon: Salad           },
+      ],
+    },
+    // Jump straight to the touch terminal. Shown to everyone who may
+    // operate it, so reception can cover the counter without hunting for
+    // the URL.
+    { label: "Open POS Terminal", href: "/pos", icon: Monitor },
     { label: "Reports",        href: "/dashboard/reports",    icon: BarChart2   },
     { label: "SMS & Notify",   href: "/dashboard/sms",        icon: MessageSquare },
     { label: "Settings",       href: "/dashboard/settings",   icon: Settings    },
   ];
 
-  const navItems = allNavItems.filter((item) => canAccess(item.href, userRole ?? "viewer"));
+  // Filter the group itself, then its children. Child filtering is new in
+  // Phase 3: previously only top-level items were checked, which was fine
+  // while every child shared its parent's permissions. The POS group breaks
+  // that — HealthBox staff may open Catalog and HealthBox but not Orders,
+  // Suppliers, Cash Sessions or POS Reports — so an unfiltered child list
+  // would offer them links that bounce.
+  //
+  // Existing groups are unaffected: their children (/dashboard/register,
+  // /dashboard/staff?add=1) are absent from NAV_ROLES, so canAccess returns
+  // true for them exactly as before.
+  const role = userRole ?? "viewer";
+  const navItems = allNavItems
+    .filter((item) => canAccess(item.href, role))
+    .map((item) =>
+      item.children
+        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role)) }
+        : item
+    )
+    // A group whose children were all filtered away has nothing to show.
+    .filter((item) => !item.children || item.children.length > 0);
 
   async function handleLogout() {
     const supabase = createClient();
@@ -164,6 +225,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
   const childRoutes: Record<string, string[]> = {
     "/dashboard/members": ["/dashboard/members", "/dashboard/register", "/dashboard/daily-members"],
     "/dashboard/staff":   ["/dashboard/staff"],
+    "/dashboard/pos":     ["/dashboard/pos"],
   };
 
   return (

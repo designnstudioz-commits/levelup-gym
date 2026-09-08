@@ -72,10 +72,36 @@ export default function DashboardPage() {
     />
   );
 
+  // NOTE ON THE FALLTHROUGH BELOW.
+  //
+  // The final `return <ManagementCockpit />` is a catch-all, so ANY role not
+  // named above lands on the full owner cockpit — revenue, collections,
+  // payment detail and all. That makes every new role a potential financial
+  // data leak until it is listed here explicitly.
+  //
+  // Phase 3 adds two roles, so both are named before the fallthrough:
+  //   cashier         -> belongs at /pos, never here
+  //   healthbox_staff -> third party, scoped to their own department
+  //
+  // The layout already redirects cashiers out of /dashboard entirely; the
+  // branch below is the backstop for the case where that guard is ever
+  // changed or bypassed. Defence in depth on the one screen where getting
+  // it wrong shows an outsider the gym's books.
+  if (role === "cashier") return <PosRoleRedirect to="/pos" />;
+  if (role === "healthbox_staff") return <PosRoleRedirect to="/dashboard/pos/healthbox" />;
   if (role === "trainer") return <TrainerDashboard header={header} />;
   if (role === "viewer") return <ViewerDashboard header={header} />;
   if (role === "receptionist") return <ReceptionistDashboard header={header} />;
   return <ManagementCockpit header={header} />;
+}
+
+/** Client-side redirect for roles that have no gym dashboard of their own.
+ *  Renders nothing rather than briefly flashing financial data while the
+ *  navigation happens. */
+function PosRoleRedirect({ to }: { to: string }) {
+  const router = useRouter();
+  useEffect(() => { router.replace(to); }, [router, to]);
+  return null;
 }
 
 // ── Owner / Manager / Receptionist ─────────────────────────────────────
