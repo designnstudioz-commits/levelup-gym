@@ -142,9 +142,15 @@ export function applyOrderDiscount(
   value: number | string | undefined
 ): { discountAmount: number; total: number } {
   const v = Number(value) || 0;
-  const discountAmount =
+  const rawDiscount =
     type === "percent" ? roundPkr((subtotal * v) / 100)
-    : type === "amount" ? Math.min(v, subtotal)
+    : type === "amount" ? v
     : 0;
-  return { discountAmount, total: Math.max(subtotal - discountAmount, 0) };
+  // Clamp the discount itself, not just the total — a percent above 100
+  // (mistyped, or a stray keypad tap) must never let discountAmount exceed
+  // subtotal while total floors at 0. Without this, discountAmount + total
+  // stops equalling subtotal, which is exactly the reconciliation the
+  // order header and the financial-owner split both depend on.
+  const discountAmount = Math.max(0, Math.min(rawDiscount, subtotal));
+  return { discountAmount, total: subtotal - discountAmount };
 }

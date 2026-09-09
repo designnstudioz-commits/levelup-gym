@@ -11,6 +11,7 @@ import {
   computeTotals,
   emptyCart,
   removeLine,
+  setDiscount,
   setLineQty,
   setMember,
   type CartState,
@@ -24,6 +25,7 @@ import { ModifierSheet } from "./ModifierSheet";
 import { MemberPicker } from "./MemberPicker";
 import { OnScreenKeyboard } from "./OnScreenKeyboard";
 import { PaymentSheet, type DraftPayment } from "./PaymentSheet";
+import { DiscountSheet } from "./DiscountSheet";
 import { HeldOrdersDrawer, type HeldOrderSummary } from "./HeldOrdersDrawer";
 import { SaleCompleteScreen } from "./SaleCompleteScreen";
 
@@ -38,6 +40,7 @@ type Sheet =
   | { kind: "member" }
   | { kind: "memberSearch" }
   | { kind: "payment" }
+  | { kind: "discount" }
   | { kind: "heldOrders" }
   | { kind: "saleComplete"; orderNo: string; payments: DraftPayment[] };
 
@@ -261,7 +264,7 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
           onRemoveLine={(key) => setCart((c) => removeLine(c, key))}
           onHold={handleHold}
           onClear={handleClear}
-          onDiscount={() => toast.info("Discounts are scoped for a later slice")}
+          onDiscount={() => setSheet({ kind: "discount" })}
           onPay={() => setSheet({ kind: "payment" })}
           busy={holding}
         />
@@ -313,6 +316,25 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
           busy={completing}
           onCancel={() => setSheet({ kind: "none" })}
           onComplete={handleCompletePayment}
+        />
+      )}
+
+      {sheet.kind === "discount" && (
+        <DiscountSheet
+          subtotal={totals.subtotal}
+          currentType={cart.discountType}
+          currentValue={cart.discountValue}
+          onCancel={() => setSheet({ kind: "none" })}
+          onApply={(type, value) => {
+            setCart((c) => setDiscount(c, type, value));
+            setSheet({ kind: "none" });
+            toast.success("Discount applied");
+          }}
+          onRemove={() => {
+            setCart((c) => setDiscount(c, "none", 0));
+            setSheet({ kind: "none" });
+            toast.success("Discount removed");
+          }}
         />
       )}
 

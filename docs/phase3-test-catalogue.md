@@ -9,6 +9,18 @@ exactly how to remove it before launch.
 Every row is identifiable by a `TEST-` SKU prefix (products) or a
 `TEST — ` name prefix (products and modifier groups).
 
+## Update — Phase B closeout
+
+One test variant was added while verifying the atomic completion function
+and the variant-inventory rule: **TEST — Large** (`TEST-GATO-LG`), a
+variant of TEST — Gatorade, +Rs 50, seeded with stock 4. It is cleaned up
+in the same pass as the parent product (variants cascade via
+`product_id`, no separate delete needed once the product row goes).
+
+Two more test sales were created: **LU-1004** (the variant, with a 10%
+order discount) and **LU-1005** (resumed from held order **H-002**). Both
+added to the cleanup list below.
+
 ## What was seeded
 
 | Product | SKU | Department | Tests |
@@ -112,45 +124,53 @@ Test **sales** created while verifying Phase B are removed first (their
 so the products can't be deleted while those rows exist), then the
 **catalogue** rows.
 
-Three test sales were created during Phase B verification (see the Phase B
-report): **LU-1001**, **LU-1002** (split payment), and **LU-1003** (resumed
-from held order **H-001**). Their ids:
+**Five** test sales exist as of the Phase B closeout — all listed below.
+**Keep all of it in place for now, per your instruction, until the manual
+smoke test is done.**
 
 ```
 543023e4-1210-4c21-9f42-89c3da50fc2b   -- LU-1001
-b15ed278-56ec-4e37-842a-79c09804a8f7   -- LU-1002
+b15ed278-56ec-4e37-842a-79c09804a8f7   -- LU-1002 (split payment)
 8728d54b-8084-4e7f-8fd1-d533e25dac2f   -- LU-1003 (was H-001)
+342d13b6-aca4-43d2-9a3d-5f89e081e17f   -- LU-1004 (variant + 10% discount)
+478708b3-60a1-4d9e-bfc2-4cbe27cfebc2   -- LU-1005 (was H-002)
 ```
 
 ```sql
 -- 1. Test sales
 DELETE FROM public.pos_stock_movements WHERE order_id IN (
-  '543023e4-1210-4c21-9f42-89c3da50fc2b',
-  'b15ed278-56ec-4e37-842a-79c09804a8f7',
-  '8728d54b-8084-4e7f-8fd1-d533e25dac2f'
+  '543023e4-1210-4c21-9f42-89c3da50fc2b', 'b15ed278-56ec-4e37-842a-79c09804a8f7',
+  '8728d54b-8084-4e7f-8fd1-d533e25dac2f', '342d13b6-aca4-43d2-9a3d-5f89e081e17f',
+  '478708b3-60a1-4d9e-bfc2-4cbe27cfebc2'
 );
 DELETE FROM public.pos_payments WHERE order_id IN (
-  '543023e4-1210-4c21-9f42-89c3da50fc2b',
-  'b15ed278-56ec-4e37-842a-79c09804a8f7',
-  '8728d54b-8084-4e7f-8fd1-d533e25dac2f'
+  '543023e4-1210-4c21-9f42-89c3da50fc2b', 'b15ed278-56ec-4e37-842a-79c09804a8f7',
+  '8728d54b-8084-4e7f-8fd1-d533e25dac2f', '342d13b6-aca4-43d2-9a3d-5f89e081e17f',
+  '478708b3-60a1-4d9e-bfc2-4cbe27cfebc2'
 );
 DELETE FROM public.pos_order_items WHERE order_id IN (
-  '543023e4-1210-4c21-9f42-89c3da50fc2b',
-  'b15ed278-56ec-4e37-842a-79c09804a8f7',
-  '8728d54b-8084-4e7f-8fd1-d533e25dac2f'
+  '543023e4-1210-4c21-9f42-89c3da50fc2b', 'b15ed278-56ec-4e37-842a-79c09804a8f7',
+  '8728d54b-8084-4e7f-8fd1-d533e25dac2f', '342d13b6-aca4-43d2-9a3d-5f89e081e17f',
+  '478708b3-60a1-4d9e-bfc2-4cbe27cfebc2'
 );
 DELETE FROM public.pos_orders WHERE id IN (
-  '543023e4-1210-4c21-9f42-89c3da50fc2b',
-  'b15ed278-56ec-4e37-842a-79c09804a8f7',
-  '8728d54b-8084-4e7f-8fd1-d533e25dac2f'
+  '543023e4-1210-4c21-9f42-89c3da50fc2b', 'b15ed278-56ec-4e37-842a-79c09804a8f7',
+  '8728d54b-8084-4e7f-8fd1-d533e25dac2f', '342d13b6-aca4-43d2-9a3d-5f89e081e17f',
+  '478708b3-60a1-4d9e-bfc2-4cbe27cfebc2'
 );
 DELETE FROM public.activity_logs WHERE entity_id IN (
-  '543023e4-1210-4c21-9f42-89c3da50fc2b',
-  'b15ed278-56ec-4e37-842a-79c09804a8f7',
-  '8728d54b-8084-4e7f-8fd1-d533e25dac2f'
+  '543023e4-1210-4c21-9f42-89c3da50fc2b', 'b15ed278-56ec-4e37-842a-79c09804a8f7',
+  '8728d54b-8084-4e7f-8fd1-d533e25dac2f', '342d13b6-aca4-43d2-9a3d-5f89e081e17f',
+  '478708b3-60a1-4d9e-bfc2-4cbe27cfebc2'
 );
+-- Also remove any real sales made during YOUR manual smoke test before
+-- launch — check activity_logs / pos_orders for order_no > LU-1005 with
+-- a TEST- sku on their items.
 
 -- 2. Catalogue
+DELETE FROM public.pos_product_variants
+  WHERE sku = 'TEST-GATO-LG'
+     OR product_id IN (SELECT id FROM public.pos_products WHERE sku LIKE 'TEST-%');
 DELETE FROM public.pos_product_modifier_groups
   WHERE product_id IN (SELECT id FROM public.pos_products WHERE sku LIKE 'TEST-%');
 DELETE FROM public.pos_modifiers

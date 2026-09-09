@@ -1,0 +1,22 @@
+-- Phase 3B closeout — tightens a grant gap found while locking down
+-- pos_complete_order().
+--
+-- The original 20260909100800 migration intended pos_next_order_no() and
+-- pos_next_hold_ref() to be callable by signed-in staff only ("Only
+-- authenticated sessions issue numbers. anon never transacts at the POS" —
+-- its own comment). It did `REVOKE ALL ... FROM PUBLIC` then
+-- `GRANT ... TO authenticated`, which reads as excluding anon.
+--
+-- It doesn't. This Supabase project runs `ALTER DEFAULT PRIVILEGES IN
+-- SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated,
+-- service_role` — a grant made directly to anon at function-creation time,
+-- which a PUBLIC revoke does not touch. Verified live: anon could call
+-- both functions despite the REVOKE ALL FROM PUBLIC in the original file.
+--
+-- Not a financial or data-exposure risk on its own — both functions only
+-- advance a sequence and return a string, they write nothing else — but an
+-- unauthenticated caller could pointlessly burn order/hold numbers, and it
+-- contradicts what that migration already says it does. Tightened here
+-- rather than by editing the already-applied original file.
+REVOKE EXECUTE ON FUNCTION public.pos_next_order_no() FROM anon;
+REVOKE EXECUTE ON FUNCTION public.pos_next_hold_ref() FROM anon;

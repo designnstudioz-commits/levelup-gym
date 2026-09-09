@@ -1,15 +1,26 @@
-// Phase 3B — turning a CartState into the rows pos_order_items and
-// pos_stock_movements actually need.
+// Phase 3B — shaping a CartState into the payload pos_complete_order()
+// expects.
 //
-// Pure mapping logic, kept separate from the API routes so the shape of a
-// written order line is reviewable in one place rather than buried inside
-// request-handling code.
+// As of the Phase B closeout, actual completion (items, payments, stock,
+// order number, financial-owner split) happens atomically inside the
+// pos_complete_order() Postgres function (see migration 20260910100100) —
+// not here. This file's job is narrower now: build the JSONB payload the
+// route sends to that function, and build the header fields the hold
+// endpoint writes directly (holding is a single-row write with no
+// multi-step atomicity concern, so it stays a plain Supabase call).
+//
+// Deliberately NOT here any more: cost-price lookup, availability/stock
+// validation, and stock-movement calculation. Those all moved into
+// pos_complete_order() itself, where they run inside the same transaction
+// as the writes they guard — a validation done here and a write done
+// there would reopen exactly the race the RPC exists to close.
 
 import type { CartLine, CartState, CartTotals } from "./cart";
 
 /** Fields common to both a held order row and a completed order row —
- *  used by the hold endpoint and the complete endpoint so the two never
- *  drift apart on what "the order's totals" means. */
+ *  used by the hold endpoint directly, and mirrored (as JSONB keys) in the
+ *  payload sent to pos_complete_order() — so the two never drift apart on
+ *  what "the order's totals" means. */
 export function buildOrderHeaderFields(cart: CartState, totals: CartTotals) {
   return {
     customer_type: cart.member ? ("member" as const) : ("walk_in" as const),
@@ -26,38 +37,20 @@ export function buildOrderHeaderFields(cart: CartState, totals: CartTotals) {
   };
 }
 
-export interface ProductCostInfo {
-  costPrice: number | null;
-  isAvailable: boolean;
-  trackInventory: boolean;
-  stockQty: number;
-  lowStockThreshold: number | null;
-}
-
 /**
- * Builds the pos_order_items rows for a cart. Caller adds `order_id` before
- * inserting — it isn't known until the order header exists.
+ * Builds the `items` array of the pos_complete_order() payload.
  *
- * `line_discount` here is specifically the MEMBER-PRICE discount for that
- * line (lineGross − lineNet from computeTotals). It does NOT include a
- * share of the order-level discount — that discount is applied once at the
- * order header (pos_orders.discount_amount) and split by financial owner
- * there (levelup_net_amount / healthbox_net_amount), not pushed down onto
- * individual lines. This mirrors how the rest of the app keeps a
- * transaction's adjustments at the header level rather than fabricating a
- * proportional per-line split nobody asked for.
+ * Every figure here (unit_price, line_net, etc.) comes from `totals` —
+ * computeTotals() run server-side in the route — never from anything the
+ * client might have sent as a bare number. cost_price is deliberately
+ * ABSENT: the function resolves it itself, directly from pos_products, so
+ * a client can never influence what gets recorded as cost.
  */
-export function buildOrderItemRows(
-  cart: CartState,
-  totals: CartTotals,
-  costByProduct: Map<string, ProductCostInfo>
-) {
+export function buildCompletionItemsPayload(cart: CartState, totals: CartTotals) {
   const totalsByKey = new Map(totals.lines.map((t) => [t.key, t]));
 
   return cart.lines.map((line: CartLine) => {
     const t = totalsByKey.get(line.key);
-    const cost = line.productId ? costByProduct.get(line.productId) : undefined;
-
     return {
       product_id: line.productId,
       variant_id: line.variantId,
@@ -69,12 +62,15 @@ export function buildOrderItemRows(
       brand: line.brand,
       sku: line.sku,
       unit_price: t?.effectiveUnitPrice ?? line.basePrice,
-      cost_price: cost?.costPrice ?? null,
       qty: line.qty,
       modifiers: line.modifiers,
       modifiers_total: line.modifiersTotal,
       item_note: line.itemNote,
       line_gross: t?.lineGross ?? 0,
+      // Member-price discount only — see the note on this in the previous
+      // revision of this file: the order-level discount is not pushed down
+      // per line, it stays on the order header (and, for settlement
+      // purposes, on the header's levelup/healthbox split).
       line_discount: t?.memberSaving ?? 0,
       line_net: t?.lineNet ?? 0,
       member_price_applied: t?.memberPriceApplied ?? false,
@@ -84,75 +80,44 @@ export function buildOrderItemRows(
   });
 }
 
-export interface StockMovementPlanItem {
-  productId: string;
-  qtyDelta: number;
-  qtyBefore: number;
-  qtyAfter: number;
-  unitCost: number | null;
-}
-
-/**
- * Aggregates quantity PER PRODUCT across every line before computing a
- * movement, rather than writing one movement per line independently. Two
- * lines of the same product (e.g. two different variants) would otherwise
- * each read the same stale stock_qty and decrement from it separately,
- * silently under-counting the real depletion.
- *
- * Stock is tracked at the PRODUCT level in this phase — pos_product_variants
- * carries its own stock_qty column in the schema, but nothing in Phase B's
- * scope exercises per-variant stock, so variant-level tracking is left
- * unimplemented here rather than half-built. Flagged in the Phase B report.
- */
-export function buildStockMovementPlan(
+/** Full payload for pos_complete_order(). `holdOrderId` is null for a
+ *  fresh sale, or the id of the held order being finalised. */
+export function buildCompletionPayload(
   cart: CartState,
-  costByProduct: Map<string, ProductCostInfo>
-): StockMovementPlanItem[] {
-  const qtyByProduct = new Map<string, number>();
-  for (const line of cart.lines) {
-    if (!line.productId) continue;
-    const info = costByProduct.get(line.productId);
-    if (!info?.trackInventory) continue;
-    qtyByProduct.set(line.productId, (qtyByProduct.get(line.productId) ?? 0) + line.qty);
-  }
-
-  const plan: StockMovementPlanItem[] = [];
-  for (const [productId, qty] of qtyByProduct) {
-    const info = costByProduct.get(productId)!;
-    const qtyBefore = info.stockQty;
-    const qtyAfter = qtyBefore - qty;
-    plan.push({ productId, qtyDelta: -qty, qtyBefore, qtyAfter, unitCost: info.costPrice });
-  }
-  return plan;
-}
-
-/**
- * Server-side availability re-check, run at completion time against the
- * catalogue as it is RIGHT NOW — not as it was when the terminal loaded.
- * Two cashiers can be mid-sale on the same item; the one who completes
- * second must be told, not silently allowed to oversell.
- */
-export function validateAvailability(
-  cart: CartState,
-  costByProduct: Map<string, ProductCostInfo>
-): string | null {
-  const qtyByProduct = new Map<string, number>();
-  for (const line of cart.lines) {
-    if (!line.productId) continue;
-    qtyByProduct.set(line.productId, (qtyByProduct.get(line.productId) ?? 0) + line.qty);
-  }
-
-  for (const line of cart.lines) {
-    if (!line.productId) continue;
-    const info = costByProduct.get(line.productId);
-    if (!info) return `${line.productName} is no longer in the catalogue`;
-    if (!info.isAvailable) return `${line.productName} is no longer available`;
-    if (info.trackInventory) {
-      const needed = qtyByProduct.get(line.productId) ?? line.qty;
-      if (info.stockQty < needed) {
-        return `Not enough stock for ${line.productName} (${info.stockQty} left)`;
-      }
-    }
-  }
-  return null;
+  totals: CartTotals,
+  callerId: string,
+  payments: Array<{
+    method: string;
+    amount: number;
+    tendered?: number | null;
+    changeGiven?: number | null;
+    reference?: string | null;
+  }>
+) {
+  return {
+    caller_id: callerId,
+    hold_order_id: cart.holdOrderId ?? null,
+    customer_type: cart.member ? "member" : "walk_in",
+    member_id: cart.member?.id ?? null,
+    discount_type: cart.discountType,
+    discount_value: cart.discountValue,
+    note: cart.note,
+    items: buildCompletionItemsPayload(cart, totals),
+    payments: payments.map((p) => ({
+      method: p.method,
+      amount: p.amount,
+      tendered: p.tendered ?? null,
+      change_given: p.changeGiven ?? null,
+      reference: p.reference ?? null,
+    })),
+    totals: {
+      gross: totals.gross,
+      subtotal: totals.subtotal,
+      discount_amount: totals.discountAmount,
+      total: totals.total,
+      levelup_net: totals.levelupNet,
+      healthbox_net: totals.healthboxNet,
+      item_count: totals.itemCount,
+    },
+  };
 }
