@@ -1,5 +1,14 @@
 # Phase 3B — Temporary Test Catalogue
 
+**STATUS: REMOVED.** The manual smoke test passed and cleanup ran on
+2026-09-11. All TEST- products, their modifier groups/options, the test
+variant, and orders LU-1001 through **LU-1006** (LU-1006 was created during
+the human smoke test itself, found and included) are gone from production.
+Verified via direct query: zero `TEST-%` products, zero `TEST — %`
+modifier groups, zero of those six order numbers remain. This file is now
+a historical record, kept for the record of what was seeded and how it was
+removed — not an active to-do.
+
 **Not a migration.** This SQL was run once, directly against production, via
 the Supabase Management API — deliberately kept out of `supabase/migrations/`
 per the instruction not to make temporary test data a permanent schema
