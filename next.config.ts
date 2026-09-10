@@ -1,6 +1,22 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Phase 3D: lets next/image optimise images served from this project's
+  // own Supabase Storage buckets (member-photos, member-docs, and the new
+  // pos-products). Scoped to exactly this project's storage host via
+  // pathname, not a wildcard "any supabase.co project" pattern — the
+  // narrowest rule that makes next/image work at all. Public buckets only;
+  // this grants no read access beyond what the bucket's own public flag
+  // already allows.
+  images: {
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "vravpfergmzparbqsgkk.supabase.co",
+        pathname: "/storage/v1/object/public/**",
+      },
+    ],
+  },
   async rewrites() {
     return [
       // ZKTeco ADMS protocol sends to /iclock/cdata — rewrite to our handler

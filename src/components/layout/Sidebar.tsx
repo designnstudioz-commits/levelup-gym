@@ -33,6 +33,9 @@ import {
   Salad,
   Receipt,
   Monitor,
+  Tags,
+  Building2,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
 import { POS_ROUTE_ROLES } from "@/lib/pos/permissions";
@@ -167,9 +170,12 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
       href: "/dashboard/pos",
       icon: ShoppingCart,
       children: [
-        { label: "Overview",      href: "/dashboard/pos",                   icon: LayoutDashboard },
-        { label: "Orders",        href: "/dashboard/pos/orders",            icon: Receipt         },
-        { label: "Catalog",       href: "/dashboard/pos/catalog/products",  icon: Boxes           },
+        { label: "Overview",      href: "/dashboard/pos",                     icon: LayoutDashboard },
+        { label: "Orders",        href: "/dashboard/pos/orders",              icon: Receipt         },
+        { label: "Products",      href: "/dashboard/pos/catalog/products",    icon: Boxes           },
+        { label: "Categories",    href: "/dashboard/pos/catalog/categories",  icon: Tags            },
+        { label: "Departments",   href: "/dashboard/pos/catalog/departments", icon: Building2       },
+        { label: "Modifiers",     href: "/dashboard/pos/catalog/modifiers",   icon: SlidersHorizontal },
         { label: "Inventory",     href: "/dashboard/pos/inventory",         icon: Warehouse       },
         { label: "Suppliers",     href: "/dashboard/pos/suppliers",         icon: Truck           },
         { label: "Cash Sessions", href: "/dashboard/pos/sessions",          icon: Wallet          },

@@ -49,6 +49,29 @@ export interface TerminalProduct {
   modifierGroups: (PosModifierGroup & { modifiers: PosModifier[] })[];
 }
 
+/** Only HealthBox and the Cafe actually prepare food to order — a "kitchen
+ *  note" ("no onion", "extra spicy") makes no sense on a protein tub or a
+ *  shaker. Supplements/Accessories get generic note wording instead. */
+export function isFoodItem(product: Pick<TerminalProduct, "financial_owner" | "department_name">): boolean {
+  return product.financial_owner === "healthbox" || product.department_name === "Level Up Cafe";
+}
+
+/**
+ * The price to show on a product card.
+ *
+ * LOCKED RULE: a product with variants is a catalogue container — it has no
+ * customer-facing price of its own, so its old selling_price is never shown
+ * once it has variants. Shows a single price if every variant costs the
+ * same, otherwise a "low – high" range built from the variants' own prices.
+ */
+export function displayPriceRange(product: Pick<TerminalProduct, "selling_price" | "variants">): { min: number; max: number } {
+  if (product.variants.length === 0) {
+    return { min: product.selling_price, max: product.selling_price };
+  }
+  const prices = product.variants.map((v) => v.price ?? 0);
+  return { min: Math.min(...prices), max: Math.max(...prices) };
+}
+
 export interface TerminalCatalog {
   departments: PosDepartment[];
   categories: PosCategory[];

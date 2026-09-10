@@ -21,7 +21,7 @@ export interface PriceInput {
     PosProductForTerminal,
     "selling_price" | "member_price_type" | "member_price" | "member_discount_percent"
   >;
-  variant?: Pick<PosProductVariant, "price_delta"> | null;
+  variant?: Pick<PosProductVariant, "price"> | null;
   /** Sum of the selected modifiers' price deltas. */
   modifiersTotal?: number;
   /** Whether a member is attached to the order. */
@@ -51,10 +51,23 @@ export interface ResolvedPrice {
  * The rule, stated once because it is the kind of thing that gets
  * reimplemented inconsistently:
  *
- *   base            = selling_price + variant.price_delta
- *   member 'fixed'  = member_price  + variant.price_delta
+ *   base            = variant.price if set, else selling_price
+ *   member 'fixed'  = member_price, applied only when it undercuts THIS base
  *   member 'percent'= base * (1 - member_discount_percent/100)
  *   both            + modifiersTotal, which is NEVER discounted
+ *
+ * LOCKED RULE: a product with variants is a catalogue container — it has no
+ * customer-facing price of its own (its selling_price is never shown or
+ * used once it has variants; each variant is its own sellable item with its
+ * own price — see PosProductVariant). "base" here is that variant's price,
+ * full stop, with no reference back to the product's own selling_price.
+ *
+ * A configured Member Price (the 'fixed' type) is a single Rs figure at the
+ * product level, so on a variant line it acts as a flat member price cap:
+ * applied whenever it happens to undercut that particular variant (e.g. a
+ * cheap Small variant may already be below it, in which case no discount
+ * applies — never a surcharge). Percent naturally scales per variant since
+ * it multiplies that variant's own price.
  *
  * Modifiers stay at full price deliberately. An "Extra Chicken" add-on is a
  * cost line, not part of the product's advertised price, so a member
@@ -67,9 +80,8 @@ export interface ResolvedPrice {
 export function resolvePrice(input: PriceInput): ResolvedPrice {
   const { product, variant, memberAttached } = input;
   const modifiersTotal = input.modifiersTotal ?? 0;
-  const variantDelta = variant?.price_delta ?? 0;
+  const base = variant?.price ?? (product.selling_price ?? 0);
 
-  const base = (product.selling_price ?? 0) + variantDelta;
   const listUnitPrice = base + modifiersTotal;
 
   const type = (product.member_price_type ?? "none") as MemberPriceType;
@@ -91,7 +103,7 @@ export function resolvePrice(input: PriceInput): ResolvedPrice {
   if (type === "fixed") {
     const mp = product.member_price;
     if (mp == null) return noMemberPrice;   // configured 'fixed' but no price set
-    memberBase = mp + variantDelta;
+    memberBase = mp;
     value = mp;
   } else {
     const pct = product.member_discount_percent;

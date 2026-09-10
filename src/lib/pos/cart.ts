@@ -63,8 +63,9 @@ export interface CartLine {
   brand: string | null;
   sku: string | null;
 
-  /** Catalogue price at add time: selling_price + variant delta. Modifiers
-   *  are tracked separately so the receipt can show them itemised. */
+  /** Catalogue price at add time: the variant's own absolute price if it has
+   *  one, else the product's selling_price. Modifiers are tracked separately
+   *  so the receipt can show them itemised. */
   basePrice: number;
   modifiers: PosOrderItemModifier[];
   modifiersTotal: number;
@@ -162,7 +163,7 @@ export function addLine(
     variantName: variant?.name ?? null,
     brand: product.brand,
     sku: product.sku,
-    basePrice: (product.selling_price ?? 0) + (variant?.price_delta ?? 0),
+    basePrice: variant?.price ?? (product.selling_price ?? 0),
     modifiers,
     modifiersTotal,
     itemNote,

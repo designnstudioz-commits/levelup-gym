@@ -1,9 +1,10 @@
 "use client";
 
+import Image from "next/image";
 import { Package } from "lucide-react";
 import { cn, formatPKR } from "@/lib/utils";
-import { hasMemberPricing } from "@/lib/pos/pricing";
-import type { TerminalProduct } from "@/lib/pos/catalog";
+import { hasMemberPricing, resolvePrice } from "@/lib/pos/pricing";
+import { displayPriceRange, type TerminalProduct } from "@/lib/pos/catalog";
 
 /**
  * One tappable product.
@@ -25,19 +26,35 @@ export function ProductTile({
   onSelect: (p: TerminalProduct) => void;
 }) {
   const soldOut = !product.is_available;
+
+  // Stock lives on the variant row once a product has variants — the
+  // product's own stock_qty column is never populated in that case, so it
+  // must never be used to gate the whole tile (that would show every
+  // variant product as out of stock regardless of real variant stock).
+  const hasVariants = product.variants.length > 0;
+  const variantStockQty = hasVariants
+    ? product.variants.reduce((sum, v) => sum + Number(v.stock_qty), 0)
+    : product.stock_qty;
   const lowStock =
     product.track_inventory &&
-    product.low_stock_threshold != null &&
-    product.stock_qty <= product.low_stock_threshold &&
-    product.stock_qty > 0;
-  const outOfStock = product.track_inventory && product.stock_qty <= 0;
+    (hasVariants
+      ? product.variants.some((v) => v.low_stock_threshold != null && v.stock_qty > 0 && v.stock_qty <= v.low_stock_threshold)
+      : product.low_stock_threshold != null && product.stock_qty <= product.low_stock_threshold && product.stock_qty > 0);
+  const outOfStock = product.track_inventory && variantStockQty <= 0;
 
   // Unavailable is a catalogue state; out-of-stock is an inventory state.
   // Both block a sale, so they render the same way but say different things.
   const blocked = soldOut || outOfStock;
 
-  const memberDeal = hasMemberPricing(product);
+  // A single product-level member price/discount doesn't mean the same
+  // thing across differently-priced variants, so check per-variant whether
+  // any of them would actually get a member deal, rather than testing the
+  // (now unused, for variant products) product-level selling_price.
+  const memberDeal = hasVariants
+    ? product.variants.some((v) => resolvePrice({ product, variant: v, memberAttached: true }).memberPriceApplied)
+    : hasMemberPricing(product);
   const hasOptions = product.modifierGroups.length > 0 || product.variants.length > 0;
+  const priceRange = displayPriceRange(product);
 
   return (
     <button
@@ -54,13 +71,14 @@ export function ProductTile({
           : "border-[#E4E4DE] hover:border-[#F06418] active:scale-[0.98]"
       )}
     >
-      <div className="h-[92px] bg-[#F7F6F3] flex items-center justify-center flex-shrink-0 border-b border-[#E4E4DE]">
+      <div className="relative h-[92px] bg-[#F7F6F3] flex items-center justify-center flex-shrink-0 border-b border-[#E4E4DE]">
         {product.image_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <Image
             src={product.image_url}
             alt=""
-            className="w-full h-full object-cover"
+            fill
+            sizes="(max-width: 768px) 45vw, 220px"
+            className="object-cover"
           />
         ) : (
           <Package className="w-7 h-7 text-[#CFCEC6]" />
@@ -77,7 +95,9 @@ export function ProductTile({
 
         <div className="mt-auto pt-2 flex items-end justify-between gap-2">
           <span className="text-lg font-bold text-[#1A1A16] font-[family-name:var(--font-barlow-condensed)] tabular-nums">
-            {formatPKR(product.selling_price)}
+            {priceRange.min === priceRange.max
+              ? formatPKR(priceRange.min)
+              : `${formatPKR(priceRange.min)} – ${formatPKR(priceRange.max)}`}
           </span>
 
           <div className="flex flex-wrap gap-1 justify-end">

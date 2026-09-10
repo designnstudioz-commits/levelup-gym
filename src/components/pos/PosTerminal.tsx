@@ -16,7 +16,7 @@ import {
   setMember,
   type CartState,
 } from "@/lib/pos/cart";
-import type { TerminalCatalog, TerminalProduct } from "@/lib/pos/catalog";
+import { isFoodItem, type TerminalCatalog, type TerminalProduct } from "@/lib/pos/catalog";
 import type { PosPaymentMethod } from "@/types/pos";
 import { PosTopBar } from "./PosTopBar";
 import { DepartmentRail } from "./DepartmentRail";
@@ -35,7 +35,8 @@ import { RecentOrdersDrawer, type RecentOrderSummary } from "./RecentOrdersDrawe
 import { VoidRefundSheet } from "./VoidRefundSheet";
 import { ManagerPinPad } from "./ManagerPinPad";
 
-const NOTE_PRESETS = ["No salt", "Extra spicy", "No onion", "Less oil", "Takeaway", "Rush"];
+const FOOD_NOTE_PRESETS = ["No salt", "Extra spicy", "No onion", "Less oil", "Takeaway", "Rush"];
+const RETAIL_NOTE_PRESETS = ["Gift wrap", "Rush", "Fragile"];
 
 interface SessionInfo {
   id: string;
@@ -642,11 +643,11 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
 
       {sheet.kind === "note" && (
         <OnScreenKeyboard
-          title="Kitchen note"
-          placeholder="e.g. no onion, extra spicy"
+          title={isFoodItem(sheet.product) ? "Kitchen note" : "Note"}
+          placeholder={isFoodItem(sheet.product) ? "e.g. no onion, extra spicy" : "e.g. gift wrap, urgent"}
           initialValue={draftNote ?? ""}
           submitLabel="Save note"
-          presets={NOTE_PRESETS}
+          presets={isFoodItem(sheet.product) ? FOOD_NOTE_PRESETS : RETAIL_NOTE_PRESETS}
           onSubmit={(v) => {
             setDraftNote(v || null);
             setSheet({ kind: "customize", product: sheet.product });

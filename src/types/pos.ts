@@ -161,9 +161,15 @@ export interface PosProductVariant {
   product_id: string;
   name: string;
   sku: string | null;
-  price_delta: number;
-  cost_delta: number;
+  barcode: string | null;
+  /** Absolute price for this variant. Null means "same as the product's own
+   *  selling_price" — a variant doesn't have to restate the base price to
+   *  use it. Superseded price_delta/cost_delta columns still exist on the
+   *  table (never dropped) but are no longer read by the app. */
+  price: number | null;
+  cost: number | null;
   stock_qty: number;
+  low_stock_threshold: number | null;
   is_available: boolean;
   sort_order: number;
   created_at: string;

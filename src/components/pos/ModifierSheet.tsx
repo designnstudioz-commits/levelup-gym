@@ -1,14 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Image from "next/image";
 import { Minus, Plus, Package, Check } from "lucide-react";
 import { cn, formatPKR } from "@/lib/utils";
 import { resolvePrice } from "@/lib/pos/pricing";
-import type { TerminalProduct } from "@/lib/pos/catalog";
+import { isFoodItem, type TerminalProduct } from "@/lib/pos/catalog";
 import type { PosOrderItemModifier, PosProductVariant } from "@/types/pos";
 
 /**
- * "Customize item" — variants, modifier groups and the kitchen note.
+ * "Customize item" — variants, modifier groups and a note (labelled
+ * "Kitchen note" only for HealthBox/Cafe food items — see isFoodItem()).
  *
  * Follows the approved frame: product summary on the left, numbered groups
  * on the right, a live selection summary, then Cancel / Add to Cart.
@@ -98,10 +100,9 @@ export function ModifierSheet({
       <div className="m-auto w-full max-w-6xl h-[92vh] mx-6 bg-[#F7F6F3] rounded-2xl border border-[#E4E4DE] flex overflow-hidden">
         {/* Left: what you're building */}
         <div className="w-[320px] flex-shrink-0 bg-white border-r border-[#E4E4DE] p-6 flex flex-col overflow-y-auto">
-          <div className="h-[140px] rounded-xl bg-[#F7F6F3] border border-[#E4E4DE] flex items-center justify-center overflow-hidden flex-shrink-0">
+          <div className="relative h-[140px] rounded-xl bg-[#F7F6F3] border border-[#E4E4DE] flex items-center justify-center overflow-hidden flex-shrink-0">
             {product.image_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={product.image_url} alt="" className="w-full h-full object-cover" />
+              <Image src={product.image_url} alt="" fill sizes="320px" className="object-cover" />
             ) : (
               <Package className="w-8 h-8 text-[#CFCEC6]" />
             )}
@@ -138,11 +139,8 @@ export function ModifierSheet({
                     )}
                   >
                     {v.name}
-                    {v.price_delta !== 0 && (
-                      <span className="ml-1.5 opacity-80">
-                        {v.price_delta > 0 ? "+" : ""}
-                        {formatPKR(v.price_delta)}
-                      </span>
+                    {v.price != null && (
+                      <span className="ml-1.5 opacity-80">{formatPKR(v.price)}</span>
                     )}
                   </button>
                 ))}
@@ -242,7 +240,7 @@ export function ModifierSheet({
 
             <div className="mb-2">
               <p className="text-base font-bold text-[#1A1A16] mb-2">
-                {product.modifierGroups.length + 1}. Special note
+                {product.modifierGroups.length + 1}. {isFoodItem(product) ? "Kitchen note" : "Note"}
               </p>
               <button
                 type="button"
@@ -254,7 +252,7 @@ export function ModifierSheet({
                 )}
               >
                 <span className={cn("text-sm", note ? "text-[#1A1A16]" : "text-[#7A7A72]")}>
-                  {note || "Tap to add a short kitchen note…"}
+                  {note || (isFoodItem(product) ? "Tap to add a short kitchen note…" : "Tap to add a note…")}
                 </span>
               </button>
             </div>
