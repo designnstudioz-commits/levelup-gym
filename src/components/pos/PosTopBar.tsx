@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { LogOut } from "lucide-react";
+import { LogOut, Wallet } from "lucide-react";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { Badge } from "@/components/ui/Badge";
 
@@ -19,9 +19,13 @@ import { Badge } from "@/components/ui/Badge";
 export function PosTopBar({
   title,
   shiftOpen = false,
+  onCloseShift,
 }: {
   title: string;
   shiftOpen?: boolean;
+  /** Present only once a shift is actually open — omitted on the
+   *  Open-Shift gate screen, which has nothing to close yet. */
+  onCloseShift?: () => void;
 }) {
   const currentUser = useCurrentUser();
 
@@ -64,6 +68,17 @@ export function PosTopBar({
         <Badge variant={shiftOpen ? "active" : "inactive"}>
           {shiftOpen ? "Shift open" : "No shift"}
         </Badge>
+
+        {shiftOpen && onCloseShift && (
+          <button
+            type="button"
+            onClick={onCloseShift}
+            className="hidden sm:flex items-center gap-1.5 min-h-[40px] px-3 rounded-lg border border-white/15 text-white/80 text-xs font-semibold hover:bg-white/10 hover:text-white transition-colors cursor-pointer"
+          >
+            <Wallet className="w-3.5 h-3.5" />
+            Close Shift
+          </button>
+        )}
 
         <div className="hidden sm:block text-right leading-tight">
           <p className="text-white text-sm font-semibold truncate max-w-[180px]">

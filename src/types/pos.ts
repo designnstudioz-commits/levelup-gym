@@ -59,7 +59,11 @@ export interface PosSetting {
 export interface PosSettingsResolved {
   settlement_period_type: SettlementPeriodType;
   settlement_month_start_day: number;
-  cashier_discount_limit_percent: number;
+  /** null = not configured. No default is invented for this — the gym's
+   *  existing fee-discount flow has no cap either, so "not configured"
+   *  means the same unrestricted behaviour, not a silently-applied number
+   *  nobody agreed to. Only a real, owner-set value gates anything. */
+  cashier_discount_limit_percent: number | null;
   void_window_minutes: number;
   barcode_scanning_enabled: boolean;
   quick_cash_denominations: number[];

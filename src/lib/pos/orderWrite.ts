@@ -86,6 +86,7 @@ export function buildCompletionPayload(
   cart: CartState,
   totals: CartTotals,
   callerId: string,
+  sessionId: string | null,
   payments: Array<{
     method: string;
     amount: number;
@@ -96,6 +97,7 @@ export function buildCompletionPayload(
 ) {
   return {
     caller_id: callerId,
+    session_id: sessionId,
     hold_order_id: cart.holdOrderId ?? null,
     customer_type: cart.member ? "member" : "walk_in",
     member_id: cart.member?.id ?? null,

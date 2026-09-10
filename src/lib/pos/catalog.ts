@@ -59,7 +59,10 @@ export interface TerminalCatalog {
 const DEFAULT_SETTINGS: PosSettingsResolved = {
   settlement_period_type: "monthly",
   settlement_month_start_day: 1,
-  cashier_discount_limit_percent: 10,
+  // null, not a number: no threshold is invented here either. If the
+  // pos_settings row is ever missing, the fallback must be "unrestricted",
+  // matching the gym's own uncapped fee-discount flow — never a silent cap.
+  cashier_discount_limit_percent: null,
   void_window_minutes: 120,
   barcode_scanning_enabled: false,
   quick_cash_denominations: [500, 1000, 5000],

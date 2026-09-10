@@ -76,8 +76,25 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const payload = buildCompletionPayload(cart, totals, caller.id, payments);
   const admin = getServiceClient();
+
+  // A sale requires an open shift (Phase 3C — Register Sessions). Resolved
+  // server-side, never trusted from the client: the terminal itself blocks
+  // Pay when it has no open session, but that is a UX convenience, not
+  // enforcement — this is.
+  const { data: session } = await admin
+    .from("pos_register_sessions")
+    .select("id")
+    .eq("cashier_id", caller.id)
+    .eq("status", "open")
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (!session) {
+    return NextResponse.json({ error: "Open a shift before taking a payment" }, { status: 409 });
+  }
+
+  const payload = buildCompletionPayload(cart, totals, caller.id, session.id, payments);
 
   const { data, error } = await admin.rpc("pos_complete_order", { payload });
 

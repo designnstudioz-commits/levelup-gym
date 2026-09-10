@@ -17,6 +17,7 @@ import {
   type CartState,
 } from "@/lib/pos/cart";
 import type { TerminalCatalog, TerminalProduct } from "@/lib/pos/catalog";
+import type { PosPaymentMethod } from "@/types/pos";
 import { PosTopBar } from "./PosTopBar";
 import { DepartmentRail } from "./DepartmentRail";
 import { ProductBrowser } from "./ProductBrowser";
@@ -28,9 +29,21 @@ import { PaymentSheet, type DraftPayment } from "./PaymentSheet";
 import { DiscountSheet } from "./DiscountSheet";
 import { HeldOrdersDrawer, type HeldOrderSummary } from "./HeldOrdersDrawer";
 import { SaleCompleteScreen } from "./SaleCompleteScreen";
+import { SessionOpenGate } from "./SessionOpenGate";
+import { SessionCloseModal, type SessionCloseResult } from "./SessionCloseModal";
+import { RecentOrdersDrawer, type RecentOrderSummary } from "./RecentOrdersDrawer";
+import { VoidRefundSheet } from "./VoidRefundSheet";
+import { ManagerPinPad } from "./ManagerPinPad";
 
-/** Cover most kitchen notes in one tap. Free text stays available. */
 const NOTE_PRESETS = ["No salt", "Extra spicy", "No onion", "Less oil", "Takeaway", "Rush"];
+
+interface SessionInfo {
+  id: string;
+  openedAt: string;
+  openingCash: number;
+  orderCount: number;
+  shiftTotal: number;
+}
 
 type Sheet =
   | { kind: "none" }
@@ -41,20 +54,28 @@ type Sheet =
   | { kind: "memberSearch" }
   | { kind: "payment" }
   | { kind: "discount" }
+  | { kind: "discountPin"; type: "percent" | "amount"; value: number; limit: number }
   | { kind: "heldOrders" }
+  | { kind: "recentOrders" }
+  | { kind: "voidRefund"; order: RecentOrderSummary; action: "void" | "refund" }
+  | { kind: "closeShift" }
   | { kind: "saleComplete"; orderNo: string; payments: DraftPayment[] };
 
 /**
  * The cashier terminal.
  *
- * Owns one CartState and replaces it wholesale through the pure helpers in
- * lib/pos/cart. Adding to the cart, holding it and resuming it are all
- * local/optimistic; only Hold, Pay and Delete-held talk to the server, and
- * even then the server recomputes every total itself rather than trusting
- * whatever the client sends (see /api/pos/orders/complete).
+ * Nothing renders except the Open-Shift gate until the cashier has an open
+ * register session — enforced here for UX, and independently by the
+ * server (the completion route checks for an open session on its own, see
+ * /api/pos/orders/complete).
  */
 export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
   const currentUser = useCurrentUser();
+
+  const [session, setSession] = useState<SessionInfo | null | "loading">("loading");
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  const [closeResult, setCloseResult] = useState<SessionCloseResult | null>(null);
 
   const [cart, setCart] = useState<CartState>(emptyCart);
   const [departmentId, setDepartmentId] = useState<string | null>(null);
@@ -70,8 +91,14 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
   const [heldLoading, setHeldLoading] = useState(false);
   const [heldBusyId, setHeldBusyId] = useState<string | null>(null);
 
-  // Held across the customize -> note -> customize round trip, so opening
-  // the keyboard does not discard the modifier selections behind it.
+  const [recentOrders, setRecentOrders] = useState<RecentOrderSummary[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [voidRefundBusy, setVoidRefundBusy] = useState(false);
+  const [voidRefundError, setVoidRefundError] = useState<string | null>(null);
+
+  const [discountPinBusy, setDiscountPinBusy] = useState(false);
+  const [discountPinError, setDiscountPinError] = useState<string | null>(null);
+
   const [draftNote, setDraftNote] = useState<string | null>(null);
 
   const totals = useMemo(() => computeTotals(cart), [cart]);
@@ -84,23 +111,70 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
     return counts;
   }, [catalog.products]);
 
-  const refreshHeldOrders = useCallback(async () => {
-    setHeldLoading(true);
+  // ── Session ──────────────────────────────────────────────────────────
+
+  const refreshSession = useCallback(async () => {
     try {
-      const res = await fetch("/api/pos/orders/held");
-      if (!res.ok) throw new Error();
+      const res = await fetch("/api/pos/sessions/current");
       const json = await res.json();
-      setHeldOrders(json.orders ?? []);
+      setSession(json.session ?? null);
     } catch {
-      toast.error("Could not load held orders");
-    } finally {
-      setHeldLoading(false);
+      setSession(null);
     }
   }, []);
 
-  // Kept lightweight: refresh the held count once on mount so the rail
-  // badge is accurate without the cashier having to open the drawer first.
-  useEffect(() => { void refreshHeldOrders(); }, [refreshHeldOrders]);
+  useEffect(() => { void refreshSession(); }, [refreshSession]);
+
+  async function handleOpenSession(openingCash: number) {
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const res = await fetch("/api/pos/sessions/open", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openingCash }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not open the shift");
+      setSession({ id: json.sessionId, openedAt: json.openedAt, openingCash: json.openingCash, orderCount: 0, shiftTotal: 0 });
+    } catch (e) {
+      setSessionError(e instanceof Error ? e.message : "Could not open the shift");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  async function handleCloseSession(countedCash: number) {
+    if (!session || session === "loading") return;
+    setSessionBusy(true);
+    setSessionError(null);
+    try {
+      const res = await fetch("/api/pos/sessions/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: session.id, countedCash }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not close the shift");
+      setCloseResult({
+        expectedCash: json.expected_cash, countedCash: json.counted_cash,
+        variance: json.variance, orderCount: json.order_count,
+      });
+    } catch (e) {
+      setSessionError(e instanceof Error ? e.message : "Could not close the shift");
+    } finally {
+      setSessionBusy(false);
+    }
+  }
+
+  function handleCloseDone() {
+    // The shift is closed — nothing left for this cashier to do here.
+    // Sign them out rather than dropping back into an empty terminal with
+    // no open session, which would just show the gate again anyway.
+    window.location.href = "/login";
+  }
+
+  // ── Catalogue interaction ───────────────────────────────────────────
 
   function selectDepartment(id: string | null) {
     setDepartmentId(id);
@@ -122,6 +196,24 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
     setCart(clearCart());
     toast.success("Order cleared");
   }
+
+  // ── Held orders ──────────────────────────────────────────────────────
+
+  const refreshHeldOrders = useCallback(async () => {
+    setHeldLoading(true);
+    try {
+      const res = await fetch("/api/pos/orders/held");
+      if (!res.ok) throw new Error();
+      const json = await res.json();
+      setHeldOrders(json.orders ?? []);
+    } catch {
+      toast.error("Could not load held orders");
+    } finally {
+      setHeldLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { void refreshHeldOrders(); }, [refreshHeldOrders]);
 
   async function handleHold() {
     if (cart.lines.length === 0 || holding) return;
@@ -152,10 +244,6 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Could not resume this order");
 
-      // The stored snapshot is a CartState already, since every line was
-      // fully snapshotted when it was added. Only the hold identifiers are
-      // overridden, to whatever THIS fetch says is authoritative — not
-      // whatever happened to be in the snapshot when it was saved.
       const resumed: CartState = {
         ...(json.cart as CartState),
         holdOrderId: json.orderId,
@@ -188,6 +276,8 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
     }
   }
 
+  // ── Payment / completion ─────────────────────────────────────────────
+
   async function handleCompletePayment(payments: DraftPayment[]) {
     if (completing) return;
     setCompleting(true);
@@ -201,11 +291,9 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
       if (!res.ok) throw new Error(json.error ?? "Could not complete the sale");
 
       setSheet({ kind: "saleComplete", orderNo: json.orderNo, payments });
-      void refreshHeldOrders(); // in case this was a resumed held order
+      void refreshHeldOrders();
+      void refreshSession();
     } catch (e) {
-      // Sheet stays open deliberately — the cashier's typed amounts and
-      // selected method are still there, so a network blip or a stock
-      // conflict is a one-tap retry, not a lost sale.
       toast.error(e instanceof Error ? e.message : "Could not complete the sale");
     } finally {
       setCompleting(false);
@@ -217,13 +305,145 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
     setSheet({ kind: "none" });
   }
 
+  // ── Discount, with over-limit manager approval ──────────────────────
+
+  async function requestDiscountApproval(
+    type: "percent" | "amount",
+    value: number,
+    pin?: string
+  ) {
+    const res = await fetch("/api/pos/discounts/authorize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subtotal: totals.subtotal, discountType: type, discountValue: value, pin }),
+    });
+    return { ok: res.ok, json: await res.json() };
+  }
+
+  async function handleDiscountApply(type: "percent" | "amount", value: number) {
+    const { ok, json } = await requestDiscountApproval(type, value);
+    if (ok && json.approved) {
+      setCart((c) => setDiscount(c, type, value, json.authorisedBy));
+      setSheet({ kind: "none" });
+      toast.success(json.authorisedByName ? `Discount approved by ${json.authorisedByName}` : "Discount applied");
+      return;
+    }
+    if (json.requiresPin) {
+      setDiscountPinError(null);
+      setSheet({ kind: "discountPin", type, value, limit: json.limit });
+      return;
+    }
+    toast.error(json.error ?? "Could not apply the discount");
+  }
+
+  async function handleDiscountPinSubmit(pin: string) {
+    if (sheet.kind !== "discountPin") return;
+    setDiscountPinBusy(true);
+    setDiscountPinError(null);
+    try {
+      const { ok, json } = await requestDiscountApproval(sheet.type, sheet.value, pin);
+      if (ok && json.approved) {
+        setCart((c) => setDiscount(c, sheet.type, sheet.value, json.authorisedBy));
+        setSheet({ kind: "none" });
+        toast.success(`Discount approved by ${json.authorisedByName}`);
+      } else {
+        setDiscountPinError(json.error ?? "Incorrect PIN");
+      }
+    } finally {
+      setDiscountPinBusy(false);
+    }
+  }
+
+  // ── Recent orders, void & refund ─────────────────────────────────────
+
+  const refreshRecentOrders = useCallback(async () => {
+    setRecentLoading(true);
+    try {
+      const res = await fetch("/api/pos/orders/recent");
+      const json = await res.json();
+      setRecentOrders(json.orders ?? []);
+    } catch {
+      toast.error("Could not load recent orders");
+    } finally {
+      setRecentLoading(false);
+    }
+  }, []);
+
+  async function submitInstantAction(args: { reason: string; pin: string; payoutMethod?: PosPaymentMethod }) {
+    if (sheet.kind !== "voidRefund") return;
+    const { order, action } = sheet;
+    setVoidRefundBusy(true);
+    setVoidRefundError(null);
+    try {
+      const url = action === "void" ? `/api/pos/orders/${order.id}/void` : `/api/pos/orders/${order.id}/refund`;
+      const body =
+        action === "void"
+          ? { reason: args.reason, pin: args.pin }
+          : { reason: args.reason, pin: args.pin, payoutMethod: args.payoutMethod, sessionId: session !== "loading" ? session?.id : null };
+
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? `Could not ${action} this order`);
+
+      toast.success(`${action === "void" ? "Voided" : "Refunded"} by ${json.approvedByName}`);
+      setSheet({ kind: "none" });
+      void refreshRecentOrders();
+    } catch (e) {
+      setVoidRefundError(e instanceof Error ? e.message : `Could not ${action} this order`);
+    } finally {
+      setVoidRefundBusy(false);
+    }
+  }
+
+  async function submitRequestAction(args: { reason: string }) {
+    if (sheet.kind !== "voidRefund") return;
+    const { order, action } = sheet;
+    setVoidRefundBusy(true);
+    setVoidRefundError(null);
+    try {
+      const url = action === "void" ? `/api/pos/orders/${order.id}/void-request` : `/api/pos/orders/${order.id}/refund-request`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: args.reason }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not submit the request");
+
+      toast.success("Sent for manager approval");
+      setSheet({ kind: "none" });
+      void refreshRecentOrders();
+    } catch (e) {
+      setVoidRefundError(e instanceof Error ? e.message : "Could not submit the request");
+    } finally {
+      setVoidRefundBusy(false);
+    }
+  }
+
   const customerLabel = cart.member
     ? `${cart.member.fullName}${cart.member.membershipNo ? ` · ${cart.member.membershipNo}` : ""}`
     : "Walk-in Customer";
 
+  // ── Gate: no shift, no terminal ─────────────────────────────────────
+
+  if (session === "loading") {
+    return <PosTopBar title="Cashier Terminal" />;
+  }
+  if (session === null) {
+    return <SessionOpenGate busy={sessionBusy} error={sessionError} onOpen={handleOpenSession} />;
+  }
+
   return (
     <>
-      <PosTopBar title="Cashier Terminal" />
+      <PosTopBar
+        title="Cashier Terminal"
+        shiftOpen
+        onCloseShift={() => { setCloseResult(null); setSessionError(null); setSheet({ kind: "closeShift" }); }}
+      />
 
       <div className="flex-1 flex min-h-0 overflow-hidden">
         <DepartmentRail
@@ -233,9 +453,9 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
           onSelectDepartment={selectDepartment}
           heldCount={heldOrders.length}
           onOpenHeld={() => { setSheet({ kind: "heldOrders" }); void refreshHeldOrders(); }}
-          onOpenRecent={() => toast.info("Recent sales arrive in Phase 3C, alongside void/refund")}
-          shiftTotal={null}
-          shiftOrderCount={null}
+          onOpenRecent={() => { setSheet({ kind: "recentOrders" }); void refreshRecentOrders(); }}
+          shiftTotal={session.shiftTotal}
+          shiftOrderCount={session.orderCount}
           canSeeShiftTotals={canSeeOwnShiftTotals(currentUser?.role)}
         />
 
@@ -325,16 +545,23 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
           currentType={cart.discountType}
           currentValue={cart.discountValue}
           onCancel={() => setSheet({ kind: "none" })}
-          onApply={(type, value) => {
-            setCart((c) => setDiscount(c, type, value));
-            setSheet({ kind: "none" });
-            toast.success("Discount applied");
-          }}
+          onApply={handleDiscountApply}
           onRemove={() => {
             setCart((c) => setDiscount(c, "none", 0));
             setSheet({ kind: "none" });
             toast.success("Discount removed");
           }}
+        />
+      )}
+
+      {sheet.kind === "discountPin" && (
+        <ManagerPinPad
+          title="Authorise Discount"
+          subtitle={`Over the ${sheet.limit}% limit — manager approval required`}
+          error={discountPinError}
+          busy={discountPinBusy}
+          onCancel={() => setSheet({ kind: "discount" })}
+          onSubmit={handleDiscountPinSubmit}
         />
       )}
 
@@ -346,6 +573,40 @@ export function PosTerminal({ catalog }: { catalog: TerminalCatalog }) {
           onResume={handleResumeHeld}
           onDelete={handleDeleteHeld}
           onBack={() => setSheet({ kind: "none" })}
+        />
+      )}
+
+      {sheet.kind === "recentOrders" && (
+        <RecentOrdersDrawer
+          orders={recentOrders}
+          loading={recentLoading}
+          onVoid={(order) => { setVoidRefundError(null); setSheet({ kind: "voidRefund", order, action: "void" }); }}
+          onRefund={(order) => { setVoidRefundError(null); setSheet({ kind: "voidRefund", order, action: "refund" }); }}
+          onBack={() => setSheet({ kind: "none" })}
+        />
+      )}
+
+      {sheet.kind === "voidRefund" && (
+        <VoidRefundSheet
+          order={sheet.order}
+          kind={sheet.action}
+          busy={voidRefundBusy}
+          error={voidRefundError}
+          onSubmitInstant={submitInstantAction}
+          onSubmitRequest={submitRequestAction}
+          onCancel={() => setSheet({ kind: "recentOrders" })}
+        />
+      )}
+
+      {sheet.kind === "closeShift" && (
+        <SessionCloseModal
+          openingCash={session.openingCash}
+          busy={sessionBusy}
+          error={sessionError}
+          result={closeResult}
+          onSubmit={handleCloseSession}
+          onDone={handleCloseDone}
+          onCancel={() => setSheet({ kind: "none" })}
         />
       )}
 
