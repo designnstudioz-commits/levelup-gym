@@ -12,7 +12,10 @@ function getServiceClient() {
 
 // POST /api/members/unblock-access
 // Body: { member_id }
-// Owner/manager only. A one-time, temporary override — restores device
+// Owner/manager/receptionist — receptionist is the role that actually
+// collects fees at the counter, so they need a reliable way to restore a
+// member's access right there rather than waiting on a manager or the next
+// day's cron sweep. A one-time, temporary override — restores device
 // access right now without exempting the member from future auto-blocking
 // (unlike /api/members/set-access-exemption). If they're still genuinely
 // unpaid/expired, the next daily sweep will block them again.
@@ -30,8 +33,9 @@ export async function POST(req: NextRequest) {
       .is("deleted_at", null)
       .maybeSingle();
 
-    if (!caller || (caller.role !== "owner" && caller.role !== "manager")) {
-      return NextResponse.json({ error: "Only owner/manager can unblock access" }, { status: 403 });
+    const allowedRoles = ["owner", "manager", "receptionist"];
+    if (!caller || !allowedRoles.includes(caller.role)) {
+      return NextResponse.json({ error: "Only owner/manager/receptionist can unblock access" }, { status: 403 });
     }
 
     const { member_id } = (await req.json()) as { member_id?: string };

@@ -8,7 +8,7 @@ import {
   CreditCard, TrendingUp, AlertTriangle, CheckCircle,
   Search, RefreshCw, X, Plus, Receipt, Tag,
   Minus, ChevronDown, Calendar, Users, Banknote,
-  ArrowRight, Clock, Trash2,
+  ArrowRight, Clock, Trash2, Lock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -115,6 +115,7 @@ export default function FeesPage() {
   const [searchCode, setSearchCode]           = useState("");
   const [memberResults, setMemberResults]     = useState<MemberWithPackage[]>([]);
   const [selectedMember, setSelectedMember]   = useState<MemberWithPackage | null>(null);
+  const [unblockSaving, setUnblockSaving]     = useState(false);
   const [feeAmount, setFeeAmount]             = useState("");
   const [feeType, setFeeType]                 = useState("membership");
   const [feeLines, setFeeLines]               = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
@@ -279,6 +280,30 @@ export default function FeesPage() {
     setAlreadyPaidWarning(days !== null && days > 30);
   }
 
+  // Manual fallback for the auto-restore-on-payment above — always visible
+  // right here at the point of collection (not just on the member's full
+  // profile page) so a receptionist never has to leave this screen or wait
+  // on a manager if the automatic device sync didn't take.
+  async function handleManualUnblock() {
+    if (!selectedMember) return;
+    setUnblockSaving(true);
+    try {
+      const res = await fetch("/api/members/unblock-access", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ member_id: selectedMember.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to unblock access");
+      toast.success(`${selectedMember.full_name}'s device access restored`);
+      setSelectedMember((m) => (m ? { ...m, access_blocked_at: null } : m));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to unblock access");
+    } finally {
+      setUnblockSaving(false);
+    }
+  }
+
   // ── Quick Collect submit ─────────────────────────────────────────
   async function handleCollect() {
     if (!selectedMember) { toast.error("Select a member first"); return; }
@@ -379,13 +404,34 @@ export default function FeesPage() {
 
       // Restore device access if this payment brings a blocked member back
       // into good standing — best-effort, fire-and-forget: a device sync
-      // failure must never fail or delay the payment transaction.
+      // failure must never fail or delay the payment transaction. When the
+      // member was actually blocked going in, follow up with a toast once
+      // it resolves so the receptionist knows whether it worked — a silent
+      // failure here previously meant the member stayed locked out until
+      // the next day's cron sweep with no one aware they needed to use the
+      // manual "Unblock Access" button instead.
+      const wasBlocked = Boolean(selectedMember.access_blocked_at);
       if (isRecurring) {
         fetch("/api/devices/sync-access", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ member_id: selectedMember.id }),
-        }).catch((err) => console.warn("[AccessSync] Failed to sync device access after payment:", err));
+        })
+          .then(async (res) => {
+            if (!wasBlocked) return;
+            const json = await res.json().catch(() => null);
+            if (res.ok && json?.changed) {
+              toast.success(`${selectedMember.full_name}'s device access was restored`);
+            } else {
+              toast.error(`Could not confirm device access was restored — use "Unblock Access" above if ${selectedMember.full_name} is still locked out`, { duration: 7000 });
+            }
+          })
+          .catch((err) => {
+            console.warn("[AccessSync] Failed to sync device access after payment:", err);
+            if (wasBlocked) {
+              toast.error(`Could not confirm device access was restored — use "Unblock Access" above if ${selectedMember.full_name} is still locked out`, { duration: 7000 });
+            }
+          });
       }
 
       // Trainer commission is generated automatically from the PT Fee +
@@ -640,6 +686,21 @@ export default function FeesPage() {
                   <X className="w-4 h-4" />
                 </button>
               </div>
+
+              {/* Device access blocked — manual fallback for the auto-restore
+                  that fires after a successful payment below. Available to
+                  everyone who can reach this page (owner/manager/receptionist). */}
+              {selectedMember.access_blocked_at && (
+                <div className="flex items-center justify-between gap-2.5 bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 mb-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Lock className="w-4 h-4 text-red-600 flex-shrink-0" />
+                    <p className="text-xs font-medium text-red-700">Device access is currently blocked</p>
+                  </div>
+                  <Button size="sm" className="flex-shrink-0 bg-[#F06418] text-white hover:bg-[#C04E10]" onClick={handleManualUnblock} loading={unblockSaving}>
+                    Unblock Access
+                  </Button>
+                </div>
+              )}
 
               {/* Already paid ahead warning */}
               {alreadyPaidWarning && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (

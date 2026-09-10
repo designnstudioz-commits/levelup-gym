@@ -1276,7 +1276,7 @@ export default function MemberDetailPage() {
 
             {/* Access control — automatic fee-based device blocking +
                 owner/manager exemption override */}
-            {(member.access_blocked_at || member.access_exempt || currentUser?.role === "owner" || currentUser?.role === "manager") && (
+            {(member.access_blocked_at || member.access_exempt || currentUser?.role === "owner" || currentUser?.role === "manager" || currentUser?.role === "receptionist") && (
               <div className="mt-4 pt-4 border-t border-[#E4E4DE] space-y-2">
                 {member.access_blocked_at && (
                   <div className="flex items-center gap-2 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
@@ -1290,18 +1290,23 @@ export default function MemberDetailPage() {
                     Exempt from auto-blocking{member.access_exempt_reason ? ` — ${member.access_exempt_reason}` : ""}
                   </div>
                 )}
+                {/* Unblocking is available to receptionist too — they're the
+                    one collecting the fee and a member should not stay
+                    locked out waiting on a manager. Exemption policy stays
+                    owner/manager only below — that's a longer-lived
+                    decision, not a one-time counter action. */}
+                {member.access_blocked_at && (currentUser?.role === "owner" || currentUser?.role === "manager" || currentUser?.role === "receptionist") && (
+                  <Button
+                    size="sm"
+                    className="w-full justify-start bg-[#F06418] text-white hover:bg-[#C04E10]"
+                    onClick={unblockAccess}
+                    loading={unblockSaving}
+                  >
+                    <Lock className="w-4 h-4" /> Unblock (One-Time)
+                  </Button>
+                )}
                 {(currentUser?.role === "owner" || currentUser?.role === "manager") && (
                   <>
-                    {member.access_blocked_at && (
-                      <Button
-                        size="sm"
-                        className="w-full justify-start bg-[#F06418] text-white hover:bg-[#C04E10]"
-                        onClick={unblockAccess}
-                        loading={unblockSaving}
-                      >
-                        <Lock className="w-4 h-4" /> Unblock (One-Time)
-                      </Button>
-                    )}
                     {member.access_exempt ? (
                       <Button
                         variant="ghost"
