@@ -1,13 +1,43 @@
-# Phase 3B — Temporary Test Catalogue
+# Phase 3B / 3C — Temporary Test Catalogue
 
-**STATUS: REMOVED.** The manual smoke test passed and cleanup ran on
-2026-09-11. All TEST- products, their modifier groups/options, the test
-variant, and orders LU-1001 through **LU-1006** (LU-1006 was created during
-the human smoke test itself, found and included) are gone from production.
+**STATUS: REMOVED (again).** The catalogue in this file has been seeded and
+fully cleaned up **twice** — once for the Phase B smoke test, once for
+Phase C's. Both times, zero rows were left behind. This file is now a
+historical record, kept for what was seeded and how it was removed each
+time — not an active to-do.
+
+## Phase C cleanup — 2026-09-12
+
+Re-seeded the identical four products (same SKUs, same HealthBox modifier
+groups) for the Phase C smoke test (sessions, void, refund, exceptions,
+discount-limit gate). The smoke test passed. Cleanup swept up:
+
+- The 4 `TEST-` products, their 3 modifier groups, 13 modifier options and
+  3 product-modifier links
+- **One unrelated leftover found in the same pass**: a held order
+  (`#H-003`, dated 2026-09-09, referencing a `TEST — Large` variant of
+  TEST — Gatorade) that predated this cleanup cycle entirely — it was
+  created during Phase B's own variant-inventory verification and missed
+  by that cleanup. Never completed, so no financial record was lost;
+  soft-deleted.
+- **One empty session**: opened during the Phase C smoke test (owner
+  account, Rs 0 opening cash) but never used for a sale and never closed —
+  no reconciliation data existed to lose. Soft-deleted.
+- The activity_log entries for both.
+
+Verified independently after cleanup: zero `TEST-%` products, zero
+`TEST — %` modifier groups/options/links, zero orders referencing a
+`TEST-%` SKU, zero payments on any such order, zero stock movements
+pointing at a now-deleted test product, and zero open register sessions
+anywhere in the system.
+
+## Phase B cleanup — 2026-09-11
+
+All TEST- products, their modifier groups/options, the test variant, and
+orders LU-1001 through **LU-1006** (LU-1006 was created during the human
+smoke test itself, found and included) were removed from production.
 Verified via direct query: zero `TEST-%` products, zero `TEST — %`
-modifier groups, zero of those six order numbers remain. This file is now
-a historical record, kept for the record of what was seeded and how it was
-removed — not an active to-do.
+modifier groups, zero of those six order numbers remained.
 
 **Not a migration.** This SQL was run once, directly against production, via
 the Supabase Management API — deliberately kept out of `supabase/migrations/`
