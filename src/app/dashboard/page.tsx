@@ -8,6 +8,7 @@ import {
   Banknote, Users, TrendingUp, Clock, AlertTriangle,
   CheckCircle, ArrowRight, Search, RefreshCw, CalendarCheck, Wifi,
   UserPlus, RotateCcw, Dumbbell, Zap, Percent, ChevronRight,
+  ShoppingCart, Wallet, PackageX, Receipt,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -108,6 +109,96 @@ function PosRoleRedirect({ to }: { to: string }) {
   const router = useRouter();
   useEffect(() => { router.replace(to); }, [router, to]);
   return null;
+}
+
+// ── Phase G: POS/HealthBox widgets, additive to the existing cockpit ──
+// Fetches /api/pos/reports/overview-widgets, which is itself owner/manager
+// gated server-side — a receptionist landing on ManagementCockpit's
+// fallthrough (it doesn't; ReceptionistDashboard is its own branch above)
+// would get a 401 here regardless, not a silent data leak.
+interface PosWidgetsData {
+  posSalesToday: number; totalBusinessCollectionToday: number;
+  departmentSalesToday: Record<string, number>; paymentMethodToday: Record<string, number>;
+  cash: { expected: number; counted: number; variance: number };
+  lowStockCount: number; healthboxPendingExpenses: number;
+  healthboxSettlement: { status: string; period_start: string; period_end: string } | null;
+}
+function PosBusinessWidgets() {
+  const [data, setData] = useState<PosWidgetsData | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/pos/reports/overview-widgets")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (!cancelled) setData(j); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!loading && !data) return null; // 401 for a role this route doesn't cover — fail silent, not broken UI
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <StatsCard title="Today's POS Sales" value={loading ? "—" : formatPKR(data!.posSalesToday)} icon={ShoppingCart} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" loading={loading} />
+        <StatsCard title="Total Business Collection" value={loading ? "—" : formatPKR(data!.totalBusinessCollectionToday)} icon={Banknote} iconColor="text-green-600" iconBg="bg-green-50" loading={loading} />
+        <StatsCard title="Cash Variance (Today)" value={loading ? "—" : formatPKR(data!.cash.variance)} icon={Wallet} iconColor={!loading && data!.cash.variance !== 0 ? "text-red-600" : "text-blue-600"} iconBg={!loading && data!.cash.variance !== 0 ? "bg-red-50" : "bg-blue-50"} loading={loading} />
+        <StatsCard title="Low Stock Alerts" value={loading ? "—" : data!.lowStockCount} icon={PackageX} iconColor="text-amber-600" iconBg="bg-amber-50" loading={loading} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card>
+          <p className="text-sm font-bold text-[#1A1A16] mb-3">Department Sales — Today</p>
+          {loading ? <p className="text-sm text-[#7A7A72]">Loading…</p> : Object.keys(data!.departmentSalesToday).length === 0 ? (
+            <p className="text-sm text-[#7A7A72]">No sales yet today.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {Object.entries(data!.departmentSalesToday).map(([name, amt]) => (
+                <div key={name} className="flex justify-between text-sm"><span className="text-[#4A4A44]">{name}</span><span className="font-semibold tabular-nums">{formatPKR(amt)}</span></div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <p className="text-sm font-bold text-[#1A1A16] mb-3">Payment Methods — Today</p>
+          {loading ? <p className="text-sm text-[#7A7A72]">Loading…</p> : Object.keys(data!.paymentMethodToday).length === 0 ? (
+            <p className="text-sm text-[#7A7A72]">No payments yet today.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {Object.entries(data!.paymentMethodToday).map(([m, amt]) => (
+                <div key={m} className="flex justify-between text-sm"><span className="text-[#4A4A44]">{m}</span><span className="font-semibold tabular-nums">{formatPKR(amt)}</span></div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        <Card>
+          <p className="text-sm font-bold text-[#1A1A16] mb-3">HealthBox</p>
+          {loading ? <p className="text-sm text-[#7A7A72]">Loading…</p> : (
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between items-center">
+                <span className="text-[#4A4A44]">Pending Expenses</span>
+                <Link href="/dashboard/pos/healthbox/expenses" className="font-semibold text-[#F06418] hover:underline">{data!.healthboxPendingExpenses}</Link>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[#4A4A44]">Settlement Status</span>
+                {data!.healthboxSettlement ? (
+                  <Badge variant={data!.healthboxSettlement.status === "paid" ? "active" : data!.healthboxSettlement.status === "finalised" ? "active" : "pending"}>{data!.healthboxSettlement.status}</Badge>
+                ) : (
+                  <span className="text-xs text-[#7A7A72]">None yet</span>
+                )}
+              </div>
+              <Link href="/dashboard/pos/healthbox/report" className="flex items-center gap-1 text-xs text-[#F06418] hover:underline pt-1">
+                <Receipt className="w-3.5 h-3.5" /> View HealthBox Report
+              </Link>
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
 }
 
 // ── Owner / Manager / Receptionist ─────────────────────────────────────
@@ -438,6 +529,10 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
           <StatsCard title="PT Members Added" value={ptAddedCount} icon={Dumbbell} iconColor="text-teal-600" iconBg="bg-teal-50" loading={loading} />
           <StatsCard title="Commission Pending" value={formatPKR(commissionPending)} icon={Percent} iconColor="text-amber-600" iconBg="bg-amber-50" loading={loading} />
         </div>
+
+        {/* ── Phase G: POS & HealthBox business widgets (additive — the
+            membership cards above are untouched) ── */}
+        <PosBusinessWidgets />
 
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
           {/* ── Today's Collection table ── */}

@@ -37,6 +37,8 @@ import {
   Building2,
   SlidersHorizontal,
   FileText,
+  TrendingUp,
+  Landmark,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
 import { POS_ROUTE_ROLES } from "@/lib/pos/permissions";
@@ -188,6 +190,8 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
         // (middleware.ts, dashboard/page.tsx, permissions.ts).
         { label: "HealthBox",     href: "/dashboard/pos/catalog/products",  icon: Salad           },
         { label: "HealthBox Expenses", href: "/dashboard/pos/healthbox/expenses", icon: FileText  },
+        { label: "HealthBox Report", href: "/dashboard/pos/healthbox/report", icon: TrendingUp    },
+        { label: "HealthBox Settlement", href: "/dashboard/pos/healthbox/settlement", icon: Landmark },
       ],
     },
     // Jump straight to the touch terminal. Shown to everyone who may
