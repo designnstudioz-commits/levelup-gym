@@ -1,0 +1,31 @@
+-- Adversarial security audit follow-up — user-requested item 2.
+--
+-- LIVE-CONFIRMED: member-docs is a PUBLIC bucket. Its only writer
+-- (/api/upload/document, called from Step2Health.tsx during public
+-- registration) is labelled "ID card, medical certificates, vaccination
+-- records" — and the live bucket contents confirmed this is not
+-- theoretical: real applicant CNIC/ID scans and at least one tax document
+-- (an "Return of Income" PDF) are sitting in it right now. Anyone who
+-- obtains or guesses one of these URLs — timestamp + random suffix, not a
+-- secret — can download it with no authentication at all.
+--
+-- (Separately, and out of scope for this migration: the uploaded document
+-- URLs are never actually written to the submissions row — Step2Health.tsx
+-- collects them into form state but index.tsx's insert payload omits
+-- `documents` entirely, so today no dashboard flow reads this bucket. That
+-- makes it a pure write path, not a read path, but the files still sit
+-- there publicly readable until this migration runs.)
+--
+-- member-photos and pos-products remain public — deliberately, per the
+-- audit's own instruction: both contain only intentionally public,
+-- non-sensitive images (member/product photos for the app's own UI), not
+-- identity or financial documents.
+
+UPDATE storage.buckets SET public = false WHERE id = 'member-docs';
+
+-- No anon/authenticated storage policies are added — same pattern as
+-- pos-healthbox-receipts. The only writer is the service-role upload route
+-- (bypasses RLS/storage policy by design); a signed URL is minted
+-- server-side and handed back to the uploader in the same request. There
+-- is currently no reader anywhere in the app (see note above), so there is
+-- nothing else to grant access to yet.

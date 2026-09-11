@@ -429,13 +429,18 @@ export default function MemberDetailPage() {
     const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }, { data: commissionData }] = await Promise.all([
       supabase
         .from("members")
-        .select("*, packages(*), trainer:staff_members!members_trainer_id_fkey(*)")
+        // trainer joins staff_directory_public (id/full_name/role/photo/
+        // specialization/bio only — never salary/cnic). This page is
+        // reachable by receptionist, so a full-row `(*)` embed here was a
+        // live salary/CNIC leak on every ordinary member-profile view. See
+        // 20260913100000_staff_members_column_leak_fix.sql.
+        .select("*, packages(*), trainer:staff_directory_public!members_trainer_id_fkey(*)")
         .eq("id", id)
         .single(),
       supabase.from("packages").select("*").eq("status", "active").is("deleted_at", null),
-      supabase.from("staff_members").select("*").eq("role", "Trainer").eq("status", "active").is("deleted_at", null),
+      supabase.from("staff_trainers_public").select("*"),
       supabase.from("fee_payments").select("*, collector:system_users!fee_payments_collected_by_fkey(full_name)").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).order("created_at", { ascending: false }).limit(10),
-      supabase.from("staff_members").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active").is("deleted_at", null),
+      supabase.from("staff_directory_public").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active"),
       supabase.from("trainer_member_commissions").select("*").eq("member_id", id).is("deleted_at", null).maybeSingle(),
     ]);
 

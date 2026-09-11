@@ -130,14 +130,14 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
       .then(({ data }) => setPackages(data ?? []));
 
     supabase
-      .from("staff_members")
-      // Anonymous applicants can reach this (public registration) — only
-      // the trainer picker's own id/name are ever rendered, so this query
-      // never pulls salary/cnic/device_user_id etc. into the client bundle.
+      // Anonymous applicants can reach this (public registration). A direct
+      // REST call to the base table with select=* would still return every
+      // column regardless of this query's own narrowing (RLS is row-level,
+      // not column-level) — staff_trainers_public is a DB view with only
+      // safe columns, so there is nothing sensitive to leak even via a
+      // hand-crafted request. See 20260913100000_staff_members_column_leak_fix.sql.
+      .from("staff_trainers_public")
       .select("id, full_name")
-      .eq("role", "Trainer")
-      .eq("status", "active")
-      .is("deleted_at", null)
       .order("full_name")
       .then(({ data }) => setTrainers(data ?? []));
 

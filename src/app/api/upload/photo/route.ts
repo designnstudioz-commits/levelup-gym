@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  sniffImageType, IMAGE_EXTENSION, checkRateLimit, clientIpFrom, generateStoragePath,
+} from "@/lib/uploadSecurity";
 
 function getServiceClient() {
   return createClient(
@@ -8,8 +11,20 @@ function getServiceClient() {
   );
 }
 
+const MAX_SIZE = 5 * 1024 * 1024;
+
+// Reachable anonymously — the public registration form uploads a photo
+// before any account exists, so this cannot require a session (see the
+// security audit note in CLAUDE.md history). Hardened instead: real
+// magic-byte content sniffing (never trust client-supplied MIME/filename),
+// server-generated storage paths only, and a best-effort per-IP throttle.
 export async function POST(req: NextRequest) {
   try {
+    const ip = clientIpFrom(req);
+    if (!checkRateLimit(`photo:${ip}`, 10, 10 * 60 * 1000)) {
+      return NextResponse.json({ error: "Too many uploads. Please try again later." }, { status: 429 });
+    }
+
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
 
@@ -17,24 +32,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    if (!file.type.startsWith("image/")) {
-      return NextResponse.json({ error: "Only images are allowed" }, { status: 400 });
+    if (file.size === 0) {
+      return NextResponse.json({ error: "File is empty" }, { status: 400 });
     }
 
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size > MAX_SIZE) {
       return NextResponse.json({ error: "Image must be under 5 MB" }, { status: 400 });
     }
 
+    const sniffed = await sniffImageType(file);
+    if (!sniffed) {
+      return NextResponse.json({ error: "Only JPEG, PNG, WEBP or HEIC images are allowed" }, { status: 400 });
+    }
+
     const supabase = getServiceClient();
-    const ext = file.name.split(".").pop() ?? "jpg";
-    const path = `members/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+    // Path is entirely server-generated — the client's filename/type are
+    // never used to construct it, so there is no way to influence the
+    // storage path or force an unsafe extension.
+    const path = generateStoragePath("members", IMAGE_EXTENSION[sniffed]);
 
     const { error } = await supabase.storage
       .from("member-photos")
-      .upload(path, file, { contentType: file.type, upsert: false });
+      .upload(path, file, { contentType: `image/${sniffed === "jpeg" ? "jpeg" : sniffed}`, upsert: false });
 
     if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+      console.error("[Photo Upload Error]", error);
+      return NextResponse.json({ error: "Upload failed" }, { status: 500 });
     }
 
     const { data: { publicUrl } } = supabase.storage

@@ -113,9 +113,10 @@ export function Step4Review({ form, mode }: Step4Props) {
     }
     const supabase = createClient();
     supabase
-      .from("staff_members")
-      // Reachable anonymously (public registration review step) — only the
-      // trainer's own name is ever displayed here, see Step3Services.tsx.
+      // Reachable anonymously (public registration review step) — see the
+      // staff_trainers_public comment in Step3Services.tsx for why this
+      // goes through the view rather than the base table.
+      .from("staff_trainers_public")
       .select("id, full_name")
       .eq("id", data.trainer_id)
       .single()

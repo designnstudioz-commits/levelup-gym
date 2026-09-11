@@ -110,7 +110,10 @@ export default function DailyMembersPage() {
     const supabase = createClient();
     supabase.from("packages").select("*").eq("status", "active").is("deleted_at", null)
       .then(({ data }) => setPackages(data ?? []));
-    supabase.from("staff_members").select("*").eq("role", "Trainer").eq("status", "active").is("deleted_at", null)
+    // staff_trainers_public is a column-safe view (no salary/cnic) — see
+    // 20260913100000_staff_members_column_leak_fix.sql. This page is
+    // reachable by receptionist, not just owner/manager.
+    supabase.from("staff_trainers_public").select("*")
       .then(({ data }) => setTrainers(data ?? []));
   }, []);
 
