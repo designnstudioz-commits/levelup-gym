@@ -20,6 +20,7 @@ import { canSeeCostAndMargin } from "@/lib/pos/permissions";
 
 interface Department { id: string; name: string; financialOwner: "levelup" | "healthbox" }
 interface Category { id: string; departmentId: string; name: string }
+interface SupplierLite { id: string; name: string }
 interface ModifierGroupLite { id: string; departmentId: string | null; name: string }
 
 interface ProductRow {
@@ -48,7 +49,7 @@ const emptyForm = {
   memberPrice: "", memberDiscountPercent: "", trackInventory: false, stockQty: "0",
   lowStockThreshold: "", unit: "", description: "", isActive: true, showOnPos: true,
   isAvailable: true, financialOwnerOverride: "" as "" | "levelup" | "healthbox",
-  name: "", modifierGroupIds: [] as string[],
+  name: "", modifierGroupIds: [] as string[], supplierId: "",
 };
 
 export default function PosProductsPage() {
@@ -61,6 +62,7 @@ export default function PosProductsPage() {
   const [departments, setDepartments] = useState<Department[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [modifierGroups, setModifierGroups] = useState<ModifierGroupLite[]>([]);
+  const [suppliers, setSuppliers] = useState<SupplierLite[]>([]);
   const [loading, setLoading] = useState(true);
 
   const searchParams = useSearchParams();
@@ -88,7 +90,18 @@ export default function PosProductsPage() {
     setDepartments((dJson.departments ?? []).map((d: { id: string; name: string; financial_owner: string }) => ({ id: d.id, name: d.name, financialOwner: d.financial_owner })));
     setCategories((cJson.categories ?? []).map((c: { id: string; department_id: string; name: string }) => ({ id: c.id, departmentId: c.department_id, name: c.name })));
     setModifierGroups((mJson.groups ?? []).map((g: { id: string; department_id: string | null; name: string }) => ({ id: g.id, departmentId: g.department_id, name: g.name })));
-  }, []);
+
+    // Suppliers admin is owner/manager only — healthbox_staff would just
+    // get a 403, so skip the call entirely rather than surface a useless
+    // console error for a role that can't manage suppliers anyway.
+    if (currentUser?.role === "owner" || currentUser?.role === "manager") {
+      const sRes = await fetch("/api/pos/admin/suppliers");
+      if (sRes.ok) {
+        const sJson = await sRes.json();
+        setSuppliers((sJson.suppliers ?? []).filter((s: { status: string }) => s.status === "active"));
+      }
+    }
+  }, [currentUser?.role]);
 
   const loadProducts = useCallback(async () => {
     setLoading(true);
@@ -142,7 +155,7 @@ export default function PosProductsPage() {
       unit: p.unit ?? "", description: p.description ?? "", isActive: p.is_active,
       showOnPos: p.show_on_pos, isAvailable: p.is_available,
       financialOwnerOverride: p.financial_owner_override ?? "", name: p.name,
-      modifierGroupIds: json.modifierGroupIds ?? [],
+      modifierGroupIds: json.modifierGroupIds ?? [], supplierId: p.supplier_id ?? "",
     });
     setVariants((json.variants ?? []).map((v: { id: string; name: string; sku: string | null; barcode: string | null; price: number | null; cost: number | null; stock_qty: number; low_stock_threshold: number | null; is_available: boolean }) => ({
       id: v.id, name: v.name, sku: v.sku ?? "", barcode: v.barcode ?? "",
@@ -209,6 +222,7 @@ export default function PosProductsPage() {
         memberPrice: form.memberPriceType === "fixed" && form.memberPrice ? Number(form.memberPrice) : null,
         memberDiscountPercent: form.memberPriceType === "percent" && form.memberDiscountPercent ? Number(form.memberDiscountPercent) : null,
         financialOwnerOverride: isOwner ? (form.financialOwnerOverride || null) : undefined,
+        supplierId: form.supplierId || null,
         trackInventory: form.trackInventory,
         stockQty: useVariants ? 0 : Number(form.stockQty) || 0,
         lowStockThreshold: form.lowStockThreshold ? Number(form.lowStockThreshold) : null,
@@ -396,6 +410,12 @@ export default function PosProductsPage() {
             <Input label="Unit" placeholder="e.g. piece, bottle" value={form.unit} onChange={(e) => setForm((f) => ({ ...f, unit: e.target.value }))} />
             <Input label="SKU" value={form.sku} onChange={(e) => setForm((f) => ({ ...f, sku: e.target.value }))} />
             <Input label="Barcode" value={form.barcode} onChange={(e) => setForm((f) => ({ ...f, barcode: e.target.value }))} />
+            {suppliers.length > 0 && (
+              <Select label="Default Supplier" value={form.supplierId} onChange={(e) => setForm((f) => ({ ...f, supplierId: e.target.value }))} hint="Optional">
+                <option value="">No default supplier</option>
+                {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </Select>
+            )}
           </section>
 
           {/* Image */}

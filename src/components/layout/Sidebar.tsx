@@ -180,7 +180,12 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
         { label: "Suppliers",     href: "/dashboard/pos/suppliers",         icon: Truck           },
         { label: "Cash Sessions", href: "/dashboard/pos/sessions",          icon: Wallet          },
         { label: "POS Reports",   href: "/dashboard/pos/reports",           icon: BarChart2       },
-        { label: "HealthBox",     href: "/dashboard/pos/healthbox",         icon: Salad           },
+        // No standalone HealthBox dashboard exists yet — /dashboard/pos/healthbox
+        // 404s. Points at Products instead: already authorised for
+        // healthbox_staff (POS_ROUTE_ROLES), department-scoped, no Level
+        // Up cost/margin data. Same route the login/landing redirects use
+        // (middleware.ts, dashboard/page.tsx, permissions.ts).
+        { label: "HealthBox",     href: "/dashboard/pos/catalog/products",  icon: Salad           },
       ],
     },
     // Jump straight to the touch terminal. Shown to everyone who may

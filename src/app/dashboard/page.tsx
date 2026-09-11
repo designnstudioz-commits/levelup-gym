@@ -87,8 +87,14 @@ export default function DashboardPage() {
   // branch below is the backstop for the case where that guard is ever
   // changed or bypassed. Defence in depth on the one screen where getting
   // it wrong shows an outsider the gym's books.
+  //
+  // healthbox_staff lands on Products, not a dedicated HealthBox dashboard
+  // (/dashboard/pos/healthbox 404s — there is no such page yet). Products
+  // is already authorised for them (POS_ROUTE_ROLES), department-scoped,
+  // and carries no Level Up cost/margin data. Keep this in sync with the
+  // matching redirect in middleware.ts.
   if (role === "cashier") return <PosRoleRedirect to="/pos" />;
-  if (role === "healthbox_staff") return <PosRoleRedirect to="/dashboard/pos/healthbox" />;
+  if (role === "healthbox_staff") return <PosRoleRedirect to="/dashboard/pos/catalog/products" />;
   if (role === "trainer") return <TrainerDashboard header={header} />;
   if (role === "viewer") return <ViewerDashboard header={header} />;
   if (role === "receptionist") return <ReceptionistDashboard header={header} />;

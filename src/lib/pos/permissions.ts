@@ -131,7 +131,11 @@ export function landingRouteForRole(role: SystemRole | null | undefined): string
     case "cashier":
       return "/pos";
     case "healthbox_staff":
-      return "/dashboard/pos/healthbox";
+      // No standalone HealthBox dashboard exists yet (/dashboard/pos/healthbox
+      // 404s) — Products is the existing, already-authorised, department-
+      // scoped landing screen instead. Keep in sync with middleware.ts and
+      // dashboard/page.tsx, which both duplicate this mapping.
+      return "/dashboard/pos/catalog/products";
     default:
       return "/dashboard";
   }

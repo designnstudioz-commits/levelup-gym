@@ -74,8 +74,15 @@ export async function middleware(request: NextRequest) {
       // edge runtime and this keeps the bundle free of app-layer imports.
       // The mapping is intentionally duplicated in exactly one other place
       // (src/lib/pos/permissions.ts) and both are two lines long.
+      //
+      // healthbox_staff -> /dashboard/pos/catalog/products: there is no
+      // standalone HealthBox dashboard (yet) — /dashboard/pos/healthbox
+      // 404s. Products is the existing, already-authorised, department-
+      // scoped landing screen (POS_ROUTE_ROLES includes healthbox_staff;
+      // the API strips cost/margin and filters to their own department),
+      // so it's safe without building a new page just for this redirect.
       if (systemUser?.role === "cashier") destination = "/pos";
-      else if (systemUser?.role === "healthbox_staff") destination = "/dashboard/pos/healthbox";
+      else if (systemUser?.role === "healthbox_staff") destination = "/dashboard/pos/catalog/products";
     }
     return NextResponse.redirect(new URL(destination, request.url));
   }
