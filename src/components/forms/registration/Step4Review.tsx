@@ -5,7 +5,7 @@ import { UseFormReturn } from "react-hook-form";
 import { cn, calculateDiscount, formatPKR, isPTPackage } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import type { FullRegistrationData } from "@/lib/validations/registration";
-import type { Package, StaffMember } from "@/types/database";
+import type { Package } from "@/types/database";
 
 interface Step4Props {
   form: UseFormReturn<FullRegistrationData>;
@@ -77,7 +77,7 @@ export function Step4Review({ form, mode }: Step4Props) {
   const data = watch();
   const termsAgreed = watch("terms_agreed");
   const [packages, setPackages] = useState<Package[]>([]);
-  const [trainer, setTrainer] = useState<StaffMember | null>(null);
+  const [trainer, setTrainer] = useState<{ id: string; full_name: string } | null>(null);
 
   useEffect(() => {
     const packageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);
@@ -114,10 +114,12 @@ export function Step4Review({ form, mode }: Step4Props) {
     const supabase = createClient();
     supabase
       .from("staff_members")
-      .select("*")
+      // Reachable anonymously (public registration review step) — only the
+      // trainer's own name is ever displayed here, see Step3Services.tsx.
+      .select("id, full_name")
       .eq("id", data.trainer_id)
       .single()
-      .then(({ data: staffData }) => setTrainer((staffData as StaffMember) ?? null));
+      .then(({ data: staffData }) => setTrainer(staffData ?? null));
   }, [data.trainer_id]);
 
   const selectedPackageIds = data.package_ids ?? (data.package_id ? [data.package_id] : []);

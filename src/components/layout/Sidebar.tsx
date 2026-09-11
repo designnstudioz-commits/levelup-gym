@@ -30,7 +30,6 @@ import {
   Warehouse,
   Truck,
   Wallet,
-  Salad,
   Receipt,
   Monitor,
   Tags,
@@ -183,12 +182,15 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
         { label: "Suppliers",     href: "/dashboard/pos/suppliers",         icon: Truck           },
         { label: "Cash Sessions", href: "/dashboard/pos/sessions",          icon: Wallet          },
         { label: "POS Reports",   href: "/dashboard/pos/reports",           icon: BarChart2       },
-        // No standalone HealthBox dashboard exists yet — /dashboard/pos/healthbox
-        // 404s. Points at Products instead: already authorised for
-        // healthbox_staff (POS_ROUTE_ROLES), department-scoped, no Level
-        // Up cost/margin data. Same route the login/landing redirects use
-        // (middleware.ts, dashboard/page.tsx, permissions.ts).
-        { label: "HealthBox",     href: "/dashboard/pos/catalog/products",  icon: Salad           },
+        // Phase H nav cleanup: a separate "HealthBox" entry pointing at
+        // /dashboard/pos/catalog/products used to sit here — identical
+        // href to "Products" above, so it was a pure duplicate destination
+        // once HealthBox Expenses/Report/Settlement (below) existed as
+        // their own real, distinct pages. Removed rather than kept as a
+        // second link to the same place. healthbox_staff still land on
+        // Products directly (middleware.ts, dashboard/page.tsx,
+        // permissions.ts) — that mapping is unchanged, just not
+        // double-listed in the sidebar too.
         { label: "HealthBox Expenses", href: "/dashboard/pos/healthbox/expenses", icon: FileText  },
         { label: "HealthBox Report", href: "/dashboard/pos/healthbox/report", icon: TrendingUp    },
         { label: "HealthBox Settlement", href: "/dashboard/pos/healthbox/settlement", icon: Landmark },

@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { cn, calculateDiscount, formatPKR, isPTPackage } from "@/lib/utils";
 import type { FullRegistrationData, PackageSelection } from "@/lib/validations/registration";
-import type { Package, StaffMember, SystemUser } from "@/types/database";
+import type { Package, SystemUser } from "@/types/database";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { addMonths, format } from "date-fns";
@@ -105,7 +105,7 @@ function FeeDiscountBox({
 export function Step3Services({ form, mode, currentUser }: Step3Props) {
   const { register, watch, setValue, formState: { errors } } = form;
   const [packages, setPackages] = useState<Package[]>([]);
-  const [trainers, setTrainers] = useState<StaffMember[]>([]);
+  const [trainers, setTrainers] = useState<{ id: string; full_name: string }[]>([]);
 
   const joiningDate        = watch("joining_date");
   const membershipStartDate = watch("membership_start_date");
@@ -131,7 +131,10 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
 
     supabase
       .from("staff_members")
-      .select("*")
+      // Anonymous applicants can reach this (public registration) — only
+      // the trainer picker's own id/name are ever rendered, so this query
+      // never pulls salary/cnic/device_user_id etc. into the client bundle.
+      .select("id, full_name")
       .eq("role", "Trainer")
       .eq("status", "active")
       .is("deleted_at", null)

@@ -8,7 +8,7 @@ import {
   Edit3, Check, X, ArrowLeft, UserCheck, Package,
   Stethoscope, AlertTriangle, Plus, Snowflake, Archive, Tag,
   Percent, Minus, Fingerprint, Printer, Camera, Trash2, Loader2,
-  Send, Clock, Lock, ShieldCheck,
+  Send, Clock, Lock, ShieldCheck, ShoppingBag,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -19,7 +19,7 @@ import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
-import { formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, isPTPackage, buildCommissionPayload, safeDateValue } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, isPTPackage, buildCommissionPayload, safeDateValue } from "@/lib/utils";
 import { generateCommissionEntry } from "@/lib/commission";
 import type { Member, Package as PackageType, StaffMember, FeePayment, TrainerMemberCommission } from "@/types/database";
 import Link from "next/link";
@@ -48,6 +48,20 @@ const SERVICE_ICONS: Record<string, string> = {
 
 interface PaymentWithCollector extends FeePayment {
   collector?: { full_name: string } | null;
+}
+
+// Phase H — POS purchase history (separate from membership FeePayment above).
+interface PosPurchaseRow {
+  id: string; orderNo: string | null; dateTime: string | null;
+  items: { name: string; qty: number }[]; departments: string[];
+  amount: number; grossAmount: number; discount: number;
+  paymentMethods: { method: string; amount: number }[];
+  status: string; isRefund: boolean; isVoid: boolean; countsTowardSales: boolean;
+}
+interface PosOrderDetail {
+  order: { id: string; order_no: string | null; status: string; gross_amount: number; discount_amount: number; net_amount: number; completed_at: string | null; void_reason: string | null; note: string | null };
+  items: { product_name: string; variant_name: string | null; department_name: string; sku: string | null; unit_price: number; cost_price?: number; qty: number; line_gross: number; line_discount: number; line_net: number }[];
+  payments: { method: string; amount: number; reference: string | null }[];
 }
 
 function buildReceiptHtml(r: {
@@ -157,6 +171,17 @@ export default function MemberDetailPage() {
   const [payments, setPayments] = useState<PaymentWithCollector[]>([]);
   const [services, setServices] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // POS purchase history — Phase H. A SEPARATE fetch/section from
+  // membership fee payments above; the two ledgers are never merged
+  // (spec §5/§6). Silently empty for a role the API forbids (receptionist
+  // and below don't reach this at all; the section itself just renders
+  // nothing rather than showing an error for a normal permission boundary).
+  const [posPurchases, setPosPurchases] = useState<PosPurchaseRow[]>([]);
+  const [posPurchasesLoaded, setPosPurchasesLoaded] = useState(false);
+  const [posOrderDetail, setPosOrderDetail] = useState<PosOrderDetail | null>(null);
+  const [posOrderDetailLoading, setPosOrderDetailLoading] = useState(false);
+  const canDrillIntoPos = currentUser?.role === "owner" || currentUser?.role === "manager";
 
   // Edit states
   const [editPackage, setEditPackage] = useState(false);
@@ -441,6 +466,35 @@ export default function MemberDetailPage() {
   useEffect(() => {
     fetchMember();
   }, [fetchMember]);
+
+  // POS purchase history — a plain fetch to a dedicated API route, not a
+  // browser-client table query, since it needs the service-role read
+  // (see the route's own comment) and its own owner/manager/receptionist
+  // gate distinct from the members-table RLS policy.
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    fetch(`/api/pos/members/${id}/purchases`)
+      .then((r) => (r.ok ? r.json() : { purchases: [] }))
+      .then((j) => { if (!cancelled) setPosPurchases(j.purchases ?? []); })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setPosPurchasesLoaded(true); });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  async function openPosOrderDetail(orderId: string) {
+    setPosOrderDetailLoading(true);
+    try {
+      const res = await fetch(`/api/pos/members/${id}/purchases/${orderId}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "Could not load this order");
+      setPosOrderDetail(json);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not load this order");
+    } finally {
+      setPosOrderDetailLoading(false);
+    }
+  }
 
   // Services live directly on the member record (members.services) — not
   // tied to submission_id, so CSV-imported/legacy members (no submission)
@@ -1847,7 +1901,90 @@ export default function MemberDetailPage() {
             </div>
           )}
         </Card>
+
+        {/* POS Purchases — deliberately a separate section from Payment
+            History above, never merged into one ledger (spec §5/§6).
+            Renders nothing if the API forbade it (cashier/trainer/viewer
+            never see this, and never see an error for it either — it's a
+            normal permission boundary, not a failure). */}
+        {posPurchasesLoaded && posPurchases.length > 0 && (
+          <Card padding={false}>
+            <div className="px-5 py-4 border-b border-[#E4E4DE] flex items-center gap-2">
+              <ShoppingBag className="w-4 h-4 text-[#7A7A72]" />
+              <h3 className="text-sm font-semibold text-[#1A1A16]">POS Purchases</h3>
+            </div>
+            <div className="divide-y divide-[#E4E4DE]">
+              {posPurchases.map((o) => (
+                <div
+                  key={o.id}
+                  onClick={() => canDrillIntoPos && openPosOrderDetail(o.id)}
+                  className={cn("px-5 py-3 flex items-center justify-between gap-3", canDrillIntoPos && "cursor-pointer hover:bg-[#F8F8F6] transition-colors")}
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-sm font-semibold text-[#1A1A16]">{o.orderNo ?? "—"}</p>
+                      {o.isRefund && <Badge variant="rejected">Refund</Badge>}
+                      {o.isVoid && <Badge variant="inactive">Voided</Badge>}
+                      {!o.isRefund && !o.isVoid && o.discount > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] px-1.5 py-0.5 rounded-full font-semibold">
+                          <Tag className="w-2.5 h-2.5" /> Discounted
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-[#7A7A72]">
+                      {o.dateTime ? formatDateTime(o.dateTime) : "—"} · {o.departments.join(", ") || "—"}
+                    </p>
+                    <p className="text-xs text-[#7A7A72] truncate max-w-md">
+                      {o.items.map((i) => `${i.name}${i.qty > 1 ? ` x${i.qty}` : ""}`).join(", ")}
+                    </p>
+                    <p className="text-xs text-[#7A7A72]">
+                      {o.paymentMethods.map((pm) => `${pm.method} ${formatPKR(pm.amount)}`).join(" + ") || "—"}
+                    </p>
+                  </div>
+                  <span className={cn("text-base font-bold flex-shrink-0", o.isRefund ? "text-red-600" : o.isVoid ? "text-[#7A7A72]" : "text-green-700")}>
+                    {formatPKR(o.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
+
+      {/* POS order drill-down */}
+      <Modal open={posOrderDetail != null} onClose={() => setPosOrderDetail(null)} title={posOrderDetail?.order.order_no ?? "Order"} size="md">
+        {posOrderDetailLoading ? (
+          <p className="text-sm text-[#7A7A72]">Loading…</p>
+        ) : posOrderDetail && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><p className="text-[#7A7A72]">Status</p><p className="font-semibold capitalize">{posOrderDetail.order.status}</p></div>
+              <div><p className="text-[#7A7A72]">Date</p><p className="font-semibold">{posOrderDetail.order.completed_at ? formatDateTime(posOrderDetail.order.completed_at) : "—"}</p></div>
+              <div><p className="text-[#7A7A72]">Gross</p><p className="font-semibold">{formatPKR(posOrderDetail.order.gross_amount)}</p></div>
+              <div><p className="text-[#7A7A72]">Discount</p><p className="font-semibold">{formatPKR(posOrderDetail.order.discount_amount)}</p></div>
+              <div><p className="text-[#7A7A72]">Net</p><p className="font-semibold">{formatPKR(posOrderDetail.order.net_amount)}</p></div>
+            </div>
+            <div className="divide-y divide-[#E4E4DE] border border-[#E4E4DE] rounded-lg">
+              {posOrderDetail.items.map((i, idx) => (
+                <div key={idx} className="px-3 py-2 flex items-center justify-between text-sm">
+                  <div>
+                    <p className="font-medium">{i.product_name}{i.variant_name ? ` — ${i.variant_name}` : ""}</p>
+                    <p className="text-xs text-[#7A7A72]">{i.department_name} · Qty {i.qty}</p>
+                  </div>
+                  <p className="font-semibold tabular-nums">{formatPKR(i.line_net)}</p>
+                </div>
+              ))}
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#7A7A72] mb-1">Payments</p>
+              {posOrderDetail.payments.map((p, idx) => (
+                <p key={idx} className="text-sm">{p.method}: {formatPKR(p.amount)}</p>
+              ))}
+            </div>
+            {posOrderDetail.order.void_reason && <p className="text-sm text-red-600">Void reason: {posOrderDetail.order.void_reason}</p>}
+          </div>
+        )}
+      </Modal>
 
       {/* Edit Profile Modal */}
       <Modal open={editProfileModal} onClose={() => setEditProfileModal(false)} title="Edit Member Profile" size="lg">

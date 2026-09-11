@@ -1,7 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { requirePosUser } from "@/lib/pos/auth";
 import { POS_TERMINAL_ROLES } from "@/lib/pos/permissions";
+
+function getServiceClient() {
+  return createServiceClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
 
 /**
  * Member lookup for tagging a POS sale.
@@ -16,7 +23,16 @@ import { POS_TERMINAL_ROLES } from "@/lib/pos/permissions";
  *
  * So the cashier gets no table access to `members` at all. This route runs
  * server-side, checks the caller's role, and returns exactly four fields.
- * It is also why the Phase 3 RLS change set modifies zero existing policies.
+ *
+ * Phase H correction: this originally used the session-scoped client
+ * (@/lib/supabase/server), which is fine while `members` has no RLS — but
+ * once 20260825100500_rls_members.sql goes live, that client IS subject to
+ * its policies, and 'cashier' isn't in them (that migration predates the
+ * cashier role entirely). The session client would then silently return
+ * zero rows for every cashier, breaking terminal member lookup. Switched to
+ * the service-role client instead: the real security boundary was always
+ * requirePosUser() + this route's own narrow column list below, never RLS
+ * on `members` — this just makes that actually true once RLS is enabled.
  *
  * Consequence to preserve: never widen the select list below without
  * revisiting that reasoning.
@@ -26,7 +42,7 @@ export async function GET(req: NextRequest) {
   if (!auth.ok) return auth.response;
 
   const q = (req.nextUrl.searchParams.get("q") ?? "").trim();
-  const supabase = await createClient();
+  const supabase = getServiceClient();
 
   // Only the fields the terminal displays. Nothing else.
   let query = supabase

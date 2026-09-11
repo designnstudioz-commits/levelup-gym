@@ -81,6 +81,16 @@ export const POS_ROUTE_ROLES: Record<string, SystemRole[]> = {
   // HealthBox
   "/dashboard/pos/healthbox": POS_HEALTHBOX_ROLES,
   "/dashboard/pos/healthbox/expenses": POS_HEALTHBOX_ROLES,
+  // Phase H fix: this entry was missing entirely. Sidebar's canAccess()
+  // defaults to VISIBLE for any href it has no entry for, so every role —
+  // including cashier — was seeing the "HealthBox Report" link even though
+  // the page's own useRoleGuard(["owner","manager"]) and the report API's
+  // requirePosUser(POS_ADMIN_ROLES) both already correctly bounced them.
+  // Not a data leak (those two layers were always the real boundary), but
+  // a real nav-cleanliness violation (spec §7: "no role sees links it
+  // cannot actually use"). Net Sales/profit/product performance — never
+  // HealthBox staff (spec §8).
+  "/dashboard/pos/healthbox/report": POS_ADMIN_ROLES,
   // Settlement carries the profit split. HealthBox staff must never see it
   // (spec §17, §22) — the approved frame says so on the artboard.
   "/dashboard/pos/healthbox/settlement": POS_ADMIN_ROLES,
