@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
@@ -13,8 +13,9 @@ import { Step2Health } from "./Step2Health";
 import { Step3Services } from "./Step3Services";
 import { Step4Review } from "./Step4Review";
 import { Button } from "@/components/ui/Button";
+import { Modal } from "@/components/ui/Modal";
 import { createClient } from "@/lib/supabase/client";
-import { generateMembershipNo, generateReceiptNo, calculateDiscount, formatPKR, buildCommissionPayload } from "@/lib/utils";
+import { calculateDiscount, formatPKR, buildCommissionPayload } from "@/lib/utils";
 import { format } from "date-fns";
 import {
   fullRegistrationSchema,
@@ -42,6 +43,14 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [referenceNo, setReferenceNo] = useState("");
+
+  // One idempotency key per registration attempt-cycle — stable across
+  // retries of the SAME submission (so a network retry or an accidental
+  // double-click replays instead of duplicating), regenerated only when a
+  // genuinely new registration starts (handleReset, or a fresh mount of
+  // this form after a previous one succeeded and navigated away).
+  const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
+  const [duplicateWarning, setDuplicateWarning] = useState<{ name: string; secondsAgo: number } | null>(null);
 
   const form = useForm<FullRegistrationData>({
     resolver: zodResolver(fullRegistrationSchema),
@@ -147,24 +156,55 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function handleSubmit() {
+  /** Section 5: a WARNING only (never a hard block) — families legitimately
+   *  share phone numbers. Flags an active member created very recently
+   *  (10 min) whose normalized phone matches, so staff can catch an
+   *  accidental resubmit-as-new-person before it happens, without
+   *  stopping a second, genuinely different family member from being
+   *  added on the same number. */
+  async function findRecentDuplicate(phone: string): Promise<{ name: string; secondsAgo: number } | null> {
+    const digits = phone.replace(/\D/g, "");
+    if (!digits) return null;
+    const supabase = createClient();
+    const cutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data } = await supabase
+      .from("members")
+      .select("full_name, phone, created_at")
+      .is("deleted_at", null)
+      .gte("created_at", cutoff)
+      .order("created_at", { ascending: false });
+    const match = (data ?? []).find((m) => (m.phone ?? "").replace(/\D/g, "") === digits);
+    if (!match) return null;
+    return {
+      name: match.full_name,
+      secondsAgo: Math.max(0, Math.round((Date.now() - new Date(match.created_at as string).getTime()) / 1000)),
+    };
+  }
+
+  async function handleSubmit(skipDuplicateCheck = false) {
     const values = form.getValues();
     if (!values.terms_agreed) {
       form.setError("terms_agreed", { message: "You must agree to the terms" });
       return;
     }
 
+    if (mode === "staff" && !skipDuplicateCheck) {
+      const dup = await findRecentDuplicate(values.phone);
+      if (dup) {
+        setDuplicateWarning(dup);
+        return;
+      }
+    }
+
     setSubmitting(true);
     try {
-      const supabase = createClient();
-
       if (mode === "staff") {
-        // Staff registration → directly create member (skip approval queue)
-        const membershipNo = await generateMembershipNo(values.gender);
-
-        // Fetched up front (not just inside the payment section below) since
-        // the PT custom price is also needed for members.training_fee on
-        // the initial insert.
+        // Staff registration → atomic member + initial payment, one call.
+        // See /api/members/register and register_member_with_payment() —
+        // this used to be several sequential client-side inserts, which is
+        // exactly what let a mid-sequence failure leave a member created
+        // with no fee recorded (the Mansoor/Moazen Bilal incidents).
+        const supabase = createClient();
         const packageIds = values.package_ids ?? [];
         const { data: selectedPkgs } = packageIds.length > 0
           ? await supabase.from("packages").select("id, name, monthly_fee").in("id", packageIds)
@@ -175,75 +215,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
           return pkg && isPTPackage(pkg);
         });
 
-        const { data, error } = await supabase
-          .from("members")
-          .insert({
-            membership_no: membershipNo,
-            full_name: values.full_name,
-            secondary_name: values.secondary_name || null,
-            dob: values.dob || null,
-            age: values.age || null,
-            gender: values.gender,
-            marital_status: values.marital_status || null,
-            phone: values.phone,
-            whatsapp: values.whatsapp || null,
-            email: values.email || null,
-            cnic: values.cnic || null,
-            address: values.address || null,
-            blood_group: values.blood_group || null,
-            vaccinated: values.vaccinated || null,
-            height: values.height || null,
-            weight: values.weight || null,
-            medical_notes: values.medical_notes
-              ? `Injuries: ${values.injuries || "None"}. ${values.medical_notes}`
-              : values.injuries && values.injuries !== "None"
-              ? `Injuries: ${values.injuries}`
-              : null,
-            emergency_name: values.emergency_name,
-            emergency_phone: values.emergency_phone,
-            photo_url: values.photo_url || null,
-            package_id: values.package_id || (values.package_ids?.[0] ?? null),
-            package_ids: values.package_ids?.length ? values.package_ids : null,
-            trainer_id: values.trainer_id || null,
-            joining_date: values.joining_date || null,
-            // Normally the same as joining_date (the common case), but
-            // kept as its own field since staff can set it separately —
-            // see Step3Services.tsx.
-            membership_start_date: values.membership_start_date || values.joining_date || null,
-            expiry_date: values.expiry_date || null,
-            admission_fee: values.admission_fee || null,
-            monthly_fee: values.monthly_fee || null,
-            // Negotiated Personal Training price specifically — separate
-            // from monthly_fee, which is the sum across all packages.
-            training_fee: ptSelection?.custom_price ?? null,
-            status: values.is_family_member ? "pending_family_approval" : "active",
-            family_primary_member_id: values.is_family_member ? (values.family_primary_member_id || null) : null,
-            family_relationship: values.is_family_member ? (values.family_relationship || null) : null,
-            family_notes: values.is_family_member ? (values.family_notes || null) : null,
-          })
-          .select("id")
-          .single();
-
-        if (error) throw error;
-
-        // Log the activity
-        await supabase.from("activity_logs").insert({
-          user_id: currentUser?.id ?? null,
-          action: "added_member",
-          entity_type: "member",
-          entity_id: data.id,
-          description: `Added new member ${values.full_name} — ${membershipNo}${values.is_family_member ? " (pending family approval)" : ""}`,
-          metadata: {
-            membership_no: membershipNo,
-            package_id: values.package_id,
-            is_family_member: !!values.is_family_member,
-            family_primary_member_id: values.family_primary_member_id ?? null,
-          },
-        });
-
-        // Trainer commission — required at registration whenever a PT
-        // package is selected (enforced in handleNext above), so this
-        // should always succeed here; still guarded defensively.
+        let commission: Record<string, unknown> | null = null;
         if (ptSelection && values.trainer_id) {
           const commissionResult = buildCommissionPayload(
             values.commission_type ?? "percent",
@@ -251,35 +223,16 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             String(values.commission_amount ?? "")
           );
           if (commissionResult.payload) {
-            const { error: commissionError } = await supabase.from("trainer_member_commissions").insert({
-              trainer_id: values.trainer_id,
-              member_id: data.id,
-              ...commissionResult.payload,
-              updated_by: currentUser?.id ?? null,
-            });
-            if (commissionError) throw commissionError;
+            commission = { trainer_id: values.trainer_id, ...commissionResult.payload };
           }
         }
 
-        // Collect the member's first payment (admission + membership fee)
-        // right here, rather than requiring a separate trip through Fees —
-        // the member has already paid by the time this form is submitted.
-        // joining_date/expiry_date are already correct on the member row
-        // above (computed from package duration), so these inserts must NOT
-        // call extendExpiryDate — that's only for later, recurring payments.
-        const today = format(new Date(), "yyyy-MM-dd");
         const admissionCalc = calculateDiscount(
           Number(values.admission_fee) || 0,
           values.admission_discount_type,
           values.admission_discount_value
         );
 
-        // Package Payment = sum of each selected package's own independent
-        // discount (not one discount over the summed total) — build the
-        // breakdown that gets persisted to fee_payments.package_breakdown
-        // for the receipt. Personal Training packages skip the discount
-        // step: the custom price typed in is the final amount directly.
-        // (pkgById/ptSelection were fetched earlier, before the member insert.)
         const packageBreakdown: PackageBreakdownItem[] = (values.package_selections ?? [])
           .map((sel) => {
             const pkg = pkgById.get(sel.package_id);
@@ -313,19 +266,8 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             : calculateDiscount(Number(values.monthly_fee) || 0, values.membership_discount_type, values.membership_discount_value).finalAmount,
         };
 
-        let admissionPaymentId: string | null = null;
-        let membershipPaymentId: string | null = null;
-
-        // Sequential, not Promise.all — generateReceiptNo() reads the current
-        // row count then writes one higher, with no DB uniqueness constraint,
-        // so two calls back-to-back before either insert lands would return
-        // the same receipt number (same class of race already fixed once in
-        // this codebase for device_commands.command_id). Each fee type is
-        // its own receipt_no group; within a group, a payment split across
-        // methods produces one row per method, only the first carrying
-        // balance_due for a partial payment.
+        let admissionPayment: Record<string, unknown> | null = null;
         if (admissionCalc.finalAmount > 0) {
-          const receiptNo = await generateReceiptNo();
           const note = admissionCalc.discountAmount > 0
             ? `Discount: ${formatPKR(admissionCalc.discountAmount)} (${Math.round((admissionCalc.discountAmount / (Number(values.admission_fee) || 1)) * 100)}% off original ${formatPKR(Number(values.admission_fee) || 0)})`
             : null;
@@ -333,46 +275,19 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
           const admissionLines = values.admission_payment_lines?.length ? values.admission_payment_lines : [{ method: "Cash", amount: String(admissionCalc.finalAmount) }];
           const admissionCollected = splitTarget(admissionCalc.finalAmount, admissionPartial);
           const admissionBalanceDue = admissionPartial.isPartial ? Math.max(admissionCalc.finalAmount - admissionCollected, 0) : 0;
-
-          const admissionRows = admissionLines.map((line, i) => ({
-            member_id: data.id,
-            amount: Number(line.amount),
-            payment_type: "admission" as const,
-            payment_method: line.method as any,
-            payment_date: today,
-            month_covered: null,
-            receipt_no: receiptNo,
+          admissionPayment = {
+            final_amount: admissionCalc.finalAmount,
+            discount_amount: admissionCalc.discountAmount,
+            original_amount: Number(values.admission_fee) || 0,
             note,
-            balance_due: i === 0 ? admissionBalanceDue : 0,
-            balance_due_date: i === 0 && admissionBalanceDue > 0 ? admissionPartial.balanceDueDate : null,
-            collected_by: currentUser?.id ?? null,
-          }));
-
-          const { data: admissionPayments, error: payError } = await supabase
-            .from("fee_payments")
-            .insert(admissionRows)
-            .select("id");
-
-          if (payError) throw payError;
-          admissionPaymentId = admissionPayments[0].id;
-
-          await supabase.from("activity_logs").insert({
-            user_id: currentUser?.id ?? null,
-            action: "paid_fee",
-            entity_type: "member",
-            entity_id: data.id,
-            description: `${values.full_name} paid ${formatPKR(admissionCollected)} (admission) — ${receiptNo}${admissionBalanceDue > 0 ? ` — ${formatPKR(admissionBalanceDue)} balance due` : ""}`,
-            metadata: { original: Number(values.admission_fee) || 0, discount: admissionCalc.discountAmount, final: admissionCalc.finalAmount, collected: admissionCollected, balanceDue: admissionBalanceDue, receipt_no: receiptNo },
-          });
+            lines: admissionLines.map((l) => ({ method: l.method, amount: Number(l.amount) })),
+            balance_due: admissionBalanceDue,
+            balance_due_date: admissionBalanceDue > 0 ? admissionPartial.balanceDueDate : null,
+          };
         }
 
+        let membershipPayment: Record<string, unknown> | null = null;
         if (membershipCalc.finalAmount > 0) {
-          const receiptNo = await generateReceiptNo();
-          // Structured package_breakdown (below) is the source of truth for
-          // receipts when present; this note is just a plain-text fallback
-          // summary, consistent with the old single-discount format for any
-          // registration with no packages selected at all (monthly_fee set
-          // by hand, no package_selections).
           const note = packageBreakdown.length > 0
             ? (packageBreakdown.some((p) => p.discount_amount > 0)
                 ? `Package discounts: ${packageBreakdown.filter((p) => p.discount_amount > 0).map((p) => `${p.name} −${formatPKR(p.discount_amount)}`).join(", ")}`
@@ -384,49 +299,87 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
           const membershipLines = values.membership_payment_lines?.length ? values.membership_payment_lines : [{ method: "Cash", amount: String(membershipCalc.finalAmount) }];
           const membershipCollected = splitTarget(membershipCalc.finalAmount, membershipPartial);
           const membershipBalanceDue = membershipPartial.isPartial ? Math.max(membershipCalc.finalAmount - membershipCollected, 0) : 0;
-
-          const membershipRows = membershipLines.map((line, i) => ({
-            member_id: data.id,
-            amount: Number(line.amount),
-            payment_type: "membership" as const,
-            payment_method: line.method as any,
-            payment_date: today,
-            month_covered: today,
-            coverage_start: i === 0 ? (values.joining_date || null) : null,
-            coverage_end: i === 0 ? (values.expiry_date || null) : null,
-            receipt_no: receiptNo,
+          membershipPayment = {
+            final_amount: membershipCalc.finalAmount,
+            discount_amount: membershipCalc.discountAmount,
+            original_amount: Number(values.monthly_fee) || 0,
             note,
-            balance_due: i === 0 ? membershipBalanceDue : 0,
-            balance_due_date: i === 0 && membershipBalanceDue > 0 ? membershipPartial.balanceDueDate : null,
-            package_breakdown: i === 0 && packageBreakdown.length > 0 ? packageBreakdown : null,
-            collected_by: currentUser?.id ?? null,
-          }));
-
-          const { data: membershipPayments, error: payError } = await supabase
-            .from("fee_payments")
-            .insert(membershipRows)
-            .select("id");
-
-          if (payError) throw payError;
-          membershipPaymentId = membershipPayments[0].id;
-
-          await supabase.from("activity_logs").insert({
-            user_id: currentUser?.id ?? null,
-            action: "paid_fee",
-            entity_type: "member",
-            entity_id: data.id,
-            description: `${values.full_name} paid ${formatPKR(membershipCollected)} (membership) — ${receiptNo}${membershipBalanceDue > 0 ? ` — ${formatPKR(membershipBalanceDue)} balance due` : ""}`,
-            metadata: { original: Number(values.monthly_fee) || 0, discount: membershipCalc.discountAmount, final: membershipCalc.finalAmount, collected: membershipCollected, balanceDue: membershipBalanceDue, receipt_no: receiptNo },
-          });
+            lines: membershipLines.map((l) => ({ method: l.method, amount: Number(l.amount) })),
+            balance_due: membershipBalanceDue,
+            balance_due_date: membershipBalanceDue > 0 ? membershipPartial.balanceDueDate : null,
+            coverage_start: values.joining_date || null,
+            coverage_end: values.expiry_date || null,
+            package_breakdown: packageBreakdown.length > 0 ? packageBreakdown : null,
+          };
         }
 
-        toast.success(`Member ${values.full_name} added! ID: ${membershipNo}`);
+        const res = await fetch("/api/members/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            idempotency_key: idempotencyKeyRef.current,
+            member: {
+              full_name: values.full_name,
+              secondary_name: values.secondary_name || null,
+              dob: values.dob || null,
+              age: values.age || null,
+              gender: values.gender,
+              marital_status: values.marital_status || null,
+              phone: values.phone,
+              whatsapp: values.whatsapp || null,
+              email: values.email || null,
+              cnic: values.cnic || null,
+              address: values.address || null,
+              blood_group: values.blood_group || null,
+              vaccinated: values.vaccinated || null,
+              height: values.height || null,
+              weight: values.weight || null,
+              medical_notes: values.medical_notes
+                ? `Injuries: ${values.injuries || "None"}. ${values.medical_notes}`
+                : values.injuries && values.injuries !== "None"
+                ? `Injuries: ${values.injuries}`
+                : null,
+              emergency_name: values.emergency_name,
+              emergency_phone: values.emergency_phone,
+              photo_url: values.photo_url || null,
+              package_id: values.package_id || (values.package_ids?.[0] ?? null),
+              package_ids: values.package_ids?.length ? values.package_ids : null,
+              trainer_id: values.trainer_id || null,
+              joining_date: values.joining_date || null,
+              membership_start_date: values.membership_start_date || values.joining_date || null,
+              expiry_date: values.expiry_date || null,
+              admission_fee: values.admission_fee || null,
+              monthly_fee: values.monthly_fee || null,
+              training_fee: ptSelection?.custom_price ?? null,
+              is_family_member: !!values.is_family_member,
+              family_primary_member_id: values.is_family_member ? (values.family_primary_member_id || null) : null,
+              family_relationship: values.is_family_member ? (values.family_relationship || null) : null,
+              family_notes: values.is_family_member ? (values.family_notes || null) : null,
+            },
+            admission_payment: admissionPayment,
+            membership_payment: membershipPayment,
+            commission,
+          }),
+        });
+        const result = await res.json();
+        if (!res.ok || result.error) {
+          throw new Error(result.error || "Registration failed");
+        }
+
+        toast.success(`Member ${values.full_name} added! ID: ${result.membership_no}`);
         const receiptParams = new URLSearchParams();
-        if (admissionPaymentId) receiptParams.set("admission", admissionPaymentId);
-        if (membershipPaymentId) receiptParams.set("membership", membershipPaymentId);
-        router.push(`/dashboard/register/receipt/${data.id}?${receiptParams.toString()}`);
+        if (result.admission_payment_id) receiptParams.set("admission", result.admission_payment_id);
+        if (result.membership_payment_id) receiptParams.set("membership", result.membership_payment_id);
+        // A fresh key for whatever registration this staff member does
+        // next — this one is now permanently tied to the member just
+        // created (or recovered, if this was itself a replay).
+        idempotencyKeyRef.current = crypto.randomUUID();
+        router.push(`/dashboard/register/receipt/${result.member_id}?${receiptParams.toString()}`);
       } else {
-        // Public registration → create submission for approval
+        // Public registration → create submission for approval. Single
+        // insert, no dependent follow-up writes, so the atomicity problem
+        // this change addresses doesn't apply here.
+        const supabase = createClient();
         const { data, error } = await supabase
           .from("submissions")
           .insert({
@@ -472,7 +425,11 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
       }
     } catch (err) {
       console.error(err);
-      toast.error("Failed to submit. Please try again.");
+      // The real reason, not a generic "try again" — a vague message after
+      // a failed submit is exactly what caused a member to be re-created
+      // by hand in the incident this change fixes. With the new atomic
+      // registration, a thrown error here means NO member was created.
+      toast.error(err instanceof Error ? err.message : "Failed to submit. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -483,6 +440,7 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
     setCurrentStep(1);
     setSubmitted(false);
     setReferenceNo("");
+    idempotencyKeyRef.current = crypto.randomUUID();
   }
 
   // Success screen — staff mode navigates straight to the payment receipt
@@ -545,12 +503,46 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             <ChevronRight className="w-4 h-4" />
           </Button>
         ) : (
-          <Button type="button" onClick={handleSubmit} loading={submitting}>
+          <Button type="button" onClick={() => handleSubmit()} loading={submitting}>
             <Send className="w-4 h-4" />
             {mode === "staff" ? "Create Member" : "Submit Registration"}
           </Button>
         )}
       </div>
+
+      {/* Section 5: a warning, never a hard block — families legitimately
+          share phone numbers, so this only asks staff to double-check. */}
+      <Modal
+        open={!!duplicateWarning}
+        onClose={() => setDuplicateWarning(null)}
+        title="Possible duplicate"
+        size="sm"
+      >
+        {duplicateWarning && (
+          <div className="space-y-4">
+            <p className="text-sm text-[#4A4A44]">
+              A member named <span className="font-semibold text-[#1A1A16]">{duplicateWarning.name}</span> with
+              this phone number was created <span className="font-semibold">{duplicateWarning.secondsAgo}s ago</span>.
+              Please verify before creating another record — this can happen if an earlier submission actually
+              went through.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="secondary" onClick={() => setDuplicateWarning(null)}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  setDuplicateWarning(null);
+                  handleSubmit(true);
+                }}
+              >
+                Create Anyway
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
