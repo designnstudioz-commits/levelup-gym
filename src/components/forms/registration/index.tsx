@@ -135,14 +135,25 @@ export function RegistrationForm({ mode, currentUser }: RegistrationFormProps) {
             toast.error("Enter the Personal Training price — required when a Personal Training package is selected");
             return;
           }
-          const commissionResult = buildCommissionPayload(
-            values.commission_type ?? "percent",
-            String(values.commission_percent ?? ""),
-            String(values.commission_amount ?? "")
-          );
-          if (commissionResult.error) {
-            toast.error(`Trainer commission: ${commissionResult.error}`);
-            return;
+          // Commission is optional at registration (locked business rule:
+          // reception handles PT commission operationally, with no
+          // approval workflow) — only validate it if something was
+          // actually typed. Left blank, it's "Not Set" and can be added
+          // later from the member's profile; registration must still
+          // succeed either way.
+          const commissionTouched = values.commission_type === "fixed"
+            ? String(values.commission_amount ?? "").trim() !== ""
+            : String(values.commission_percent ?? "").trim() !== "";
+          if (commissionTouched) {
+            const commissionResult = buildCommissionPayload(
+              values.commission_type ?? "percent",
+              String(values.commission_percent ?? ""),
+              String(values.commission_amount ?? "")
+            );
+            if (commissionResult.error) {
+              toast.error(`Trainer commission: ${commissionResult.error}`);
+              return;
+            }
           }
         }
       }

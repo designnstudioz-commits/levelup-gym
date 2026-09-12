@@ -539,7 +539,7 @@ export function Step3Services({ form, mode, currentUser }: Step3Props) {
                 )}
               </div>
             </div>
-            <p className="text-xs text-[#F06418]">Required — set the trainer's commission for this Personal Training member.</p>
+            <p className="text-xs text-[#7A7A72]">Optional — leave blank if not yet decided. You can add or change it later from the member's profile.</p>
 
             {/* Step 5: live commission preview, once a value is entered */}
             {commissionPreview > 0 && (
