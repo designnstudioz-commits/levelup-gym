@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { cn, formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, isPTPackage, buildCommissionPayload, safeDateValue } from "@/lib/utils";
 import { generateCommissionEntry } from "@/lib/commission";
+import { computeFeeStatus, FEE_STATUS_LABELS, type FeeStatusPaymentInput } from "@/lib/feeStatus";
 import type { Member, Package as PackageType, StaffMember, FeePayment, TrainerMemberCommission } from "@/types/database";
 import Link from "next/link";
 import { PaymentSplitRows, validatePaymentSplit, splitTarget, emptyPartialState, type PaymentLine, type PartialPaymentState } from "@/components/forms/PaymentSplitRows";
@@ -169,6 +170,7 @@ export default function MemberDetailPage() {
   const [packages, setPackages] = useState<PackageType[]>([]);
   const [trainers, setTrainers] = useState<StaffMember[]>([]);
   const [payments, setPayments] = useState<PaymentWithCollector[]>([]);
+  const [feeStatusPayments, setFeeStatusPayments] = useState<FeeStatusPaymentInput[]>([]);
   const [services, setServices] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -426,7 +428,7 @@ export default function MemberDetailPage() {
 
   const fetchMember = useCallback(async () => {
     const supabase = createClient();
-    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }, { data: commissionData }] = await Promise.all([
+    const [{ data: memberData }, { data: pkgs }, { data: trnrs }, { data: pays }, { data: allStaffData }, { data: commissionData }, { data: feeStatusPays }] = await Promise.all([
       supabase
         .from("members")
         // trainer joins staff_directory_public (id/full_name/role/photo/
@@ -442,6 +444,13 @@ export default function MemberDetailPage() {
       supabase.from("fee_payments").select("*, collector:system_users!fee_payments_collected_by_fkey(full_name)").eq("member_id", id).is("deleted_at", null).order("payment_date", { ascending: false }).order("created_at", { ascending: false }).limit(10),
       supabase.from("staff_directory_public").select("*").in("role", ["Trainer","Nutritionist","Other"]).eq("status", "active"),
       supabase.from("trainer_member_commissions").select("*").eq("member_id", id).is("deleted_at", null).maybeSingle(),
+      // Unlimited, unlike the `pays` query above (capped at 10 for the
+      // Payment History list) — Fee Status needs every admission/recurring
+      // payment ever recorded (an admission payment from years ago must
+      // still count even if it's fallen out of the 10 most recent rows),
+      // so this is deliberately its own narrow, cheap query rather than
+      // reusing `pays`. See src/lib/feeStatus.ts.
+      supabase.from("fee_payments").select("payment_type, balance_due, coverage_end, payment_date").eq("member_id", id).is("deleted_at", null),
     ]);
 
     if (memberData) {
@@ -458,6 +467,7 @@ export default function MemberDetailPage() {
     setPackages(pkgs ?? []);
     setTrainers(trnrs ?? []);
     setPayments(pays ?? []);
+    setFeeStatusPayments(feeStatusPays ?? []);
     setAllStaff((allStaffData as StaffMember[]) ?? []);
     setTrainerCommission((commissionData as TrainerMemberCommission) ?? null);
     setPtPriceInput(memberData?.training_fee != null ? String(memberData.training_fee) : "");
@@ -1187,6 +1197,24 @@ export default function MemberDetailPage() {
 
   const { label: statusLabel, variant: statusVariant } = getMemberStatusDisplay(member.status, member.expiry_date);
   const daysLeft = daysUntilExpiry(member.expiry_date);
+  // Same centralized calculation as the Members list (src/lib/feeStatus.ts)
+  // — this profile page previously had no Fee Status indicator at all
+  // (only Active/Expired), which is part of why Mansoor's Rs 0 Total Paid
+  // and 0 Payment History rows weren't paired with any "this member hasn't
+  // actually paid" signal here either.
+  const todayForFeeStatus = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+  const feeStatus = computeFeeStatus(
+    {
+      admission_fee: member.admission_fee,
+      monthly_fee: member.monthly_fee,
+      training_fee: (member as any).training_fee,
+      expiry_date: member.expiry_date,
+      family_pricing_decision: (member as any).family_pricing_decision,
+      comment: (member as any).comment,
+    },
+    feeStatusPayments,
+    todayForFeeStatus
+  );
   const currentPackage = (member as any).packages as PackageType | null;
   // All assigned packages for display — package_ids if set, else falls back
   // to the single package_id join (members that predate package_ids).
@@ -1280,9 +1308,22 @@ export default function MemberDetailPage() {
               <div className="flex gap-2 mt-2 flex-wrap justify-center">
                 <Badge variant={statusVariant}>{statusLabel}</Badge>
                 {member.gender && <Badge variant="default">{member.gender}</Badge>}
-                {totalBalanceDue > 0 && (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-300">
-                    <Clock className="w-3 h-3" /> Pending Fees
+                {/* Fee Status — same centralized calculation as the Members
+                    list (src/lib/feeStatus.ts), not the older
+                    totalBalanceDue-only check, which only ever looked at
+                    balance_due on already-existing payment rows and so
+                    couldn't detect "no payment was ever collected at all"
+                    (exactly Mansoor's case). */}
+                {(feeStatus.status === "partial" || feeStatus.status === "pending") && (
+                  <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
+                    feeStatus.status === "pending" ? "bg-red-100 text-red-600 border-red-300" : "bg-amber-100 text-amber-700 border-amber-300"
+                  }`}>
+                    <Clock className="w-3 h-3" /> {FEE_STATUS_LABELS[feeStatus.status]} · {formatPKR(feeStatus.outstandingAmount)} due
+                  </span>
+                )}
+                {feeStatus.status === "free" && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 border border-blue-300">
+                    Free Membership
                   </span>
                 )}
               </div>

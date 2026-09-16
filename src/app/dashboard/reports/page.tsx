@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { formatPKR, formatDate, getMemberStatusDisplay, fetchAllRows, safeDateValue } from "@/lib/utils";
+import { computeFeeStatus, FEE_STATUS_LABELS } from "@/lib/feeStatus";
 
 // ── Constants ────────────────────────────────────────────────────────
 type ReportType = "overview" | "revenue" | "membership" | "attendance" | "submissions" | "trainers" | "daily";
@@ -105,7 +106,7 @@ export default function ReportsPage() {
       // because Supabase/PostgREST silently caps a single request at 1000
       // rows no matter what .limit()/.range() is requested.
       fetchAllRows<any>((from2, to2) =>
-        supabase.from("members").select("id, full_name, membership_no, gender, status, joining_date, expiry_date, package_id, monthly_fee, packages(name, color), trainer_id").is("deleted_at", null).range(from2, to2) as any
+        supabase.from("members").select("id, full_name, membership_no, gender, status, joining_date, expiry_date, package_id, admission_fee, monthly_fee, training_fee, family_pricing_decision, comment, packages(name, color), trainer_id").is("deleted_at", null).range(from2, to2) as any
       ),
       supabase.from("attendances").select("id, punch_time, punch_type, member_id, device_id").gte("punch_time", `${from}T00:00:00+05:00`).lte("punch_time", `${to}T23:59:59+05:00`),
       supabase.from("submissions").select("id, status, referral_source, created_at, reviewed_at, gender").is("deleted_at", null).gte("created_at", `${from}T00:00:00`).lte("created_at", `${to}T23:59:59`),
@@ -1061,25 +1062,51 @@ function DailySummaryReport({ data }: { data: any }) {
   const todayRevenue   = todayPayments.reduce((s: number, p: any) => s + (p.amount ?? 0), 0);
   const walkInRevenue  = todayWalkIns.reduce((s: number, d: any) => s + (d.fee_paid ?? 0), 0);
 
-  // Whether each new member has EVER paid — not just whether they have a
-  // payment dated the exact same day as their joining_date. Staff sometimes
-  // record the payment a day off from joining_date (e.g. paid on
-  // registration day, joining_date set to the next day), and `payments`
-  // itself is scoped to the selected report period above, not all-time — so
-  // this runs its own period-independent, per-member query, matching the
+  // Fee Status for each new member — same centralized calculation as the
+  // Members list and Member Profile (src/lib/feeStatus.ts). This used to
+  // be "has ANY fee_payments row ever" (real evidence of A payment, but
+  // not evidence the full due amount was collected — a Rs 500 partial
+  // payment against a Rs 33,000 due would have shown "Paid" here), a
+  // third, different definition of Paid than the rest of the app. Runs
+  // its own period-independent, per-member query since `payments` above
+  // is scoped to the selected report period, not all-time — matching the
   // "New Members always works for any date" behavior already used for
   // todayJoined itself.
-  const [paidMemberIds, setPaidMemberIds] = useState<Set<string>>(new Set());
+  const [feeStatusByNewMember, setFeeStatusByNewMember] = useState<Map<string, ReturnType<typeof computeFeeStatus>>>(new Map());
   const todayJoinedIds = todayJoined.map((m: any) => m.id).join(",");
   useEffect(() => {
-    if (!todayJoinedIds) { setPaidMemberIds(new Set()); return; }
+    if (!todayJoinedIds) { setFeeStatusByNewMember(new Map()); return; }
     const supabase = createClient();
+    const ids = todayJoinedIds.split(",");
     supabase
       .from("fee_payments")
-      .select("member_id")
+      .select("member_id, payment_type, balance_due, coverage_end, payment_date")
       .is("deleted_at", null)
-      .in("member_id", todayJoinedIds.split(","))
-      .then(({ data }) => setPaidMemberIds(new Set((data ?? []).map((p: any) => p.member_id))));
+      .in("member_id", ids)
+      .then(({ data }) => {
+        const byMember = new Map<string, { payment_type: string | null; balance_due: number | null; coverage_end: string | null; payment_date: string | null }[]>();
+        for (const row of (data ?? []) as any[]) {
+          const list = byMember.get(row.member_id) ?? [];
+          list.push(row);
+          byMember.set(row.member_id, list);
+        }
+        const result = new Map<string, ReturnType<typeof computeFeeStatus>>();
+        for (const m of todayJoined as any[]) {
+          result.set(m.id, computeFeeStatus(
+            {
+              admission_fee: m.admission_fee,
+              monthly_fee: m.monthly_fee,
+              training_fee: m.training_fee,
+              expiry_date: m.expiry_date,
+              family_pricing_decision: m.family_pricing_decision,
+              comment: m.comment,
+            },
+            byMember.get(m.id) ?? [],
+            todayStr
+          ));
+        }
+        setFeeStatusByNewMember(result);
+      });
   }, [todayJoinedIds]);
 
   return (
@@ -1164,16 +1191,25 @@ function DailySummaryReport({ data }: { data: any }) {
             </tr></thead>
             <tbody className="divide-y divide-[#F0F0EE]">
               {todayJoined.map((m: any) => {
-                const paid = paidMemberIds.has(m.id);
+                const result = feeStatusByNewMember.get(m.id);
+                const status = result?.status ?? "pending";
+                const colors: Record<string, string> = {
+                  paid: "bg-green-100 text-green-700", free: "bg-blue-100 text-blue-700",
+                  partial: "bg-amber-100 text-amber-700", pending: "bg-red-100 text-red-600",
+                };
+                const dot: Record<string, string> = {
+                  paid: "bg-green-500", free: "bg-blue-500", partial: "bg-amber-500", pending: "bg-red-500",
+                };
                 return (
                   <tr key={m.id}>
                     <td className="py-1.5 pr-3 font-medium text-[#1A1A16] text-xs">{m.full_name}</td>
                     <td className="py-1.5 pr-3 text-xs font-mono text-[#F06418]">{m.membership_no}</td>
                     <td className="py-1.5 pr-3 text-xs text-[#4A4A44]">{m.packages?.name ?? "—"}</td>
                     <td className="py-1.5 pr-3">
-                      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${paid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${paid ? "bg-green-500" : "bg-red-500"}`} />
-                        {paid ? "Paid" : "Pending"}
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${colors[status]}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${dot[status]}`} />
+                        {FEE_STATUS_LABELS[status as keyof typeof FEE_STATUS_LABELS]}
+                        {(status === "partial" || status === "pending") && result && result.outstandingAmount > 0 && ` · ${formatPKR(result.outstandingAmount)}`}
                       </span>
                     </td>
                   </tr>

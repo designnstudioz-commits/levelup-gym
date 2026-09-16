@@ -16,6 +16,7 @@ import { Modal } from "@/components/ui/Modal";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, fetchAllRows } from "@/lib/utils";
+import { computeFeeStatus, FEE_STATUS_LABELS, type FeeStatusResult, type FeeStatusPaymentInput } from "@/lib/feeStatus";
 import type { Member } from "@/types/database";
 
 type MemberWithJoins = Member & {
@@ -56,6 +57,7 @@ function todayStr(): string {
 export default function MembersPage() {
   const router = useRouter();
   const [members, setMembers]   = useState<MemberWithJoins[]>([]);
+  const [feeStatusByMember, setFeeStatusByMember] = useState<Map<string, FeeStatusResult>>(new Map());
   const [loading, setLoading]   = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("list");
   const [allCounts, setAllCounts] = useState<{ status: string | null; gender: string | null; deleted_at: string | null; expiry_date: string | null }[]>([]);
@@ -142,25 +144,55 @@ export default function MembersPage() {
 
       setMembers(data);
       setAllCounts(countData);
+
+      // Fee Status (Paid/Partial/Pending/Free) needs real financial
+      // evidence, not just expiry_date — see src/lib/feeStatus.ts for why
+      // (the Mansoor incident: expiry_date can be set at registration with
+      // zero fee_payments ever landing, which the old expiry-date-only
+      // check showed as "Paid"). One batched query for every currently
+      // loaded member's admission/recurring payment rows, chunked to stay
+      // well under any URL-length limit on a large roster — never one
+      // query per member.
+      const memberIds = data.map((m) => m.id);
+      const CHUNK = 200;
+      const paymentRows: FeeStatusPaymentInput[] & { member_id: string }[] = [] as any;
+      for (let i = 0; i < memberIds.length; i += CHUNK) {
+        const chunk = memberIds.slice(i, i + CHUNK);
+        const { data: rows } = await supabase
+          .from("fee_payments")
+          .select("member_id, payment_type, balance_due, coverage_end, payment_date")
+          .in("member_id", chunk)
+          .is("deleted_at", null);
+        if (rows) paymentRows.push(...(rows as any));
+      }
+      const paymentsByMember = new Map<string, FeeStatusPaymentInput[]>();
+      for (const row of paymentRows) {
+        const list = paymentsByMember.get((row as any).member_id) ?? [];
+        list.push(row);
+        paymentsByMember.set((row as any).member_id, list);
+      }
+      const today = todayStr();
+      const statusMap = new Map<string, FeeStatusResult>();
+      for (const m of data) {
+        statusMap.set(m.id, computeFeeStatus(
+          {
+            admission_fee: m.admission_fee,
+            monthly_fee: m.monthly_fee,
+            training_fee: (m as any).training_fee,
+            expiry_date: m.expiry_date,
+            family_pricing_decision: (m as any).family_pricing_decision,
+            comment: (m as any).comment,
+          },
+          paymentsByMember.get(m.id) ?? [],
+          today
+        ));
+      }
+      setFeeStatusByMember(statusMap);
     } catch (err) {
       console.error("Failed to fetch members:", err);
     }
     setLoading(false);
   }, [statusFilter, genderFilter]);
-
-  /** A member's fee is current if their stored expiry_date hasn't passed yet.
-   *  expiry_date is the single source of truth kept in sync on every fee
-   *  collection by extendExpiryDate() (registration, member-profile Collect
-   *  Fee, Fees page Quick Collect) — deriving this separately from raw
-   *  payment_date history caused it to disagree with the Status/Expiry badge
-   *  whenever a member's first-ever recurring payment was made late (after
-   *  joining_date, still within the same billing period): it would credit a
-   *  fresh period starting from the late payment date instead of recognizing
-   *  the period had already started at joining_date. */
-  const isFeeCurrent = useCallback((m: MemberWithJoins): boolean => {
-    if (!m.expiry_date) return false;
-    return m.expiry_date >= todayStr();
-  }, []);
 
   useEffect(() => { fetchMembers(); }, [fetchMembers]);
 
@@ -175,8 +207,12 @@ export default function MembersPage() {
         if (days === null || days > 30 || days < 0) return false;
       }
       if (newOnly && !isNewMember(m)) return false;
-      if (feeFilter === "paid"    && !isFeeCurrent(m)) return false;
-      if (feeFilter === "pending" &&  isFeeCurrent(m)) return false;
+      if (feeFilter !== "all") {
+        const status = feeStatusByMember.get(m.id)?.status ?? "pending";
+        const settled = status === "paid" || status === "free";
+        if (feeFilter === "paid" && !settled) return false;
+        if (feeFilter === "pending" && settled) return false;
+      }
       if (!search) return true;
       const q = search.toLowerCase();
       return (
@@ -502,14 +538,14 @@ export default function MembersPage() {
             <p className="text-xs text-[#7A7A72] mt-1">Try adjusting your filters</p>
           </div>
         ) : viewMode === "list" ? (
-          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} isFeeCurrent={isFeeCurrent}
+          <MembersTable members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} feeStatusByMember={feeStatusByMember}
             selectedIds={selectedIds} onToggleSelect={toggleSelect} allSelected={allFilteredSelected} onToggleSelectAll={toggleSelectAll}
             sortKey={sortKey} sortDir={sortDir} onSort={handleSort} />
         ) : viewMode === "grid" ? (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} isFeeCurrent={isFeeCurrent}
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={false} feeStatusByMember={feeStatusByMember}
             selectedIds={selectedIds} onToggleSelect={toggleSelect} />
         ) : (
-          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} isFeeCurrent={isFeeCurrent}
+          <MembersGrid members={paginated} onNavigate={(id) => router.push(`/dashboard/members/${id}`)} compact={true} feeStatusByMember={feeStatusByMember}
             selectedIds={selectedIds} onToggleSelect={toggleSelect} />
         )}
 
@@ -610,8 +646,36 @@ function PageNumbers({ current, total, onSelect }: { current: number; total: num
 }
 
 // ── List (Table) View ────────────────────────────────────────────────
-function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggleSelect, allSelected, onToggleSelectAll, sortKey, sortDir, onSort }: {
-  members: MemberWithJoins[]; onNavigate: (id: string) => void; isFeeCurrent: (m: MemberWithJoins) => boolean;
+/** Colors/label for a Fee Status result — shared by the table and grid
+ *  views so there's exactly one rendering of the centralized calculation,
+ *  not two that could drift apart. Partial/Pending show the outstanding
+ *  amount, since that's what reception actually needs at a glance. */
+function FeeStatusBadge({ result, compact }: { result: FeeStatusResult | undefined; compact?: boolean }) {
+  const status = result?.status ?? "pending";
+  const colors: Record<string, string> = {
+    paid: "bg-green-100 text-green-700",
+    free: "bg-blue-100 text-blue-700",
+    partial: "bg-amber-100 text-amber-700",
+    pending: "bg-red-100 text-red-600",
+  };
+  const dot: Record<string, string> = {
+    paid: "bg-green-500", free: "bg-blue-500", partial: "bg-amber-500", pending: "bg-red-500",
+  };
+  return (
+    <span className={`inline-flex ${compact ? "flex-col items-start" : "items-center"} gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${colors[status]}`}>
+      <span className="inline-flex items-center gap-1">
+        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot[status]}`} />
+        {FEE_STATUS_LABELS[status]}
+      </span>
+      {(status === "partial" || status === "pending") && result && result.outstandingAmount > 0 && (
+        <span className="font-normal opacity-90">{formatPKR(result.outstandingAmount)} due</span>
+      )}
+    </span>
+  );
+}
+
+function MembersTable({ members, onNavigate, feeStatusByMember, selectedIds, onToggleSelect, allSelected, onToggleSelectAll, sortKey, sortDir, onSort }: {
+  members: MemberWithJoins[]; onNavigate: (id: string) => void; feeStatusByMember: Map<string, FeeStatusResult>;
   selectedIds: Set<string>; onToggleSelect: (id: string) => void; allSelected: boolean; onToggleSelectAll: () => void;
   sortKey: string; sortDir: "asc" | "desc"; onSort: (key: string) => void;
 }) {
@@ -639,7 +703,7 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
             {members.map((m) => {
               const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
               const pkgColor = (m as any).packages?.color ?? "#F06418";
-              const feePaid  = isFeeCurrent(m);
+              const feeStatus = feeStatusByMember.get(m.id);
               const isNew    = isNewMember(m);
               return (
                 <tr key={m.id} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer" onClick={() => onNavigate(m.id)}>
@@ -677,10 +741,7 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
                   <td className="px-4 py-3 text-sm text-[#4A4A44]">{m.phone}</td>
                   <td className="px-4 py-3 text-sm text-[#4A4A44]">{m.expiry_date ? formatDate(m.expiry_date) : "—"}</td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full ${feePaid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${feePaid ? "bg-green-500" : "bg-red-500"}`} />
-                      {feePaid ? "Paid" : "Pending"}
-                    </span>
+                    <FeeStatusBadge result={feeStatus} compact />
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -707,8 +768,8 @@ function MembersTable({ members, onNavigate, isFeeCurrent, selectedIds, onToggle
 }
 
 // ── Grid / Compact View ─────────────────────────────────────────────
-function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, onToggleSelect }: {
-  members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; isFeeCurrent: (m: MemberWithJoins) => boolean;
+function MembersGrid({ members, onNavigate, compact, feeStatusByMember, selectedIds, onToggleSelect }: {
+  members: MemberWithJoins[]; onNavigate: (id: string) => void; compact: boolean; feeStatusByMember: Map<string, FeeStatusResult>;
   selectedIds: Set<string>; onToggleSelect: (id: string) => void;
 }) {
   const cols = compact
@@ -721,7 +782,7 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, 
         const { label, variant } = getMemberStatusDisplay(m.status, m.expiry_date);
         const days = daysUntilExpiry(m.expiry_date);
         const pkgColor = (m as any).packages?.color ?? "#F06418";
-        const feePaid  = isFeeCurrent(m);
+        const feeStatus = feeStatusByMember.get(m.id);
         const isNew    = isNewMember(m);
 
         return (
@@ -783,10 +844,7 @@ function MembersGrid({ members, onNavigate, compact, isFeeCurrent, selectedIds, 
                   <Badge variant={variant}>{label}</Badge>
                   {m.access_blocked_at && <Badge variant="overdue">Blocked</Badge>}
                   {m.access_exempt && <Badge variant="active">Exempt</Badge>}
-                  <span className={`inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${feePaid ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"}`}>
-                    <span className={`w-1.5 h-1.5 rounded-full ${feePaid ? "bg-green-500" : "bg-red-500"}`} />
-                    {feePaid ? "Paid" : "Pending"}
-                  </span>
+                  <FeeStatusBadge result={feeStatus} />
                 </div>
                 {!compact && <ArrowRight className="w-3.5 h-3.5 text-[#7A7A72] group-hover:text-[#F06418] transition-colors" />}
               </div>
