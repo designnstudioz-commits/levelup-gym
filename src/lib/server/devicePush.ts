@@ -73,6 +73,31 @@ async function waitForAck(
   return { ok: false, pending: true, error: "device has not acknowledged the command yet" };
 }
 
+// Per-device-serial mutex guarding the read-max/insert critical section
+// below. Only 3 physical devices exist, shared by every member — the
+// access-sweep cron processes many members concurrently (see its own
+// header comment), so without this, two members enrolled on the same
+// device racing to read the same "current max command_id" both compute
+// the same next id and only one insert wins, the other fails outright.
+// Confirmed live 2026-09-16: a 40-member sweep batch lost 36 of 40 to
+// this exact race. Module-level state is fine here — it only needs to
+// hold for the lifetime of one function invocation processing one batch,
+// never needs to survive across invocations/instances.
+const deviceMutexes = new Map<string, Promise<void>>();
+
+async function withDeviceLock<T>(deviceSerial: string, fn: () => Promise<T>): Promise<T> {
+  const previous = deviceMutexes.get(deviceSerial) ?? Promise.resolve();
+  let release: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  deviceMutexes.set(deviceSerial, previous.then(() => gate));
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release!();
+  }
+}
+
 // Queues one device_commands row (retrying on command_id collision exactly
 // like /api/devices/push-user — command_id is count(*)+1 scoped to
 // device_serial), then waits for the device to actually confirm it before
@@ -90,42 +115,53 @@ export async function pushAccessCommand(
   opts?: { ackTimeoutMs?: number; pollIntervalMs?: number }
 ): Promise<{ ok: true; commandId: number } | { ok: false; pending: boolean; error: string }> {
   const command = buildUserInfoCommand(params.uid, params.name, params.access);
-  let commandId: number | null = null;
-  let lastError: { code?: string; message: string } | null = null;
 
-  for (let attempt = 0; attempt < 3; attempt++) {
-    // MAX(command_id)+1, not count(*)+1 — a row count silently breaks the
-    // moment any gap exists in the sequence (a deleted duplicate, a failed
-    // insert that still consumed an id elsewhere), permanently colliding on
-    // the same number every retry. Confirmed live 2026-08-29: Male Door had
-    // drifted to a 100,000+ gap between its row count and real max id.
-    const { data: maxRow } = await supabase
-      .from("device_commands")
-      .select("command_id")
-      .eq("device_serial", params.device_serial)
-      .order("command_id", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+  // Only the allocate+insert step needs the lock — the (much longer) ack
+  // wait below stays outside it, so other members' pushes to this same
+  // device can queue their own insert the instant this one lands, rather
+  // than blocking behind a 15s ack wait. The callback returns its result
+  // rather than assigning outer variables — TS can't reliably narrow a
+  // closure-mutated outer `let` across the await boundary here.
+  const { commandId, lastError } = await withDeviceLock(params.device_serial, async () => {
+    let commandId: number | null = null;
+    let lastError: { code?: string; message: string } | null = null;
 
-    commandId = (maxRow?.command_id ?? 0) + 1;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      // MAX(command_id)+1, not count(*)+1 — a row count silently breaks the
+      // moment any gap exists in the sequence (a deleted duplicate, a failed
+      // insert that still consumed an id elsewhere), permanently colliding on
+      // the same number every retry. Confirmed live 2026-08-29: Male Door had
+      // drifted to a 100,000+ gap between its row count and real max id.
+      const { data: maxRow } = await supabase
+        .from("device_commands")
+        .select("command_id")
+        .eq("device_serial", params.device_serial)
+        .order("command_id", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    const { error } = await supabase.from("device_commands").insert({
-      device_serial: params.device_serial,
-      command_id: commandId,
-      command,
-      // Distinct from "push_user" so these don't show up in
-      // DeviceEnrollmentsField's enrollment-push-status UI, which filters
-      // specifically on command_type: "push_user".
-      command_type: params.access === "block" ? "block_user" : "unblock_user",
-      member_id: params.member_id ?? null,
-      created_by: params.created_by ?? null,
-      status: "pending",
-    });
+      commandId = (maxRow?.command_id ?? 0) + 1;
 
-    if (!error) { lastError = null; break; }
-    lastError = error;
-    if (error.code !== "23505") break; // not a unique-violation — don't retry
-  }
+      const { error } = await supabase.from("device_commands").insert({
+        device_serial: params.device_serial,
+        command_id: commandId,
+        command,
+        // Distinct from "push_user" so these don't show up in
+        // DeviceEnrollmentsField's enrollment-push-status UI, which filters
+        // specifically on command_type: "push_user".
+        command_type: params.access === "block" ? "block_user" : "unblock_user",
+        member_id: params.member_id ?? null,
+        created_by: params.created_by ?? null,
+        status: "pending",
+      });
+
+      if (!error) { lastError = null; break; }
+      lastError = error;
+      if (error.code !== "23505") break; // not a unique-violation — don't retry
+    }
+
+    return { commandId, lastError };
+  });
 
   if (lastError) return { ok: false, pending: false, error: lastError.message };
 
