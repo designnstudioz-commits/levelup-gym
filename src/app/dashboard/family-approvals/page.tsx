@@ -10,6 +10,7 @@ import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { formatDate, timeAgo, cn } from "@/lib/utils";
 import type { Member } from "@/types/database";
 
@@ -132,13 +133,7 @@ export default function FamilyApprovalsPage() {
               {pending.map((m) => (
                 <div key={m.id} className="px-5 py-4 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                      {m.photo_url ? (
-                        <img src={m.photo_url} alt="" className="w-10 h-10 object-cover" />
-                      ) : (
-                        <span className="text-[#F06418] text-sm font-bold">{m.full_name.charAt(0)}</span>
-                      )}
-                    </div>
+                    <MemberAvatar photoUrl={m.photo_url} name={m.full_name} membershipNo={m.membership_no} size={56} memberId={m.id} />
                     <div>
                       <p className="text-sm font-semibold text-[#1A1A16]">{m.full_name}</p>
                       <p className="text-xs text-[#7A7A72]">

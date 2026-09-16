@@ -3,6 +3,8 @@ import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { requirePosUser, logPosActivity } from "@/lib/pos/auth";
 import { POS_HEALTHBOX_ROLES, POS_ADMIN_ROLES } from "@/lib/pos/permissions";
 import { EDITABLE_STATUSES } from "@/lib/pos/healthboxExpenses";
+import { sniffImageType, sniffIsPdf, generateStoragePath } from "@/lib/uploadSecurity";
+import { processDocumentImage, ImageProcessingError } from "@/lib/imageProcessing";
 
 function getServiceClient() {
   return createServiceClient(
@@ -11,7 +13,11 @@ function getServiceClient() {
   );
 }
 
-const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+// Source cap, not stored size. A receipt is a financial document — gently
+// processed like other documents (see /api/upload/document), never
+// squeezed to a target byte size, so a large well-lit photo of a receipt
+// still needs headroom on the way in.
+const MAX_SIZE = 20 * 1024 * 1024;
 
 /** Uploads a receipt/proof file to the PRIVATE pos-healthbox-receipts
  *  bucket and links it to the expense. Never returns a public URL — the
@@ -43,13 +49,38 @@ export async function POST(
   const replace = formData?.get("replace") === "true";
 
   if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
-  if (!ALLOWED_TYPES.includes(file.type)) return NextResponse.json({ error: "Only JPEG, PNG, WebP or PDF receipts are allowed" }, { status: 400 });
-  if (file.size > 5 * 1024 * 1024) return NextResponse.json({ error: "File must be under 5 MB" }, { status: 400 });
+  if (file.size === 0) return NextResponse.json({ error: "File is empty" }, { status: 400 });
+  if (file.size > MAX_SIZE) return NextResponse.json({ error: "File must be under 20 MB" }, { status: 400 });
 
-  const ext = file.name.split(".").pop() ?? "jpg";
-  const path = `expenses/${id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const sniffedImage = await sniffImageType(file);
+  const isPdf = sniffedImage ? false : await sniffIsPdf(file);
+  if (!sniffedImage && !isPdf) {
+    return NextResponse.json({ error: "Only JPEG, PNG, WebP or PDF receipts are allowed" }, { status: 400 });
+  }
 
-  const { error: uploadError } = await admin.storage.from("pos-healthbox-receipts").upload(path, file, { contentType: file.type, upsert: false });
+  let uploadBody: Buffer | File = file;
+  let ext = sniffedImage ? "webp" : "pdf";
+  let contentType = sniffedImage ? "image/webp" : "application/pdf";
+
+  if (sniffedImage) {
+    const original = Buffer.from(await file.arrayBuffer());
+    try {
+      const result = await processDocumentImage(original);
+      uploadBody = result.buffer;
+      ext = result.ext;
+      contentType = result.contentType;
+    } catch (err) {
+      if (err instanceof ImageProcessingError) {
+        console.error("[HealthBox receipt upload] processing failed", err);
+        return NextResponse.json({ error: "This file could not be processed as an image. Please try a different file." }, { status: 400 });
+      }
+      throw err;
+    }
+  }
+
+  const path = generateStoragePath(`expenses/${id}`, ext);
+
+  const { error: uploadError } = await admin.storage.from("pos-healthbox-receipts").upload(path, uploadBody, { contentType, upsert: false });
   if (uploadError) {
     console.error("[HealthBox receipt upload]", uploadError);
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });

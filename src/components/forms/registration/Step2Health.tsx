@@ -162,7 +162,7 @@ export function Step2Health({ form }: Step2Props) {
           Supporting Documents <span className="text-[#7A7A72] font-normal normal-case">(Optional)</span>
         </h3>
         <p className="text-[11px] text-[#7A7A72] mb-3">
-          Upload ID card, medical certificates, vaccination records, or other relevant documents. PDF or image files up to 5 MB each.
+          Upload ID card, medical certificates, vaccination records, or other relevant documents. PDF or image files up to 20 MB each.
         </p>
 
         {/* Uploaded files */}

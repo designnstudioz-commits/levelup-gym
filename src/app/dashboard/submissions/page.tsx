@@ -21,6 +21,7 @@ import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { Input } from "@/components/ui/Input";
 import { formatDate, timeAgo, formatPKR } from "@/lib/utils";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
@@ -355,15 +356,7 @@ export default function SubmissionsPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0">
-                            {sub.photo_url ? (
-                              <img src={sub.photo_url} alt="" className="w-8 h-8 rounded-full object-cover" />
-                            ) : (
-                              <span className="text-[#F06418] text-xs font-bold">
-                                {sub.full_name.charAt(0)}
-                              </span>
-                            )}
-                          </div>
+                          <MemberAvatar photoUrl={sub.photo_url} name={sub.full_name} size={56} />
                           <div>
                             <p className="text-sm font-semibold text-[#1A1A16]">{sub.full_name}</p>
                             <p className="text-xs text-[#7A7A72]">{sub.gender ?? "—"}</p>
@@ -457,13 +450,12 @@ export default function SubmissionsPage() {
           <div className="p-5 space-y-5">
             {/* Header info */}
             <div className="flex items-center gap-4 pb-4 border-b border-[#E4E4DE]">
-              <div className="w-14 h-14 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0">
-                {viewSubmission.photo_url ? (
-                  <img src={viewSubmission.photo_url} alt="" className="w-14 h-14 rounded-full object-cover" />
-                ) : (
-                  <User className="w-6 h-6 text-[#F06418]" />
-                )}
-              </div>
+              <MemberAvatar
+                photoUrl={viewSubmission.photo_url}
+                name={viewSubmission.full_name}
+                size={88}
+                fallback={<User className="w-8 h-8 text-[#F06418]" />}
+              />
               <div>
                 <p className="text-lg font-bold text-[#1A1A16]">{viewSubmission.full_name}</p>
                 <p className="text-sm text-[#7A7A72]">{viewSubmission.phone} · {viewSubmission.gender}</p>

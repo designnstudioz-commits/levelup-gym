@@ -18,6 +18,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDateTime, isDeviceOnline, timeAgo, safeDateValue } from "@/lib/utils";
 import Link from "next/link";
@@ -512,13 +513,7 @@ export default function AttendancePage() {
                     return (
                       <Link key={m.member_id} href={`/dashboard/members/${m.member_id}`}>
                         <div className="px-5 py-3 flex items-center gap-3 hover:bg-[#F8F8F6] transition-colors">
-                          <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {m.photo_url ? (
-                              <img src={m.photo_url} alt="" className="w-8 h-8 object-cover" />
-                            ) : (
-                              <span className="text-[#F06418] text-xs font-bold">{m.full_name.charAt(0)}</span>
-                            )}
-                          </div>
+                          <MemberAvatar photoUrl={m.photo_url} name={m.full_name} membershipNo={m.membership_no} size={72} memberId={m.member_id} />
                           <div className="flex-1 min-w-0">
                             <p className="text-sm font-semibold text-[#1A1A16] truncate">{m.full_name}</p>
                             <p className="text-xs text-[#7A7A72]">{m.membership_no}</p>
@@ -824,13 +819,7 @@ function AttendanceTable({ records, getDevice }: { records: AttendanceRow[]; get
               <tr key={r.id} className="hover:bg-[#F8F8F6] transition-colors">
                 <td className="px-5 py-3">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                      {r.member?.photo_url ? (
-                        <img src={r.member.photo_url} alt="" className="w-8 h-8 object-cover" />
-                      ) : (
-                        <span className="text-[#F06418] text-xs font-bold">{person?.full_name?.charAt(0) ?? "?"}</span>
-                      )}
-                    </div>
+                    <MemberAvatar photoUrl={r.member?.photo_url} name={person?.full_name ?? "?"} membershipNo={r.member?.membership_no} size={56} memberId={r.member?.id} />
                     <div>
                       <p className="text-sm font-semibold text-[#1A1A16]">{person?.full_name ?? "Unknown"}</p>
                       <p className="text-xs text-[#7A7A72]">
@@ -900,13 +889,7 @@ function AttendanceCompact({ records, getDevice }: { records: AttendanceRow[]; g
             <div className="absolute top-0 left-0 w-1 h-full rounded-l-xl" style={{ backgroundColor: accent }} />
             <div className="pl-2">
               <div className="flex items-center gap-2 mb-1.5">
-                <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                  {r.member?.photo_url ? (
-                    <img src={r.member.photo_url} alt="" className="w-7 h-7 object-cover" />
-                  ) : (
-                    <span className="text-[#F06418] text-[10px] font-bold">{person?.full_name?.charAt(0) ?? "?"}</span>
-                  )}
-                </div>
+                <MemberAvatar photoUrl={r.member?.photo_url} name={person?.full_name ?? "?"} membershipNo={r.member?.membership_no} size={44} memberId={r.member?.id} />
                 <p className="text-xs font-semibold text-[#1A1A16] truncate">{person?.full_name ?? "Unknown"}</p>
               </div>
               <div className="flex items-center justify-between">

@@ -467,6 +467,22 @@ CREATE TABLE sms_log (
 8. **All forms** use React Hook Form + Zod validation
 9. **No hard deletes anywhere** — ever
 10. **Every user action** must create a row in `activity_logs`
+11. **Supabase Storage deletion rule (added 2026-09-11, after a real incident):**
+    An overly broad cleanup script deleted 45 real members' profile photos
+    from the `member-photos` bucket, permanently and unrecoverably — it
+    listed the "50 most recently created" objects and filtered by a
+    filename-timestamp prefix, which matched real member photos as readily
+    as test files. **No Storage deletion in this project may ever be
+    scoped by: filename prefix, timestamp prefix, "most recent N" listing,
+    or any other broad/heuristic bucket match.** Every deletion must
+    target an exact, explicitly-known object path (or an explicit list of
+    exact paths) that has been individually verified — e.g. "this object
+    path, because it's the one this exact upload/test just created and I
+    have its literal returned path in hand" — never "objects that look
+    like they might be test data." Test/QA cleanup scripts must capture
+    and delete only the exact path(s) their own run created, never derive
+    a deletion target from a `list()`/query result filtered by a pattern.
+    This bucket has no versioning or trash — any mistake here is permanent.
 
 ---
 

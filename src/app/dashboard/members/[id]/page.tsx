@@ -17,6 +17,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { cn, formatDate, formatDateTime, formatPKR, getMemberStatusDisplay, daysUntilExpiry, formatCnic, formatPhone, generateReceiptNo, generateMembershipNo, addMonthsToDateStr, nextPeriodStart, computeCoverageEnd, applyCoverageToExpiry, describeCoveredPeriod, MONTHS_PRESET, RECURRING_FEE_TYPES, COMMISSION_ELIGIBLE_TYPES, isPTPackage, buildCommissionPayload, safeDateValue } from "@/lib/utils";
@@ -251,7 +252,7 @@ export default function MemberDetailPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.type.startsWith("image/")) { toast.error("Only images allowed"); return; }
-    if (file.size > 5 * 1024 * 1024) { toast.error("Image must be under 5 MB"); return; }
+    if (file.size > 20 * 1024 * 1024) { toast.error("Image must be under 20 MB"); return; }
     setPhotoUploading(true);
     const preview = URL.createObjectURL(file);
     setEditPhotoUrl(preview);
@@ -1288,18 +1289,15 @@ export default function MemberDetailPage() {
           {/* Profile card */}
           <Card className="lg:col-span-1">
             <div className="flex flex-col items-center text-center pb-4 border-b border-[#E4E4DE] mb-4">
-              <div className="w-20 h-20 rounded-full bg-[#FEF0E8] flex items-center justify-center mb-3 overflow-hidden">
-                {member.photo_url ? (
-                  <img
-                    src={member.photo_url}
-                    alt=""
-                    className="w-20 h-20 object-cover"
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                  />
-                ) : (
-                  <User className="w-9 h-9 text-[#F06418]" />
-                )}
-              </div>
+              <MemberAvatar
+                photoUrl={member.photo_url}
+                name={member.full_name}
+                membershipNo={member.membership_no}
+                memberId={member.id}
+                size={112}
+                className="mb-3"
+                fallback={<User className="w-10 h-10 text-[#F06418]" />}
+              />
               <h2 className="text-lg font-bold text-[#1A1A16]">{member.full_name}</h2>
               {member.secondary_name && (
                 <p className="text-sm text-[#7A7A72]">S/o {member.secondary_name}</p>
@@ -2072,7 +2070,7 @@ export default function MemberDetailPage() {
                   </button>
                 )}
               </div>
-              <p className="text-xs text-[#7A7A72]">JPG, PNG or WEBP · Max 5 MB</p>
+              <p className="text-xs text-[#7A7A72]">JPG, PNG or WEBP · Max 20 MB (auto-optimized)</p>
             </div>
             <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={handleEditPhotoChange} />
           </div>

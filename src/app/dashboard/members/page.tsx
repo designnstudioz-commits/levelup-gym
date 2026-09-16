@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { ViewToggle, type ViewMode } from "@/components/ui/ViewToggle";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { SortableTh, useSortToggle, compareValues } from "@/components/ui/SortableTh";
 import { formatDate, formatPKR, getMemberStatusDisplay, daysUntilExpiry, fetchAllRows } from "@/lib/utils";
 import { computeFeeStatus, FEE_STATUS_LABELS, type FeeStatusResult, type FeeStatusPaymentInput } from "@/lib/feeStatus";
@@ -712,11 +713,7 @@ function MembersTable({ members, onNavigate, feeStatusByMember, selectedIds, onT
                   </td>
                   <td className="px-5 py-3">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-8 h-8 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                        {m.photo_url ? <img src={m.photo_url} alt="" className="w-8 h-8 object-cover" /> : (
-                          <span className="text-[#F06418] text-xs font-bold">{m.full_name.charAt(0)}</span>
-                        )}
-                      </div>
+                      <MemberAvatar photoUrl={m.photo_url} name={m.full_name} membershipNo={m.membership_no} size={56} memberId={m.id} />
                       <div>
                         <p className="text-sm font-semibold text-[#1A1A16] flex items-center gap-1.5">
                           {m.full_name}
@@ -801,11 +798,7 @@ function MembersGrid({ members, onNavigate, compact, feeStatusByMember, selected
             <div className={compact ? "p-3" : "p-4"}>
               {/* Avatar + name */}
               <div className="flex items-center gap-2.5 mb-3">
-                <div className="w-9 h-9 rounded-full bg-[#FEF0E8] flex items-center justify-center flex-shrink-0 overflow-hidden">
-                  {m.photo_url ? <img src={m.photo_url} alt="" className="w-9 h-9 object-cover" /> : (
-                    <span className="text-[#F06418] text-sm font-bold">{m.full_name.charAt(0)}</span>
-                  )}
-                </div>
+                <MemberAvatar photoUrl={m.photo_url} name={m.full_name} membershipNo={m.membership_no} size={60} memberId={m.id} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <p className={`font-bold text-[#1A1A16] truncate group-hover:text-[#F06418] transition-colors ${compact ? "text-xs" : "text-sm"}`}>{m.full_name}</p>

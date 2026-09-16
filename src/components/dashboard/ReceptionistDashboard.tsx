@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
+import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { formatDate, formatPKR, daysUntilExpiry, isDeviceOnline, safeDateValue } from "@/lib/utils";
 
 // ── Shared types ────────────────────────────────────────────────────
@@ -330,9 +331,7 @@ function GlobalSearch({ balanceByMember, lastVisitByMember }: {
                   const lastVisit = lastVisitByMember.get(m.id);
                   return (
                     <div key={m.id} className="px-5 py-3.5 flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] font-bold flex-shrink-0 overflow-hidden">
-                        {m.photo_url ? <img src={m.photo_url} alt="" className="w-full h-full object-cover" /> : m.full_name.charAt(0)}
-                      </div>
+                      <MemberAvatar photoUrl={m.photo_url} name={m.full_name} membershipNo={m.membership_no} size={76} memberId={m.id} />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className="text-sm font-semibold text-[#1A1A16] truncate">{m.full_name}</p>

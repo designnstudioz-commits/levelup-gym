@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import {
-  sniffImageType, sniffIsPdf, IMAGE_EXTENSION, checkRateLimit, clientIpFrom, generateStoragePath,
+  sniffImageType, sniffIsPdf, checkRateLimit, clientIpFrom, generateStoragePath,
 } from "@/lib/uploadSecurity";
+import { processDocumentImage, ImageProcessingError } from "@/lib/imageProcessing";
 
 function getServiceClient() {
   return createClient(
@@ -11,7 +12,11 @@ function getServiceClient() {
   );
 }
 
-const MAX_SIZE = 5 * 1024 * 1024;
+// Same reasoning as /api/upload/photo: this is a SOURCE size cap, not the
+// stored size — image documents get gently downsized/re-encoded, PDFs pass
+// through untouched. 20MB accommodates a real phone photo of an ID card
+// or a multi-page scanned PDF without rejecting the user.
+const MAX_SIZE = 20 * 1024 * 1024;
 
 // Reachable anonymously — public registration's document step (ID card,
 // medical certificates) uploads before any account exists, so this cannot
@@ -40,7 +45,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (file.size > MAX_SIZE) {
-      return NextResponse.json({ error: "File must be under 5 MB" }, { status: 400 });
+      return NextResponse.json({ error: "File must be under 20 MB" }, { status: 400 });
     }
 
     const sniffedImage = await sniffImageType(file);
@@ -50,15 +55,40 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Only PDF, JPEG, PNG, WEBP or HEIC files are allowed" }, { status: 400 });
     }
 
-    const ext = sniffedImage ? IMAGE_EXTENSION[sniffedImage] : "pdf";
-    const contentType = sniffedImage ? `image/${sniffedImage === "jpeg" ? "jpeg" : sniffedImage}` : "application/pdf";
+    // PDFs pass through completely untouched — no reason to transform
+    // them, and text readability matters more than file size for
+    // documents in general. Image documents (photographed CNIC/ID/medical
+    // paperwork) get EXIF-orientation-corrected and only down-scaled if
+    // they're larger than needed for readable text — a much gentler pass
+    // than the profile-photo pipeline, with no target-byte-size squeeze.
+    // A genuinely undecodable image is REJECTED, not stored as-is — a
+    // corrupt file must never be accepted as if it were a valid document.
+    let uploadBody: Buffer | File = file;
+    let ext = sniffedImage ? "webp" : "pdf";
+    let contentType = sniffedImage ? "image/webp" : "application/pdf";
+
+    if (sniffedImage) {
+      const original = Buffer.from(await file.arrayBuffer());
+      try {
+        const result = await processDocumentImage(original);
+        uploadBody = result.buffer;
+        ext = result.ext;
+        contentType = result.contentType;
+      } catch (err) {
+        if (err instanceof ImageProcessingError) {
+          console.error("[Document Upload Error] processing failed", err);
+          return NextResponse.json({ error: "This file could not be processed as an image. Please try a different file." }, { status: 400 });
+        }
+        throw err;
+      }
+    }
 
     const supabase = getServiceClient();
     const path = generateStoragePath("submissions", ext);
 
     const { error } = await supabase.storage
       .from("member-docs")
-      .upload(path, file, { contentType, upsert: false });
+      .upload(path, uploadBody, { contentType, upsert: false });
 
     if (error) {
       console.error("[Document Upload Error]", error);
