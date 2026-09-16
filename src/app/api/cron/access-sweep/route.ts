@@ -40,11 +40,32 @@ type SweepMember = { id: string; full_name: string; expiry_date: string | null; 
 //      whatever's left over rolls into tomorrow's run instead of being
 //      silently dropped. A backlog now shrinks toward zero across a few
 //      days instead of growing forever.
-// Member-level device pushes also moved from sequential (one member's
-// worth of ack-waiting, one at a time — the real reason batches had to be
-// kept tiny) to parallel (Promise.all, same pattern already used for a
-// single member's multiple devices), so a much larger batch still
-// completes within one function invocation.
+// Member-level device pushes are chunked (CHUNK_SIZE at a time, chunks run
+// sequentially) rather than either fully sequential (too slow to fit a
+// real backlog in one function invocation) or fully parallel (found live
+// 2026-09-16: pushing 40 members at once — most sharing this gym's 3
+// physical devices — delivered a burst of dozens of commands to each
+// device within seconds. The relay and command_id allocation both handled
+// that fine, but the devices themselves are small embedded ADMS terminals
+// that appear to choke processing a large burst: only a handful acked
+// before falling silent for many minutes despite staying online. A
+// same-day manual test confirmed small batches (5 at a time, with a real
+// gap for the device to actually catch up) succeeded reliably where one
+// big burst did not. Each chunk's own ack-wait (up to 15s per command)
+// already provides that gap without adding artificial sleep — lowered the
+// default per-run cap accordingly so a realistic daily delta (historically
+// 4-16 members) still clears in one run, comfortably inside maxDuration.
+const CHUNK_SIZE = 5;
+
+async function processInChunks(
+  members: SweepMember[],
+  handle: (m: SweepMember) => Promise<void>
+) {
+  for (let i = 0; i < members.length; i += CHUNK_SIZE) {
+    await Promise.all(members.slice(i, i + CHUNK_SIZE).map(handle));
+  }
+}
+
 export async function GET(req: NextRequest) {
   const authHeader = req.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -54,8 +75,12 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url);
   const dryRun = url.searchParams.get("dryRun") === "true" || process.env.ACCESS_SWEEP_LIVE !== "true";
   // Max NEW BLOCKS to apply in this one run — never an abort threshold.
-  // Unblocks are never capped (see header comment).
-  const maxBlocksPerRun = Number(process.env.ACCESS_SWEEP_MAX_CHANGES ?? 40);
+  // Unblocks are never capped (see header comment). Lowered from 40 to 20
+  // alongside the chunking above — 20 at CHUNK_SIZE=5 is 4 sequential
+  // rounds, each bounded by one ack-timeout (~15s worst case), comfortably
+  // inside maxDuration while still clearing several days worth of a
+  // normal backlog in a single run.
+  const maxBlocksPerRun = Number(process.env.ACCESS_SWEEP_MAX_CHANGES ?? 20);
 
   try {
     const admin = getServiceClient();
@@ -97,11 +122,7 @@ export async function GET(req: NextRequest) {
     const failures: { id: string; full_name: string; error: string }[] = [];
 
     if (!dryRun) {
-      // Members processed in parallel (each member's own devices were
-      // already parallel) — bounds this run's wall-clock time to roughly
-      // one ack-timeout regardless of batch size, instead of scaling
-      // linearly with member count.
-      await Promise.all(needsBlock.map(async (m) => {
+      await processInChunks(needsBlock, async (m) => {
         const results = await pushAccessToAllDevices(admin, m, "block", null);
         const allOk = results.length === 0 || results.every((r) => r.ok);
         if (allOk) {
@@ -122,9 +143,9 @@ export async function GET(req: NextRequest) {
         } else {
           failures.push({ id: m.id, full_name: m.full_name, error: results.find((r) => !r.ok)?.error ?? "push failed" });
         }
-      }));
+      });
 
-      await Promise.all(needsUnblock.map(async (m) => {
+      await processInChunks(needsUnblock, async (m) => {
         const results = await pushAccessToAllDevices(admin, m, "allow", null);
         const allOk = results.length === 0 || results.every((r) => r.ok);
         if (allOk) {
@@ -142,7 +163,7 @@ export async function GET(req: NextRequest) {
         } else {
           failures.push({ id: m.id, full_name: m.full_name, error: results.find((r) => !r.ok)?.error ?? "push failed" });
         }
-      }));
+      });
     }
 
     return NextResponse.json({
