@@ -65,9 +65,14 @@ export function MemberAvatar({ photoUrl, name, membershipNo, size, className, ro
   const initial = name?.trim()?.charAt(0)?.toUpperCase() || "?";
 
   // photoUrl can change between renders (e.g. a list refetch) — if it does,
-  // treat it as a fresh URL, not still-broken from a previous one.
-  if (photoUrl !== currentUrl && !uploading) {
-    setCurrentUrl(photoUrl ?? null);
+  // treat it as a fresh URL, not still-broken from a previous one. Compare
+  // against the SAME null-normalized value that's stored in state: an absent
+  // prop arrives as undefined (e.g. `r.member?.photo_url` on a staff row),
+  // which would otherwise never equal the stored null and re-set state on
+  // every render until React aborts with "Too many re-renders".
+  const nextUrl = photoUrl ?? null;
+  if (nextUrl !== currentUrl && !uploading) {
+    setCurrentUrl(nextUrl);
     if (broken) setBroken(false);
   }
 
