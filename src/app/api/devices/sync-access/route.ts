@@ -34,12 +34,39 @@ export async function POST(req: NextRequest) {
 
     if (!member) return NextResponse.json({ error: "Member not found" }, { status: 404 });
 
-    // Cheap no-op for the common case: nothing to restore.
-    if (!member.access_blocked_at) {
+    if (!shouldHaveDeviceAccess(member)) {
       return NextResponse.json({ changed: false });
     }
 
-    if (!shouldHaveDeviceAccess(member)) {
+    // access_blocked_at is not a reliable witness to what the doors actually
+    // hold. A block command can reach a terminal and be applied WITHOUT ever
+    // being acknowledged, in which case the flag was never set — confirmed
+    // live 2026-09-19, when 7 paid-up members were being denied at Male Door
+    // while every record said they had access. This route previously
+    // short-circuited on the null flag, so paying was the one moment that
+    // could have corrected them and it did nothing.
+    //
+    // So fall back to what each door was last TOLD, regardless of whether it
+    // answered. Deliberately counts unacked and retired commands: a command
+    // whose fate is unknown may well have been applied, and for someone who
+    // has just paid, wrongly re-asserting access is harmless while wrongly
+    // assuming it is a member turned away at the door.
+    let needsRestore = !!member.access_blocked_at;
+
+    if (!needsRestore) {
+      const { data: history } = await admin
+        .from("device_commands")
+        .select("device_serial, command_id, command_type")
+        .eq("member_id", member_id)
+        .in("command_type", ["block_user", "unblock_user"])
+        .order("command_id", { ascending: true });
+
+      const lastToldPerDevice = new Map<string, string>();
+      for (const c of history ?? []) lastToldPerDevice.set(c.device_serial, c.command_type);
+      needsRestore = [...lastToldPerDevice.values()].includes("block_user");
+    }
+
+    if (!needsRestore) {
       return NextResponse.json({ changed: false });
     }
 

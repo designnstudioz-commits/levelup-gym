@@ -39,9 +39,13 @@
   (measured over 1,305 acks) — the terminals are not slow and do not fall behind
   under load.
 - **NEVER hand a terminal more than one command in a single `/iclock/getrequest`
-  response.** It executes the first and **silently discards the rest** — no error, no
-  return code, no re-request — and because the handler has already flipped the whole
-  batch to `sent`, the discarded ones are never offered again and are lost forever.
+  response.** It acknowledges only the first — no error, no return code and no
+  re-request for the others — and because the handler has already flipped the whole
+  batch to `sent`, the unacknowledged ones are never offered again.
+  **Critically, "not acknowledged" does NOT mean "not applied."** Confirmed live
+  2026-09-19: 7 paid-up members were being denied entry at Male Door by block commands
+  that were never acked, so no record of the block existed anywhere. Treat an unacked
+  command as having an **unknown** outcome, never as a no-op.
   Measured over every command sent 2026-07-04 to 2026-09-19: single-command responses
   were answered 1066/1067; multi-command responses lost 400 commands across 231
   batches, and in every batch the survivor was the lowest-numbered command. This went
