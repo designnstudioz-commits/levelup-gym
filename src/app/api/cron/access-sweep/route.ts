@@ -55,7 +55,21 @@ type SweepMember = { id: string; full_name: string; expiry_date: string | null; 
 // already provides that gap without adding artificial sleep — lowered the
 // default per-run cap accordingly so a realistic daily delta (historically
 // 4-16 members) still clears in one run, comfortably inside maxDuration.
-const CHUNK_SIZE = 5;
+// ONE member at a time. Not for pacing — the terminals are fast (~1.1s to
+// confirm) and were never overloaded. It's because a member's push puts at
+// most one pending command on any given device, so processing members
+// strictly serially guarantees a device never has two pending commands to
+// hand over in the same response. That matters because a terminal given
+// several commands at once executes only the first and silently discards
+// the rest (see relay-service/server.js). The relay now sends one per poll
+// regardless, so this is redundant belt-and-braces — but it is what makes
+// this route correct on its own terms rather than dependent on the relay's
+// behaviour, and the cost is negligible at a realistic daily delta.
+//
+// Running out of maxDuration mid-run is harmless: nothing is lost, the
+// members already confirmed are recorded, and the next run resumes with
+// whoever is left.
+const CHUNK_SIZE = 1;
 
 async function processInChunks(
   members: SweepMember[],
