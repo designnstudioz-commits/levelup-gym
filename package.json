@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "check:doors": "node scripts/check-door-access.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
