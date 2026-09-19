@@ -70,6 +70,19 @@ A device counts "online" if `last_seen` is within the last 2 minutes
 (`isDeviceOnline()` in `src/lib/utils.ts`) — matches the device's own ~30s heartbeat
 with headroom for a missed beat.
 
+**Each terminal's Cloud Server Setting points at `136-115-7-81.sslip.io`, port 443,
+HTTPS on.** That hostname is **derived from the relay VM's public IP** (136.115.7.81)
+via sslip.io — there is no DNS record to update, the name *is* the address.
+
+> **⚠ The IP is load-bearing.** If the relay VM is rebuilt, migrated or loses its
+> reserved IP, the hostname changes and all three terminals keep polling the old one.
+> They get nothing, and **silently stop reporting attendance and applying access
+> changes** — no error surfaces anywhere in the app; the doors just stop obeying.
+> Recovery then requires physically walking to each of the three consoles and retyping
+> the address. Always reattach the same static IP instead.
+> `relay-service/provision-relay-vm.sh` checks for this and refuses to continue
+> unattended if the IP has moved.
+
 ## 3. Database tables
 
 - **`devices`** — `id, serial_no, name, location, status, last_seen, color, door_type, ip_address`
