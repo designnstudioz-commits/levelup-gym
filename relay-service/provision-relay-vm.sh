@@ -21,6 +21,13 @@ RELAY_USER="sitedes"
 RELAY_DIR="/home/${RELAY_USER}/relay-service"
 RELAY_PORT="3001"
 LETSENCRYPT_EMAIL="ceo_1085@levelupfitness.com.pk"
+
+# The device-facing hostname is DERIVED FROM THE PUBLIC IP (sslip.io), and
+# each terminal has it typed into its Cloud Server Setting. If a rebuilt VM
+# comes up on a different IP, every device must be reconfigured BY HAND at
+# its own console or it silently stops reporting. Keep the reserved static
+# IP across a rebuild if at all possible.
+EXPECTED_PUBLIC_IP="136.115.7.81"
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ $EUID -ne 0 ]]; then echo "Run with sudo." >&2; exit 1; fi
@@ -97,9 +104,42 @@ PUBLIC_IP="$(curl -s ifconfig.me)"
 SSLIP_HOST="${PUBLIC_IP//./-}.sslip.io"
 echo "public IP ${PUBLIC_IP} -> ${SSLIP_HOST}"
 
-# Proxies to the LOCAL relay, not to Vercel. The devices must never be sent
-# to Vercel (see header). client_max_body_size covers /iclock/fdata face
-# photo uploads, which are the only large bodies a terminal sends.
+if [[ -n "${EXPECTED_PUBLIC_IP}" && "${PUBLIC_IP}" != "${EXPECTED_PUBLIC_IP}" ]]; then
+  cat >&2 <<WARNEOF
+
+==================================================================
+*** PUBLIC IP HAS CHANGED — DEVICES WILL NOT RECONNECT ***
+  was: ${EXPECTED_PUBLIC_IP}  (devices expect ${EXPECTED_PUBLIC_IP//./-}.sslip.io)
+  now: ${PUBLIC_IP}           (this box will serve ${SSLIP_HOST})
+
+The terminals have the OLD hostname typed into their Cloud Server
+Setting. They will keep polling it, get nothing, and silently stop
+reporting attendance and applying access changes. Nothing in the app
+will show an error — the doors simply stop obeying.
+
+Either reattach the old static IP to this VM (strongly preferred), or
+walk to all three terminals and set:
+    Server Address: ${SSLIP_HOST}
+    Server Port:    443
+    Enable HTTPS:   ON
+Then update EXPECTED_PUBLIC_IP in this script.
+==================================================================
+
+WARNEOF
+  read -r -p "Continue anyway? [y/N] " reply </dev/tty || reply="n"
+  [[ "${reply}" =~ ^[Yy]$ ]] || { echo "Aborted."; exit 1; }
+fi
+
+# Proxies to the LOCAL relay, not to Vercel — the devices must never be sent
+# to Vercel (see header). certbot --redirect rewrites this below into the
+# same shape as the long-running production config: this block becomes a
+# 301 to https, plus a TLS vhost on 443 proxying to the same place.
+#
+# Headers match the production config verbatim rather than being "improved".
+# The one deliberate addition is client_max_body_size: production runs on
+# nginx's 1MB default, which is enough for the ATTLOG and command traffic
+# that matters but would reject a large /iclock/fdata face-photo upload with
+# a 413. Raising the ceiling can only accept more than production does.
 cat > /etc/nginx/sites-available/zkteco-relay <<NGINXEOF
 server {
     listen 80 default_server;
@@ -109,11 +149,8 @@ server {
 
     location / {
         proxy_pass http://127.0.0.1:${RELAY_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 120s;
     }
 }
 NGINXEOF
