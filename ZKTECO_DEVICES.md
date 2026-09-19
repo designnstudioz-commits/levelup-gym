@@ -434,6 +434,26 @@ directly, is normally done via a throwaway Node script in the repo root (parsing
 `.env.local`, using the service-role key) — see any of the session's `*_tmp.mjs`
 scripts for the pattern; always delete the script after use.
 
+### Rebuilding the relay VM from scratch
+
+Use **`relay-service/provision-relay-vm.sh`** (in the repo). Copy the `relay-service/`
+directory to the box and run it with sudo from inside that copy.
+
+> **⚠ `~/setup-zkteco-relay.sh` on the VM is STALE AND HARMFUL — do not run it.**
+> It predates the relay (written 2026-07-08; the relay landed 07-10) and configures
+> nginx to proxy device traffic to **`levelup-gym-liard.vercel.app`**. That is the one
+> configuration guaranteed not to work — Vercel's bot protection answers the terminals
+> with a JS challenge they cannot solve, which is the whole reason this VM exists. It
+> installs no Node, no `server.js` and no systemd unit. Rebuilding from it leaves the
+> gym with no working access control and no obvious cause.
+
+`provision-relay-vm.sh` installs Node, the relay files, npm deps, the systemd unit and
+an nginx vhost pointing at `127.0.0.1:3001`. It is idempotent, backs up any existing
+`server.js`, never touches an existing `.env`, and **refuses to install a `server.js`
+that does not set `COMMANDS_PER_POLL = 1`** — so a rebuild cannot silently reinstate
+command batching (§10). Secrets are not in git: a fresh box gets a `.env` template and
+the script stops until it is filled in.
+
 ### Deploying a change to the relay VM
 
 **Pushing to `main` does NOT update the relay.** Only Vercel auto-deploys. A relay fix
