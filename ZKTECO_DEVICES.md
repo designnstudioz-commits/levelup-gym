@@ -47,11 +47,11 @@
   that were never acked, so no record of the block existed anywhere. Treat an unacked
   command as having an **unknown** outcome, never as a no-op.
   Measured over every command sent 2026-07-04 to 2026-09-19: single-command responses
-  were answered 1066/1067; multi-command responses lost 400 commands across 231
-  batches, and in every batch the survivor was the lowest-numbered command. This went
-  unnoticed for 11 weeks because a discarded command is indistinguishable from a
-  successful one from the server's side. Both `relay-service/server.js` and the
-  Next.js copy now use `.limit(1)`, and the access sweep processes one member at a
+  were answered 1066/1067; multi-command responses left 400 commands unanswered across
+  231 batches, and in every batch the one answered was the lowest-numbered. This went
+  unnoticed for 11 weeks because from the server's side an unanswered command looks the
+  same whether the terminal ignored it or applied it. Both `relay-service/server.js` and
+  the Next.js copy now use `.limit(1)`, and the access sweep processes one member at a
   time so it can never put two pending commands on one device.
 - Corollary: there is **no retry** for a command that reaches `sent` and is never
   acked. Anything that stalls there is dead until something re-issues it. An earlier
@@ -200,27 +200,42 @@ checks were intentionally split.
 
 ### `GET /api/cron/access-sweep`
 Vercel Cron hits this daily (`vercel.json`, `0 3 * * *` UTC = 08:00 PKT). Scans every
-`status='active'` member, computes `shouldHaveDeviceAccess()` vs current
+`status='active'`, non-deleted member, computes `shouldHaveDeviceAccess()` vs current
 `access_blocked_at`, pushes block/unblock via `pushAccessToAllDevices()`.
 - **Inert by default** — `dryRun = ?dryRun=true \|\| ACCESS_SWEEP_LIVE !== "true"`. Ships
-  safely, armed later via env var with no redeploy needed.
-- **Circuit breaker** — aborts the whole run, pushes nothing, if more than
-  `ACCESS_SWEEP_MAX_CHANGES` (default 25) members would change state in one run. This
-  caught a real bug on first activation (see §8.1).
-- Response distinguishes `pending` (device hasn't acked yet — not an error, will retry
-  next run) from `failures` (a genuine error).
+  safely, armed later via env var with no redeploy needed. It **is** armed in production.
+- **New blocks are capped, never aborted** — `ACCESS_SWEEP_MAX_CHANGES` (default **20**)
+  limits how many blocks one run applies, oldest-expiry first; the remainder rolls into
+  the next run. **Unblocks are uncapped** — restoring a paying member is always safe.
+- This replaced a circuit breaker that aborted the *entire* run whenever the backlog
+  exceeded a ceiling. Because an aborted run fixed nothing, the backlog only grew, which
+  guaranteed every later run also tripped the ceiling — a self-sustaining lockout that
+  ran unnoticed 2026-09-04 → 09-16 because an aborted run still returns HTTP 200.
+- **One member at a time** (`CHUNK_SIZE = 1`). Not pacing — the terminals are fast. It
+  guarantees a member's push puts at most one pending command on any device, so a device
+  can never be handed two at once (see §1). Running out of `maxDuration` mid-run is
+  harmless: confirmed members are recorded and the next run resumes with the rest.
+- Response distinguishes `pending` (no ack yet — will retry next run), `failures` (a
+  genuine error), and `deferredBlockCount` (over the per-run cap, not a failure).
 
 ### `POST /api/devices/sync-access`
 Called **fire-and-forget** (not awaited) from `handleCollect()`
 (`dashboard/fees/page.tsx`) and `recordFee()` (`dashboard/members/[id]/page.tsx`)
 right after a recurring fee payment. Restores access immediately if the payment brings
 a blocked member back into good standing — no waiting for the next day's sweep.
-**Known open gap**: because it's fire-and-forget, the request can fail to even reach
-the server with zero trace and nothing to catch it (confirmed live 2026-09-01 — two
-members who'd paid days earlier had literally zero `device_commands` rows, meaning the
-call never fired at all). Not yet fixed. The daily sweep self-heals this within 24h
-since it checks *every* member's current state, not just newly-expired ones — but
-there's no instant, reliable path today.
+- **Does not trust `access_blocked_at` alone.** When the flag is null it falls back to
+  what each door was last *told* (`device_commands`, newest per device, **including
+  unacked and retired rows**) and still restores access if that was a block. Added
+  2026-09-19 after 7 paid-up members were found being denied at Male Door by blocks that
+  were applied but never acknowledged — so the flag was never set, and paying, the one
+  moment that could have corrected them, short-circuited on the null flag and did
+  nothing. For someone who has just paid, re-asserting access they already have costs
+  nothing; assuming a block never landed costs them entry.
+- **Known open gap (unchanged)**: because it's fire-and-forget, the request can fail to
+  reach the server with zero trace (confirmed live 2026-09-01 — two members who'd paid
+  days earlier had zero `device_commands` rows, so the call never fired). The daily sweep
+  self-heals this within 24h since it re-evaluates *every* member, but there is still no
+  instant, guaranteed path.
 
 ### `POST /api/members/set-access-exemption` (owner/manager only)
 Body `{member_id, exempt, reason?}`. Turning exemption **on** also immediately
@@ -228,10 +243,24 @@ force-unlocks the member if currently blocked. Turning it **off** does *not* ins
 re-block — deliberate, avoids an abrupt lockout from a single checkbox flip; they're
 just subject to the next sweep again.
 
-### `POST /api/members/unblock-access` (owner/manager only)
+### `POST /api/members/unblock-access` (owner / manager / **receptionist**)
 Body `{member_id}`. A **temporary, one-time** override — restores access now without
 exempting them from future auto-blocking (unlike the exemption route). For "let them
-in today, still chasing payment" situations.
+in today, still chasing payment" situations. Receptionist is deliberately included:
+they are the role actually collecting fees at the counter, so they need to restore
+access on the spot rather than wait for a manager or the next sweep.
+- Waits **35s** for every enrolled door to confirm — two full ~20s poll cycles. The
+  original 15s was shorter than a *single* cycle, so a door that simply had not polled
+  yet was indistinguishable from one that refused, and the route returned an error
+  while skipping the `access_blocked_at` clear. The queued commands then landed anyway,
+  leaving the member walking in while the record said "blocked" (seen live 2026-09-19).
+- A genuine refusal is a **500**. An unconfirmed push returns **202** and deliberately
+  does **not** clear the flag — claiming success there would leave the record saying the
+  member has access while a door still denies them, which is the worse direction to be
+  wrong in. Both callers surface this as "not confirmed yet, try again in a minute"
+  rather than a success toast.
+- Needs `export const maxDuration = 60` so the longer wait is not cut off by the
+  platform default, which would reintroduce the same false failure.
 
 ### UI
 - Member profile (`dashboard/members/[id]/page.tsx`): "Access Control" section showing
@@ -311,7 +340,70 @@ existing on-device record was pushed with the old (incomplete) `Grp=1` — confi
 still leaking as of 2026-09-01: **Razi (LUM-2026-0214)** and **Muhammad Qasim
 (LUM-2026-0072)**, both on Male Door.
 
-## 10. Test rig
+## 10. RESOLVED (2026-09-19): command batching — the cause of every "the block didn't work" symptom
+
+The single largest defect in this subsystem. Ran undetected for 11 weeks.
+
+**Symptom as reported:** unpaid members kept getting in. The daily sweep correctly
+identified expired members and reported success, yet only ~4–5 blocks actually landed
+per run, so the backlog never cleared. 44 expired members had full door access when the
+audit was run.
+
+**Root cause:** `/iclock/getrequest` handed the terminal up to 5 pending commands in one
+response (`.limit(5)`). A terminal acknowledges only the first. Since the handler flips
+the whole batch to `sent` before responding, the rest were never offered again.
+
+**The measurement that settled it** — every command ever sent, grouped by batch size:
+
+| Commands per response | Answered |
+|---|---|
+| **1** | **1066 / 1067 (100%)** |
+| 2 | 95 / 166 (57%) |
+| 3 | 29 / 75 (39%) |
+| 4 | 17 / 64 (27%) |
+| 5 | 302 / 530 (57%) |
+
+In command_id order, every multi-command batch resolved identically: first answered,
+rest silent. It degraded over time — 63/95 multi-batches fully succeeded in July, 3/65
+in August, **0/71 in September**.
+
+**Two earlier theories this disproved.** Neither was true, and both cost real debugging
+time:
+1. *"The terminals are overloaded by bursts."* They confirm in ~1.1s at the median,
+   never dropped offline, and single commands succeed ~100% of the time regardless of
+   queue depth. Batch size was the only variable that ever mattered. Pacing work more
+   gently (the earlier `CHUNK_SIZE = 5` fix) treated a symptom that did not exist.
+2. *"An unacknowledged command was simply discarded."* **False, and the dangerous one.**
+   Unacknowledged commands can still be applied. This surfaced when a member
+   (Haisam Mehmood, LUM-2026-0158) was reported being denied entry while fully paid: a
+   block from 16 Sep had been applied by Male Door but never acked, so nothing recorded
+   it, and his payment that same day could not reverse a block the system did not know
+   about. **6 more members were in the identical state.** Always treat an unacked
+   command's outcome as *unknown*.
+
+**Fixes (all live):**
+- `relay-service/server.js` and the Next.js copy → `.limit(1)`.
+- Access sweep → `CHUNK_SIZE = 1`, so it can never queue two commands on one device.
+- `sync-access` → falls back to what each door was last *told* when `access_blocked_at`
+  is null (§7).
+- `unblock-access` → 35s ack wait, and 202-not-500 for unconfirmed pushes (§7).
+
+**Verified on hardware after the fix:** two commands queued simultaneously for Male
+Door were handed over 2s apart on separate polls and **both** acknowledged.
+
+**Cleanup performed:** 401 commands stuck in `sent` were retired (`failed` with an
+explanatory `error`), then 64 corrective commands were issued one-at-a-time — 64/64
+succeeded in ~2 minutes. Final state: 0 expired-with-access, 0 partially blocked, 0
+records disagreeing with their doors.
+
+> **⚠ The relay fix is not reproducible from the repo.** `/home/sitedes/relay-service/`
+> on the relay VM is a **copied file, not a git checkout** — `git pull` does not work
+> there and `pm2` is not installed. The fix was applied by hand (`sed`, then
+> `sudo systemctl restart zkteco-relay`). **If that VM is ever rebuilt, reimaged or
+> restored from a snapshot, `.limit(1)` is lost and this entire class of failure
+> returns silently.** See §13 for the procedure.
+
+## 11. Test rig
 
 Original dummy **"Test Dummy" (`LUM-2026-0297`)** was deleted from Female Reception
 on-device during the 2026-09-03 troubleshooting session. Current test PIN there is
@@ -319,7 +411,7 @@ on-device during the 2026-09-03 troubleshooting session. Current test PIN there 
 end-to-end (deny at `Grp=2`+`TZ1=2`, restore at `Grp=1`+`TZ1=0`) on **Female
 Reception**. Not yet set up on Male Door or Female Zumba.
 
-## 11. Environment variables
+## 12. Environment variables
 
 | Variable | Purpose |
 |---|---|
@@ -327,7 +419,7 @@ Reception**. Not yet set up on Male Door or Female Zumba.
 | `ACCESS_SWEEP_LIVE` | Must be `"true"` for the sweep to actually push anything; otherwise always dry-run regardless of the query param. |
 | `ACCESS_SWEEP_MAX_CHANGES` | Circuit breaker ceiling (default 25). Was temporarily raised to clear the one-time 135-member initial backlog, then lowered back. |
 
-## 12. Manual operations reference
+## 13. Manual operations reference
 
 ```bash
 # Dry-run the sweep (safe, no live effect)
@@ -342,7 +434,35 @@ directly, is normally done via a throwaway Node script in the repo root (parsing
 `.env.local`, using the service-role key) — see any of the session's `*_tmp.mjs`
 scripts for the pattern; always delete the script after use.
 
-## 13. Relevant migrations (chronological)
+### Deploying a change to the relay VM
+
+**Pushing to `main` does NOT update the relay.** Only Vercel auto-deploys. A relay fix
+sitting in `main` is not live until someone does this by hand.
+
+- Host `zkteco-relay` (GCE, reached via IAP), user `sitedes`.
+- Code at `/home/sitedes/relay-service/server.js` — a **copied file, not a checkout**.
+  `git pull` fails there. `pm2` is not installed; it runs under systemd.
+
+```bash
+cd ~/relay-service
+cp server.js server.js.bak-$(date +%F-%H%M)   # always back up first
+# ...apply the edit (sed, or replace the file wholesale)...
+node --check server.js                        # MUST pass before restarting
+sudo systemctl restart zkteco-relay
+systemctl status zkteco-relay --no-pager | head -12
+```
+
+The running process is untouched until the restart, so a failed `node --check` is
+safely recoverable — restore the `.bak` and nothing was ever interrupted.
+
+**Verifying command delivery** (nothing appears unless commands are queued):
+```bash
+sudo journalctl -u zkteco-relay -n 30 --no-pager | grep Sending
+```
+Must always read `Sending 1 command(s) to SN=...`. **Any number above 1 means the
+batching regression is back** — see §10.
+
+## 14. Relevant migrations (chronological)
 
 - `20260604000005_attendance_device.sql` — `device_user_id` on `members`
 - `20260625000001_device_commands.sql` — base table
