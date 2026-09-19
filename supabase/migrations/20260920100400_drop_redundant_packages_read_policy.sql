@@ -1,0 +1,29 @@
+-- Remove a redundant production-only SELECT policy on packages.
+--
+-- Found 2026-09-20 by the first staging schema-parity run. Production has:
+--
+--   "Public can read active packages"  [SELECT, anon+authenticated]
+--     USING (deleted_at IS NULL AND status = 'active')
+--
+-- created by hand and never captured in a migration. Compared against the
+-- migration-defined policies from 20260825100300:
+--
+--   "anon read active packages"       [SELECT, anon]          USING (status = 'active')
+--   "authenticated read all packages" [SELECT, authenticated] USING (true)
+--
+-- Because permissive policies are ORed, this grants nothing new:
+--   * for anon, "anon read active packages" is already BROADER (it omits the
+--     deleted_at test), so the extra policy can never widen anon's access;
+--   * for authenticated, "authenticated read all packages" is USING (true),
+--     which subsumes it entirely.
+--
+-- Effective access is therefore identical with or without it, and dropping
+-- it removes a policy that reads as if it were load-bearing when it is not.
+-- IF EXISTS makes this a no-op on staging.
+--
+-- Noted but deliberately NOT changed here: "anon read active packages" does
+-- not filter deleted_at, so anonymous callers can read soft-deleted packages
+-- whose status is still 'active'. That is a pre-existing question about the
+-- intended rule, not drift between environments, and it belongs in a
+-- separate decision rather than being smuggled into a parity cleanup.
+DROP POLICY IF EXISTS "Public can read active packages" ON public.packages;

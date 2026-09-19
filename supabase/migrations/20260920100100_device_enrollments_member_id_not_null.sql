@@ -1,0 +1,18 @@
+-- device_enrollments.member_id is required for every row.
+--
+-- Drift found 2026-09-20: production has NOT NULL, the migrations produce a
+-- nullable column. Production is correct, and this records why rather than
+-- just copying it.
+--
+-- The table is MEMBER-ONLY by design. It has no staff_id column, and staff
+-- are enrolled through a completely separate mechanism — a device_user_id
+-- column directly on staff_members (reserved PIN range 5000+, so it never
+-- collides with member PINs). /api/devices/push-user branches on exactly
+-- this: staff_id reads staff_members.device_user_id, member_id reads
+-- device_enrollments. So a device_enrollments row with no member is
+-- meaningless, not merely unusual.
+--
+-- Confirmed against live data before writing this: 679 production rows,
+-- ZERO with a null member_id. The constraint matches both the intent and
+-- the actual data, so this cannot fail on either environment.
+ALTER TABLE device_enrollments ALTER COLUMN member_id SET NOT NULL;

@@ -1,0 +1,36 @@
+-- SECURITY: remove a permissive policy that silently defeats the strict one.
+--
+-- Found 2026-09-20 by the first staging schema-parity run. Production has an
+-- extra INSERT policy on submissions, created by hand and never captured in
+-- a migration:
+--
+--   "Public can insert submissions"  [INSERT, anon]
+--     WITH CHECK (status = 'pending')
+--
+-- alongside the migration-defined policy from 20260825100200:
+--
+--   "anon submit registration"  [INSERT, anon+authenticated]
+--     WITH CHECK (status = 'pending' AND handled_by IS NULL AND
+--       reviewed_by IS NULL AND reviewed_at IS NULL AND package_id IS NULL
+--       AND trainer_id IS NULL AND joining_date IS NULL AND
+--       expiry_date IS NULL AND admission_fee IS NULL AND
+--       monthly_fee IS NULL AND payment_method IS NULL AND
+--       submitted_by IS NULL)
+--
+-- Postgres ORs permissive policies: an INSERT is allowed if ANY of them
+-- passes. The weak policy therefore makes the strict one unreachable, and
+-- the strict one exists for a specific reason — its own migration says it
+-- blocks "a crafted REST payload from pre-filling staff-only fields the real
+-- form never sends".
+--
+-- Live effect: an anonymous caller could insert a submission with
+-- package_id, monthly_fee, admission_fee, joining_date and expiry_date
+-- already set, and staff might approve it without noticing the figures came
+-- from the applicant. It does NOT allow self-approval — status must be
+-- 'pending' and approval is owner/manager-checked server-side.
+--
+-- Dropping it restores the intended restriction. The public registration
+-- form is unaffected: it sends none of those fields, so it satisfies the
+-- strict policy, which remains in place. IF EXISTS makes this a no-op on
+-- staging, where the weak policy never existed.
+DROP POLICY IF EXISTS "Public can insert submissions" ON public.submissions;
