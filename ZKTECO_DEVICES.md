@@ -2,7 +2,7 @@
 
 > Everything related to the physical biometric devices, the relay that talks to them, the
 > Next.js API routes that manage them, attendance ingestion, and the automatic fee-based
-> access-blocking feature. Last updated: 2026-09-03.
+> access-blocking feature. Last updated: 2026-09-19.
 
 ---
 
@@ -34,10 +34,25 @@
   device makes its own **local** access decision (fingerprint template + locally stored
   fields like its Time Zone assignment), then only *reports* the result afterward via
   ATTLOG. There is no synchronous "ask the server" round-trip per scan.
-- The device's own poll cycle (~30s) is the real-world latency floor for anything
-  pushed to it. Under heavy load (many commands queued at once) it can fall
-  significantly behind — during the initial access-block rollout, Male Door needed 3
-  separate re-invocations of the sweep endpoint over several minutes to fully catch up.
+- The device's own poll cycle (~20-30s) is the real-world latency floor for anything
+  pushed to it. Once it does pick a command up it confirms in **~1.1s at the median**
+  (measured over 1,305 acks) — the terminals are not slow and do not fall behind
+  under load.
+- **NEVER hand a terminal more than one command in a single `/iclock/getrequest`
+  response.** It executes the first and **silently discards the rest** — no error, no
+  return code, no re-request — and because the handler has already flipped the whole
+  batch to `sent`, the discarded ones are never offered again and are lost forever.
+  Measured over every command sent 2026-07-04 to 2026-09-19: single-command responses
+  were answered 1066/1067; multi-command responses lost 400 commands across 231
+  batches, and in every batch the survivor was the lowest-numbered command. This went
+  unnoticed for 11 weeks because a discarded command is indistinguishable from a
+  successful one from the server's side. Both `relay-service/server.js` and the
+  Next.js copy now use `.limit(1)`, and the access sweep processes one member at a
+  time so it can never put two pending commands on one device.
+- Corollary: there is **no retry** for a command that reaches `sent` and is never
+  acked. Anything that stalls there is dead until something re-issues it. An earlier
+  theory that Male Door was "overloaded by bursts" was wrong — it was this batching
+  bug the whole time.
 
 ## 2. Physical devices
 
