@@ -13,6 +13,15 @@ const express = require("express");
 const { createClient } = require("@supabase/supabase-js");
 
 const PORT = process.env.PORT || 3001;
+
+// Commands handed to a terminal in a single /iclock/getrequest response.
+// MUST be 1. A terminal acknowledges only the first command in a response;
+// the rest are never re-offered (this handler has already marked them sent)
+// and yet may still have been applied, so raising this both loses commands
+// and corrupts our record of what each door actually holds. There is no
+// legitimate reason to raise it — at a ~20s poll, one per poll is already
+// ~3 commands/minute/door. Full analysis in ZKTECO_DEVICES.md §10.
+const COMMANDS_PER_POLL = 1;
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const app = express();
@@ -309,7 +318,7 @@ app.get("/iclock/getrequest", async (req, res) => {
       .eq("device_serial", sn)
       .eq("status", "pending")
       .order("created_at")
-      .limit(1);
+      .limit(COMMANDS_PER_POLL);
 
     if (!commands?.length) {
       return sendText(res, "OK");
@@ -386,4 +395,17 @@ app.post("/iclock/fdata", fdataAck);
 
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`ZKTeco relay service listening on 127.0.0.1:${PORT}`);
+  // Announced at boot on purpose. This VM is provisioned by copying files
+  // rather than from a checkout, so a rebuild or snapshot restore can
+  // silently reinstate an old server.js — and a batching regression is
+  // invisible from the outside (commands just quietly stop applying; the
+  // last one went unnoticed for 11 weeks). One line in `journalctl -u
+  // zkteco-relay` now answers it immediately.
+  if (COMMANDS_PER_POLL === 1) {
+    console.log("[config] commands per device poll: 1 (correct)");
+  } else {
+    console.error(`[config] *** commands per device poll: ${COMMANDS_PER_POLL} — MUST BE 1 ***`);
+    console.error("[config] *** Terminals ack only the first command per response. Commands WILL be lost ***");
+    console.error("[config] *** and door state WILL drift from the database. See ZKTECO_DEVICES.md §10. ***");
+  }
 });
