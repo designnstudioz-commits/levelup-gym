@@ -184,7 +184,12 @@ export async function pushAccessToAllDevices(
   supabase: SupabaseClient,
   member: { id: string; full_name: string },
   access: AccessLevel,
-  createdBy?: string | null
+  createdBy?: string | null,
+  // Callers that a human is waiting on (the counter's manual unblock) should
+  // pass a timeout covering at least two device poll cycles. The default 15s
+  // is shorter than a single ~20s cycle, so a device that simply hadn't
+  // polled yet was being reported as a failure — see the route's own comment.
+  opts?: { ackTimeoutMs?: number }
 ): Promise<{ device_serial: string; ok: boolean; pending?: boolean; error?: string }[]> {
   const { data: enrollments } = await supabase
     .from("device_enrollments")
@@ -201,7 +206,7 @@ export async function pushAccessToAllDevices(
         access,
         member_id: member.id,
         created_by: createdBy ?? null,
-      });
+      }, opts);
       return {
         device_serial: e.device_serial,
         ok: res.ok,

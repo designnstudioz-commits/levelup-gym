@@ -1141,6 +1141,11 @@ export default function MemberDetailPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Failed to unblock access");
+      // 202: queued, no door has confirmed yet — the member is still blocked.
+      if (data.pending) {
+        toast.warning(data.message || "Sent to the doors — not confirmed yet, try again in a minute");
+        return;
+      }
       toast.success("Device access restored");
       fetchMember();
     } catch (err: any) {

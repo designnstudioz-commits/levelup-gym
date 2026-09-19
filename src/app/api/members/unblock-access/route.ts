@@ -3,6 +3,10 @@ import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { pushAccessToAllDevices } from "@/lib/server/devicePush";
 
+// The ack wait below can take ~35s; the platform default would cut the
+// request off mid-wait and report a failure for an unblock that succeeded.
+export const maxDuration = 60;
+
 function getServiceClient() {
   return createServiceClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -54,11 +58,33 @@ export async function POST(req: NextRequest) {
     if (!member) return NextResponse.json({ error: "Member not found" }, { status: 404 });
     if (!member.access_blocked_at) return NextResponse.json({ success: true, alreadyUnblocked: true });
 
-    const pushResults = await pushAccessToAllDevices(admin, member, "allow", caller.id);
-    const allOk = pushResults.length === 0 || pushResults.every((r) => r.ok);
+    // 35s covers two full device poll cycles (~20s each). The old 15s was
+    // shorter than ONE cycle, so a device that simply hadn't polled yet came
+    // back "not acknowledged" and was treated as an outright failure. Seen
+    // live 2026-09-19: a receptionist's unblock reported failure, the member
+    // record was left flagged as blocked, and the devices then applied the
+    // unblock moments later — leaving the member walking in while the system
+    // still believed they were locked out.
+    const pushResults = await pushAccessToAllDevices(admin, member, "allow", caller.id, { ackTimeoutMs: 35000 });
+    const hardFailure = pushResults.some((r) => !r.ok && !r.pending);
+    const stillPending = pushResults.some((r) => r.pending);
 
-    if (!allOk) {
+    if (hardFailure) {
       return NextResponse.json({ error: "Failed to push unlock to one or more devices", pushResults }, { status: 500 });
+    }
+
+    // Queued but not yet confirmed by every door. Deliberately does NOT clear
+    // the block flag: claiming success here would leave the record saying
+    // "has access" while a door still denies them, which nothing downstream
+    // would ever notice or correct. Reported as its own state so the counter
+    // can retry rather than being shown a misleading error.
+    if (stillPending) {
+      return NextResponse.json({
+        success: false,
+        pending: true,
+        message: "Sent to the doors but not confirmed yet — try again in a minute.",
+        pushResults,
+      }, { status: 202 });
     }
 
     await admin.from("members").update({

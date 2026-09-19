@@ -295,6 +295,13 @@ export default function FeesPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to unblock access");
+      // 202: queued but no door has confirmed yet, so the member is NOT
+      // unblocked and the record still says so. Showing success here would
+      // send them to a door that still turns them away.
+      if (json.pending) {
+        toast.warning(json.message || "Sent to the doors — not confirmed yet, try again in a minute");
+        return;
+      }
       toast.success(`${selectedMember.full_name}'s device access restored`);
       setSelectedMember((m) => (m ? { ...m, access_blocked_at: null } : m));
     } catch (err) {
