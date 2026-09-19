@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { shouldHaveDeviceAccess } from "@/lib/utils";
 import { pushAccessToAllDevices } from "@/lib/server/devicePush";
+import { requireStaff, DEVICE_OPERATOR_ROLES } from "@/lib/server/requireStaff";
 
 function getServiceClient() {
   return createServiceClient(
@@ -14,11 +15,23 @@ function getServiceClient() {
 // Body: { member_id }
 // Called (fire-and-forget, not awaited) right after a recurring fee
 // payment is recorded, to restore device access immediately if the member
-// was previously auto-blocked. No role check — grants no new privilege,
-// only runs after an action already gated by the caller's existing
-// permission to collect fees.
+// was previously auto-blocked. Requires an authenticated front-desk session
+// (see the note in the handler) — the callers are browser fetches from the
+// Fees and member-profile pages, which carry the session cookie already.
 export async function POST(req: NextRequest) {
   try {
+    // Was unauthenticated until 2026-09-19. The original reasoning — "grants
+    // no new privilege, only runs after an action already gated by the
+    // caller's permission to collect fees" — was defensible when this only
+    // cleared a database flag. It now drives physical door hardware, and it
+    // was confirmed reachable in production by an anonymous caller.
+    //
+    // shouldHaveDeviceAccess() below is untouched and still the sole
+    // authority: this route can only ever RESTORE access to a member who
+    // already qualifies for it, never grant access to an expired one.
+    const auth = await requireStaff(DEVICE_OPERATOR_ROLES);
+    if (!auth.ok) return auth.response;
+
     const { member_id } = (await req.json()) as { member_id?: string };
     if (!member_id) {
       return NextResponse.json({ error: "member_id is required" }, { status: 400 });

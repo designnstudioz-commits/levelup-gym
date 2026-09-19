@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { requireStaff, DEVICE_OPERATOR_ROLES } from "@/lib/server/requireStaff";
 
 function getServiceClient() {
   return createClient(
@@ -14,6 +15,13 @@ function getServiceClient() {
 // The device picks it up on the next /iclock/getrequest poll (~30s).
 export async function POST(req: NextRequest) {
   try {
+    // Was fully unauthenticated until 2026-09-19 while holding the
+    // service-role key — confirmed reachable in production by an anonymous
+    // caller. The PIN was already derived server-side (below), so this is
+    // the only change needed here.
+    const auth = await requireStaff(DEVICE_OPERATOR_ROLES);
+    if (!auth.ok) return auth.response;
+
     const { member_id, staff_id, device_serial } = await req.json();
 
     if ((!member_id && !staff_id) || !device_serial) {

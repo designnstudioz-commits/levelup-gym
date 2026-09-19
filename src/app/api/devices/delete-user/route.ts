@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { requireStaff, DEVICE_OPERATOR_ROLES } from "@/lib/server/requireStaff";
 
 function getServiceClient() {
   return createClient(
@@ -20,6 +21,14 @@ function getServiceClient() {
 // triggers this — looking it up after that point would find nothing.
 export async function POST(req: NextRequest) {
   try {
+    // Was fully unauthenticated until 2026-09-19 while holding the
+    // service-role key, and built the device command straight from the
+    // request body — member_id was only ever the FK on the log row, so a
+    // caller could delete ANY PIN from ANY door using a member UUID that
+    // need not be the victim's. Confirmed reachable in production.
+    const auth = await requireStaff(DEVICE_OPERATOR_ROLES);
+    if (!auth.ok) return auth.response;
+
     const { member_id, device_serial, device_user_id } = await req.json();
 
     if (!member_id || !device_serial || !device_user_id) {
@@ -31,7 +40,37 @@ export async function POST(req: NextRequest) {
 
     const supabase = getServiceClient();
 
-    const command = ["DATA DELETE USERINFO", `PIN=${device_user_id}`].join("\t");
+    // Never build the command from a browser-supplied PIN. The enrollment
+    // row is the authority for which PIN belongs to this member on this
+    // device, and the UI queues this delete BEFORE soft-deleting that row,
+    // so it is still present here.
+    const { data: enrollment } = await supabase
+      .from("device_enrollments")
+      .select("device_user_id")
+      .eq("member_id", member_id)
+      .eq("device_serial", device_serial)
+      .is("deleted_at", null)
+      .maybeSingle();
+
+    if (!enrollment) {
+      return NextResponse.json(
+        { error: "No active enrollment for this member on this device" },
+        { status: 404 }
+      );
+    }
+
+    // The caller still sends the PIN it believes it is removing. Treating a
+    // mismatch as an error rather than silently preferring the enrollment
+    // means a stale or tampered client is rejected instead of quietly
+    // deleting a different person from the door.
+    if (String(enrollment.device_user_id) !== String(device_user_id)) {
+      return NextResponse.json(
+        { error: "device_user_id does not match this member's enrollment on this device" },
+        { status: 409 }
+      );
+    }
+
+    const command = ["DATA DELETE USERINFO", `PIN=${enrollment.device_user_id}`].join("\t");
 
     // command_id is sequential per device (count()+1) with no way to reserve
     // it atomically — a unique constraint on (device_serial, command_id)

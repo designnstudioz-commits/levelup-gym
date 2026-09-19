@@ -1,54 +1,34 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
 
-function getServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
+// DISABLED 2026-09-19 — emergency security patch.
+//
+// This was a second, parallel implementation of the ZKTeco ADMS device
+// protocol, duplicating relay-service/server.js. The physical terminals do
+// NOT use it: their Cloud Server Setting points at the relay VM
+// (136-115-7-81.sslip.io), and Vercel's bot protection would challenge a
+// device here anyway. A grep across src/ confirms no internal caller.
+//
+// It was, however, reachable by anyone on the internet: src/middleware.ts
+// deliberately excludes `api/attendance` from its matcher so devices could
+// reach it, and the handlers held the service-role key, which bypasses RLS.
+// Confirmed live in production during the audit:
+//   - getrequest returned 200 and marked pending device_commands as `sent`,
+//     which would silently drain every queued door block — and nothing ever
+//     retries a command marked `sent`.
+//   - devicecmd allowed forging an acknowledgement for any command.
+//   - push allowed inserting arbitrary attendance rows.
+//
+// 410 Gone rather than deletion: the /iclock/* routes re-export these, and a
+// deliberate, documented tombstone is more useful to the next reader than a
+// 404 from a missing file. No database client is constructed here — these
+// handlers can no longer read or write anything.
+// A factory, not a module-level constant: a Response body can only be read
+// once, so returning one shared instance across requests can fail.
+const disabled = () =>
+  NextResponse.json(
+    { error: "Gone. Device traffic is served by the relay service, not this app." },
+    { status: 410 }
   );
-}
 
-// ZKTeco sends command acknowledgment here after executing a command from getrequest.
-// Can arrive as GET (?SN=X&ID=Y&Return=0&CMD=ACK_DATA) or POST with same fields in body.
-async function handleAck(sn: string, rawId: string | null, ret: string | null) {
-  const commandId = rawId ? parseInt(rawId, 10) : null;
-  const returnCode = ret ? parseInt(ret, 10) : null;
-
-  console.log(`[ADMS DeviceCmd] SN=${sn} ID=${commandId} Return=${returnCode}`);
-
-  if (!commandId) return;
-
-  const supabase = getServiceClient();
-  const now = new Date().toISOString();
-
-  await supabase
-    .from("device_commands")
-    .update({
-      status: returnCode === 0 ? "acked" : "failed",
-      acked_at: now,
-      return_code: returnCode,
-      error: returnCode !== 0 ? `Device returned error code ${returnCode}` : null,
-    })
-    .eq("device_serial", sn)
-    .eq("command_id", commandId)
-    .in("status", ["sent", "pending"]);
-}
-
-export async function GET(req: NextRequest) {
-  const sn = req.nextUrl.searchParams.get("SN") ?? req.nextUrl.searchParams.get("sn") ?? "UNKNOWN";
-  const id = req.nextUrl.searchParams.get("ID") ?? req.nextUrl.searchParams.get("id");
-  const ret = req.nextUrl.searchParams.get("Return") ?? req.nextUrl.searchParams.get("return");
-  await handleAck(sn, id, ret);
-  return new NextResponse("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
-}
-
-export async function POST(req: NextRequest) {
-  const sn = req.nextUrl.searchParams.get("SN") ?? req.nextUrl.searchParams.get("sn") ?? "UNKNOWN";
-  const body = await req.text();
-  console.log(`[ADMS DeviceCmd POST] SN=${sn} body=${body}`);
-  const p = new URLSearchParams(body);
-  const id = p.get("ID") ?? p.get("id");
-  const ret = p.get("Return") ?? p.get("return");
-  await handleAck(sn, id, ret);
-  return new NextResponse("OK", { status: 200, headers: { "Content-Type": "text/plain" } });
-}
+export async function GET() { return disabled(); }
+export async function POST() { return disabled(); }
