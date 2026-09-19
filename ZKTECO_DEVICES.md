@@ -97,7 +97,10 @@ via sslip.io — there is no DNS record to update, the name *is* the address.
   `delete_user`, `block_user`, `unblock_user`, `set_time`, `reboot`. `status` is
   `pending → sent → acked` (or `failed`). **Unique constraint on `(device_serial,
   command_id)`** — see §8.2, this was defined in migration `20260707000000` but never
-  actually applied to production until `20260829010000`.
+  actually applied to production until `20260829010000`. **`command_id` is unique only
+  *per device*** — never order or paginate a cross-device query by it (see §10.2).
+  A row stuck in `sent` is **dead** — nothing retries it — and its outcome is
+  **unknown**, not "didn't happen" (see §1).
 - **`attendances`** — `id, member_id, staff_id, device_id, punch_time, punch_type
   (in/out/unknown), verified, created_at`. Immutable, no `deleted_at`.
 - **`unverified_attendances`** — `id, device_id, raw_id, punch_time, resolved,
@@ -409,6 +412,34 @@ explanatory `error`), then 64 corrective commands were issued one-at-a-time — 
 succeeded in ~2 minutes. Final state: 0 expired-with-access, 0 partially blocked, 0
 records disagreeing with their doors.
 
+### 10.1 A third silent variant, found only by writing the health check
+
+The cleanup above still missed two members, because both had a **correctly
+acknowledged** block and a **null** `access_blocked_at`. Every audit run that day
+looked for either an unacked block or a flag that disagreed with the doors, and this
+shape is neither:
+
+- **Ghulam Mustafa (LUM-2026-0362)** — blocked at Male Door 09-05 (acked, genuinely
+  applied). The sweep run that issued it never recorded the flag. He paid on 09-08,
+  but `sync-access` short-circuited on the null flag, so nothing reversed it. **Locked
+  out for 11 days while every screen showed him paid and unblocked.**
+- **Zain Javaid (LUM-2026-0081)** — his unblock was stranded in a pre-fix batch at
+  13:17, minutes before the relay was fixed at 15:22.
+
+Both were found by `npm run check:doors` (§13) on its first run, and neither would
+have surfaced any other way short of the member complaining. **The lesson is the
+check itself:** each of these three variants was individually reasoned about and
+individually missed, because the reasoning kept encoding the failure mode already
+known. Asserting the *property* — "no paying member is blocked at any door" — catches
+the variant nobody has thought of yet.
+
+### 10.2 Gotcha: `command_id` is not globally unique
+
+It is unique per `device_serial` only. Ordering a query by `command_id` **across**
+devices is meaningless, and paginating on it (a non-unique column) silently reorders
+rows across page boundaries — which produced false positives the first time the health
+check ran. Order by `id`, then sort per device client-side.
+
 > **⚠ The relay fix is not reproducible from the repo.** `/home/sitedes/relay-service/`
 > on the relay VM is a **copied file, not a git checkout** — `git pull` does not work
 > there and `pm2` is not installed. The fix was applied by hand (`sed`, then
@@ -433,6 +464,31 @@ Reception**. Not yet set up on Male Door or Female Zumba.
 | `ACCESS_SWEEP_MAX_CHANGES` | Circuit breaker ceiling (default 25). Was temporarily raised to clear the one-time 135-member initial backlog, then lowered back. |
 
 ## 13. Manual operations reference
+
+### Health check — start here
+
+```bash
+npm run check:doors        # scripts/check-door-access.mjs — READ-ONLY
+```
+
+**Run this after any change to the sweep, the relay or `devicePush`, and whenever a
+member reports being wrongly let in or kept out.** Exits non-zero on a problem, so it
+can gate a deploy or run on a schedule. It verifies the four properties that actually
+matter:
+
+1. No member with valid access is blocked at any door — counting what a door was last
+   **told**, not just what it confirmed, since an unacked command may still have applied.
+2. Every member record matches what its doors enforce.
+3. No door has been handed more than one command at once (anchored to when the relay
+   fix went live, so historical damage doesn't desensitise the reader).
+4. Nothing is stranded in `sent` or queued more than 10 minutes.
+
+A quiet door outside opening hours and an expired member holding access after a counter
+override are **reported, not failed** — both are legitimate.
+
+This exists because every failure this subsystem has had was invisible from the app:
+the screens looked right while the doors disobeyed, and each one surfaced only when a
+member complained at the counter.
 
 ```bash
 # Dry-run the sweep (safe, no live effect)
