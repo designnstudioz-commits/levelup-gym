@@ -292,13 +292,24 @@ app.get("/iclock/getrequest", async (req, res) => {
   console.log(`[ADMS GetRequest] SN=${sn}`);
 
   try {
+    // ONE command per poll, never a batch. Handing a terminal several
+    // commands in a single response loses all but the first: the device
+    // executes the lowest-numbered one and silently discards the rest,
+    // with no error and no re-request. Because this handler has already
+    // flipped the whole batch to "sent", the discarded ones are never
+    // offered again and are lost permanently. Measured over every command
+    // ever sent (2026-07-04 to 2026-09-19): single-command responses were
+    // answered 1066/1067 times, while multi-command responses lost 400
+    // commands across 231 batches, and in every batch it was the first
+    // command that survived. The device polls every ~20s, so one per poll
+    // is ~3/min/door — ample for a real backlog.
     const { data: commands } = await supabase
       .from("device_commands")
       .select("id, command_id, command")
       .eq("device_serial", sn)
       .eq("status", "pending")
       .order("created_at")
-      .limit(5);
+      .limit(1);
 
     if (!commands?.length) {
       return sendText(res, "OK");

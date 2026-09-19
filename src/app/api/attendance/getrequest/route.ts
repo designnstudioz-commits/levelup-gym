@@ -21,14 +21,18 @@ export async function GET(req: NextRequest) {
   try {
     const supabase = getServiceClient();
 
-    // Fetch pending commands for this device (oldest first)
+    // One command per poll — a terminal handed several in one response runs
+    // only the first and silently discards the rest, and since they are
+    // marked "sent" here they are never re-offered. Kept in sync with
+    // relay-service/server.js, which is the path real devices actually hit
+    // (see its comment for the measurements behind this).
     const { data: commands } = await supabase
       .from("device_commands")
       .select("id, command_id, command")
       .eq("device_serial", sn)
       .eq("status", "pending")
       .order("created_at")
-      .limit(5);
+      .limit(1);
 
     if (!commands?.length) {
       return new NextResponse("OK", {
