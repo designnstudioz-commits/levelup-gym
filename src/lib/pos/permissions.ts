@@ -18,10 +18,53 @@
 import type { SystemRole } from "@/types/database";
 import type { FinancialOwner } from "@/types/pos";
 
+// ── Per-user POS access ──────────────────────────────────────────────
+//
+// A ROLE NO LONGER GRANTS POS ACCESS. As of 2026-09-29 the model is:
+//
+//   * owner                      — always in, always every department
+//   * everyone else              — needs system_users.pos_access = true AND
+//                                  at least one assigned department
+//
+// The role lists below did not go away and are not redundant: they remain a
+// CEILING on what a user may do once they are in. pos_access decides
+// WHETHER you reach POS at all; the role decides WHICH POS screens. Both
+// must pass. That is what keeps cost, margin, HealthBox split and settlement
+// data away from a cashier even after the owner grants them access — those
+// screens are POS_ADMIN_ROLES / POS_OWNER_ROLES and a grant cannot widen
+// them.
+//
+// Requiring a department as well as the flag is deliberate: a user enabled
+// for POS but assigned nothing is a half-finished configuration, and an
+// empty till is a worse outcome than a clear refusal. The management UI
+// enforces the same rule when enabling access.
+
+export interface PosAccessSubject {
+  role: SystemRole | null;
+  pos_access?: boolean | null;
+  pos_department_scope?: string[] | null;
+}
+
+export function hasPosAccess(u: PosAccessSubject | null | undefined): boolean {
+  if (!u?.role) return false;
+  if (u.role === "owner") return true;
+  if (u.pos_access !== true) return false;
+  return Array.isArray(u.pos_department_scope) && u.pos_department_scope.length > 0;
+}
+
+/** Departments this user may work in. null means unrestricted, which is only
+ *  ever correct for an owner. */
+export function posDepartmentScopeFor(u: PosAccessSubject | null | undefined): string[] | null {
+  if (u?.role === "owner") return null;
+  return u?.pos_department_scope ?? [];
+}
+
 // ── Route access ─────────────────────────────────────────────────────
 
-/** Roles that may operate the touch terminal. Receptionist is included so
- *  reception can cover the counter (Phase 3 decision §12 / C8). */
+/** Roles that may operate the touch terminal, once hasPosAccess() has
+ *  already passed. Receptionist remains listed so reception CAN cover the
+ *  counter — but no longer automatically: a receptionist now needs an
+ *  explicit grant like anyone else. */
 export const POS_TERMINAL_ROLES: SystemRole[] = [
   "owner", "manager", "cashier", "receptionist",
 ];

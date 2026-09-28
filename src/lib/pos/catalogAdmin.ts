@@ -7,15 +7,24 @@ import { POS_ADMIN_ROLES } from "./permissions";
 
 // ── Department scoping ───────────────────────────────────────────────
 
-/** A healthbox_staff caller is confined to the department id(s) in their
- *  own pos_department_scope. owner/manager are unrestricted. Returns null
- *  when unrestricted — callers use that to skip adding a filter at all. */
+/** Confines a caller to the department id(s) in their own
+ *  pos_department_scope. Returns null when unrestricted — callers use that
+ *  to skip adding a filter at all.
+ *
+ *  ONLY OWNER is unrestricted, as of 2026-09-29. This previously exempted
+ *  all of POS_ADMIN_ROLES, which included manager — so a manager granted POS
+ *  for Cafe alone could still act on Supplements, Accessories and HealthBox.
+ *  Department assignment now means the same thing for every non-owner:
+ *  "a user assigned Cafe + Supplements must only access those departments."
+ *
+ *  A non-owner with no scope configured sees NOTHING, not everything —
+ *  fail closed. hasPosAccess() already refuses such an account at the door,
+ *  so this is the second line rather than the first. */
 export function callerDepartmentFilter(caller: PosCaller): string[] | null {
-  if (POS_ADMIN_ROLES.includes(caller.role)) return null;
+  if (caller.role === "owner") return null;
   return caller.departmentScope && caller.departmentScope.length > 0
     ? caller.departmentScope
-    : []; // a healthbox_staff account with no scope configured sees nothing,
-          // not everything — fail closed, not open.
+    : [];
 }
 
 /** Whether the caller may act on a specific department id. */

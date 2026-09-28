@@ -37,6 +37,13 @@ interface SystemUser {
   last_active_at: string | null;
   created_at: string;
   staff_id: string | null;
+  pos_access: boolean | null;
+  pos_department_scope: string[] | null;
+}
+
+interface PosDepartment {
+  id: string;
+  name: string;
 }
 
 interface ActivityLog {
@@ -117,7 +124,8 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
   const [showPassword, setShowPassword] = useState(false);
 
   // Edit form
-  const [editForm, setEditForm] = useState({ full_name: "", role: "receptionist" as SystemRole, status: "active" as "active" | "inactive" });
+  const [editForm, setEditForm] = useState({ full_name: "", role: "receptionist" as SystemRole, status: "active" as "active" | "inactive", posAccess: false, posDepartments: [] as string[] });
+  const [posDepartments, setPosDepartments] = useState<PosDepartment[]>([]);
 
   // ── Logs tab state ──
   const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -167,10 +175,21 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
     setUsersLoading(true);
     const { data } = await supabase
       .from("system_users")
-      .select("id, email, full_name, role, status, last_active_at, created_at, staff_id")
+      .select("id, email, full_name, role, status, last_active_at, created_at, staff_id, pos_access, pos_department_scope")
       .is("deleted_at", null)
       .order("created_at");
     setUsers(data ?? []);
+
+    // Department list for the POS access assignment. Read from
+    // pos_departments rather than hardcoded, so renaming or adding one in
+    // the catalogue does not leave this screen offering stale options.
+    const { data: depts } = await supabase
+      .from("pos_departments")
+      .select("id, name")
+      .is("deleted_at", null)
+      .order("sort_order");
+    setPosDepartments(depts ?? []);
+
     setUsersLoading(false);
   }, []);
 
@@ -245,25 +264,52 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
   // ── Edit user ──
   function openEdit(u: SystemUser) {
     setEditUser(u);
-    setEditForm({ full_name: u.full_name, role: u.role, status: u.status });
+    setEditForm({ full_name: u.full_name, role: u.role, status: u.status, posAccess: u.pos_access ?? false, posDepartments: u.pos_department_scope ?? [] });
   }
 
   async function handleEditUser() {
     if (!editUser) return;
+
+    const isOwnerRole = editForm.role === "owner";
+    // Mirrors hasPosAccess(): a grant with no department assigned is a
+    // half-finished configuration that would leave the user staring at an
+    // empty till, so it is refused here rather than saved and discovered
+    // later. Owner is exempt — it always has every department.
+    if (!isOwnerRole && editForm.posAccess && editForm.posDepartments.length === 0) {
+      toast.error("Assign at least one POS department, or turn POS access off");
+      return;
+    }
+
     setSubmitting(true);
     const { error } = await supabase
       .from("system_users")
-      .update({ full_name: editForm.full_name, role: editForm.role, status: editForm.status, updated_at: new Date().toISOString() })
+      .update({
+        full_name: editForm.full_name,
+        role: editForm.role,
+        status: editForm.status,
+        // Owner never consults these, but they are normalised anyway so a
+        // demoted owner does not silently inherit a stale grant.
+        pos_access: isOwnerRole ? false : editForm.posAccess,
+        pos_department_scope: isOwnerRole ? null : (editForm.posAccess ? editForm.posDepartments : []),
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", editUser.id);
 
     if (error) { toast.error(error.message); setSubmitting(false); return; }
+
+    const deptNames = editForm.posDepartments
+      .map((id) => posDepartments.find((d) => d.id === id)?.name ?? id)
+      .join(", ");
+    const posSummary = isOwnerRole
+      ? "POS: all departments (owner)"
+      : editForm.posAccess ? `POS: enabled (${deptNames || "none"})` : "POS: disabled";
 
     await supabase.from("activity_logs").insert({
       user_id: currentUserId,
       action: "edited_system_user",
       entity_type: "system_user",
       entity_id: editUser.id,
-      description: `Updated user ${editForm.full_name} — role: ${editForm.role}, status: ${editForm.status}`,
+      description: `Updated user ${editForm.full_name} — role: ${editForm.role}, status: ${editForm.status}, ${posSummary}`,
     });
 
     toast.success("User updated");
@@ -777,6 +823,8 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
               <option value="owner">Owner</option>
               <option value="manager">Manager</option>
               <option value="receptionist">Receptionist</option>
+              <option value="cashier">Cashier</option>
+              <option value="healthbox_staff">HealthBox Staff</option>
               <option value="trainer">Trainer</option>
               <option value="viewer">Viewer</option>
             </select>
@@ -791,6 +839,67 @@ export function SettingsClient({ currentUserId, staffMembers }: Props) {
               <option value="active">Active</option>
               <option value="inactive">Inactive (cannot log in)</option>
             </select>
+          </div>
+
+          {/* ── POS access — explicit per user, never implied by role ── */}
+          <div className="border border-[#E4E4DE] rounded-lg p-4 bg-[#F8F8F6]">
+            <p className="text-sm font-semibold text-[#1A1A16]">POS Access</p>
+            {editForm.role === "owner" ? (
+              <p className="text-xs text-[#7A7A72] mt-1.5">
+                Owners always have access to every POS department. No assignment needed.
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-[#7A7A72] mt-1 mb-3">
+                  A role does not grant POS access. This user sees the POS menu only if enabled below.
+                </p>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editForm.posAccess}
+                    onChange={(e) => setEditForm((f) => ({ ...f, posAccess: e.target.checked }))}
+                    className="w-4 h-4 accent-[#F06418]"
+                  />
+                  <span className="text-sm text-[#1A1A16]">Enable POS access</span>
+                </label>
+
+                {editForm.posAccess && (
+                  <div className="mt-3 pl-6">
+                    <p className="text-xs font-medium text-[#4A4A44] mb-2">
+                      Departments this user may work in
+                    </p>
+                    <div className="space-y-1.5">
+                      {posDepartments.map((d) => (
+                        <label key={d.id} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editForm.posDepartments.includes(d.id)}
+                            onChange={(e) =>
+                              setEditForm((f) => ({
+                                ...f,
+                                posDepartments: e.target.checked
+                                  ? [...f.posDepartments, d.id]
+                                  : f.posDepartments.filter((x) => x !== d.id),
+                              }))
+                            }
+                            className="w-4 h-4 accent-[#F06418]"
+                          />
+                          <span className="text-sm text-[#4A4A44]">{d.name}</span>
+                        </label>
+                      ))}
+                      {posDepartments.length === 0 && (
+                        <p className="text-xs text-[#7A7A72]">No POS departments configured yet.</p>
+                      )}
+                    </div>
+                    {editForm.posDepartments.length === 0 && (
+                      <p className="text-xs text-red-600 mt-2">
+                        Select at least one department, or turn POS access off.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <div className="flex gap-3 pt-2">
             <Button variant="secondary" className="flex-1" onClick={() => setEditUser(null)}>

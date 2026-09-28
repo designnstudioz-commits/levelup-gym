@@ -102,8 +102,38 @@ const DEFAULT_SETTINGS: PosSettingsResolved = {
  * — low hundreds of rows in total.
  */
 export async function loadTerminalCatalog(
-  supabase: SupabaseClient
+  supabase: SupabaseClient,
+  /** pos_departments.id[] the caller may sell from, or null for unrestricted
+   *  (owner only). Anything else is confined to the listed departments.
+   *
+   *  Added 2026-09-29. Before this the terminal loaded EVERY department, so a
+   *  cashier assigned only Cafe could still see and sell Supplements,
+   *  Accessories and HealthBox stock. Scoping at the query is what makes the
+   *  assignment real: filtering in the browser would leave the full
+   *  catalogue in the page payload. */
+  departmentIds: string[] | null
 ): Promise<TerminalCatalog> {
+  // Resolve the scope to a concrete id list once, so every query below can
+  // use the same plain `.in()` with no conditional builder.
+  //
+  // null means unrestricted (owner), which becomes "every active department"
+  // rather than a skipped filter — that keeps the query shapes identical and
+  // avoids wrapping Supabase's builder in a generic, which makes its
+  // inferred row type recurse until tsc reports "type instantiation is
+  // excessively deep". An empty assignment stays empty and correctly yields
+  // nothing: a user assigned no department sells nothing, not everything.
+  let effectiveDepartmentIds: string[];
+  if (departmentIds === null) {
+    const { data } = await supabase
+      .from("pos_departments")
+      .select("id")
+      .eq("status", "active")
+      .is("deleted_at", null);
+    effectiveDepartmentIds = (data ?? []).map((d: { id: string }) => d.id);
+  } else {
+    effectiveDepartmentIds = departmentIds;
+  }
+
   const [
     { data: departments },
     { data: categories },
@@ -117,6 +147,7 @@ export async function loadTerminalCatalog(
       .select("id, name, slug, financial_owner, description, sort_order, status, created_at, updated_at, deleted_at")
       .eq("status", "active")
       .is("deleted_at", null)
+      .in("id", effectiveDepartmentIds)
       .order("sort_order"),
 
     supabase
@@ -124,6 +155,7 @@ export async function loadTerminalCatalog(
       .select("id, department_id, name, sort_order, status, created_at, updated_at, deleted_at")
       .eq("status", "active")
       .is("deleted_at", null)
+      .in("department_id", effectiveDepartmentIds)
       .order("sort_order"),
 
     // Explicit column list — cost_price is deliberately absent.
@@ -136,6 +168,7 @@ export async function loadTerminalCatalog(
       .eq("is_active", true)
       .eq("show_on_pos", true)
       .is("deleted_at", null)
+      .in("department_id", effectiveDepartmentIds)
       .order("sort_order")
       .order("name"),
 

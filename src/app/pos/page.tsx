@@ -1,6 +1,9 @@
 import { createClient as createServiceClient } from "@supabase/supabase-js";
+import { createClient } from "@/lib/supabase/server";
 import { loadTerminalCatalog } from "@/lib/pos/catalog";
+import { posDepartmentScopeFor } from "@/lib/pos/permissions";
 import { PosTerminal } from "@/components/pos/PosTerminal";
+import type { SystemRole } from "@/types/database";
 
 function getServiceClient() {
   return createServiceClient(
@@ -36,8 +39,31 @@ function getServiceClient() {
 export const dynamic = "force-dynamic";
 
 export default async function PosTerminalPage() {
+  // Resolve the caller's department assignment before loading anything. The
+  // layout has already confirmed they may be here at all (hasPosAccess);
+  // this decides WHAT they may sell. Scoping the query rather than the
+  // rendered list matters — filtering client-side would still ship the whole
+  // catalogue to the browser.
+  const session = await createClient();
+  const { data: { user } } = await session.auth.getUser();
+  const { data: me } = user?.email
+    ? await session
+        .from("system_users")
+        .select("role, pos_access, pos_department_scope")
+        .eq("email", user.email.toLowerCase())
+        .eq("status", "active")
+        .is("deleted_at", null)
+        .maybeSingle()
+    : { data: null };
+
+  const departmentIds = posDepartmentScopeFor({
+    role: (me?.role ?? null) as SystemRole | null,
+    pos_access: me?.pos_access,
+    pos_department_scope: me?.pos_department_scope,
+  });
+
   const supabase = getServiceClient();
-  const catalog = await loadTerminalCatalog(supabase);
+  const catalog = await loadTerminalCatalog(supabase, departmentIds);
 
   return <PosTerminal catalog={catalog} />;
 }

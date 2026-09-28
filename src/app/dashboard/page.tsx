@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format, subDays, startOfWeek, startOfMonth, endOfMonth } from "date-fns";
 import {
-  Banknote, Users, TrendingUp, Clock, AlertTriangle,
+  Banknote, Users, TrendingUp, Clock, AlertTriangle, Lock,
   CheckCircle, ArrowRight, Search, RefreshCw, CalendarCheck, Wifi,
   UserPlus, RotateCcw, Dumbbell, Zap, Percent, ChevronRight,
   ShoppingCart, Wallet, PackageX, Receipt,
@@ -14,6 +14,7 @@ import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { StatsCard } from "@/components/ui/StatsCard";
+import { hasPosAccess } from "@/lib/pos/permissions";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -94,12 +95,47 @@ export default function DashboardPage() {
   // is already authorised for them (POS_ROUTE_ROLES), department-scoped,
   // and carries no Level Up cost/margin data. Keep this in sync with the
   // matching redirect in middleware.ts.
-  if (role === "cashier") return <PosRoleRedirect to="/pos" />;
-  if (role === "healthbox_staff") return <PosRoleRedirect to="/dashboard/pos/catalog/products" />;
+  // Both of these roles exist purely to work in POS, so their landing page
+  // is a POS screen — but only if POS access is actually granted. Sending an
+  // ungranted user there would bounce them straight back and loop, so they
+  // get an explicit panel instead of a redirect.
+  const posOk = hasPosAccess(currentUser);
+  if (role === "cashier") {
+    return posOk ? <PosRoleRedirect to="/pos" /> : <PosAccessDisabled header={header} />;
+  }
+  if (role === "healthbox_staff") {
+    return posOk
+      ? <PosRoleRedirect to="/dashboard/pos/catalog/products" />
+      : <PosAccessDisabled header={header} />;
+  }
   if (role === "trainer") return <TrainerDashboard header={header} />;
   if (role === "viewer") return <ViewerDashboard header={header} />;
   if (role === "receptionist") return <ReceptionistDashboard header={header} />;
   return <ManagementCockpit header={header} />;
+}
+
+/** Shown to a cashier or HealthBox staff member whose POS access has not
+ *  been enabled (or who has no department assigned). They have no gym
+ *  dashboard of their own, so without this they would either loop between
+ *  /dashboard and /pos or land on a blank screen with no explanation. */
+function PosAccessDisabled({ header }: { header: React.ReactNode }) {
+  return (
+    <div className="flex flex-col flex-1">
+      {header}
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="max-w-md text-center">
+          <div className="w-14 h-14 bg-[#FEF0E8] rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Lock className="w-7 h-7 text-[#F06418]" />
+          </div>
+          <p className="text-base font-semibold text-[#1A1A16]">POS access is not enabled</p>
+          <p className="text-sm text-[#7A7A72] mt-1.5">
+            Your account has not been given POS access yet, or has no department assigned.
+            Ask the owner to enable it in Settings → Users.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** Client-side redirect for roles that have no gym dashboard of their own.
@@ -215,6 +251,11 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
   const [collectorNames, setCollectorNames] = useState<Record<string, string>>({});
   const [memberNames, setMemberNames] = useState<Record<string, { full_name: string; membership_no: string }>>({});
   const [monthlyCollection, setMonthlyCollection] = useState(0);
+  const [monthlyExpenses, setMonthlyExpenses] = useState(0);
+  // This cockpit renders for owner AND manager. Expenses and Net Profit are
+  // owner-only, so they are gated here rather than by the page-level role
+  // switch above, which cannot distinguish the two.
+  const isOwner = useCurrentUser()?.role === "owner";
 
   const [outstandingRows, setOutstandingRows] = useState<{ id: string; kind: "cycle" | "balance"; memberId: string; memberName: string; amount: number; dueDate: string | null; daysOverdue: number; status: "overdue" | "partial" | "pending" }[]>([]);
 
@@ -254,6 +295,7 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
       { data: ptRows },
       { data: walkInRows },
       { data: monthWalkIns },
+      { data: monthExpenses },
       { data: expiringData },
       { data: pendingLedger },
       { data: currentCycleLedger },
@@ -279,6 +321,12 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
         .select("id, full_name, fee_paid, payment_method, visit_date, added_by, created_at, collector:system_users!daily_members_added_by_fkey(full_name)")
         .is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
       supabase.from("daily_members").select("fee_paid").is("deleted_at", null).gte("visit_date", monthStart),
+      // Gym operating expenses for the same month, so Net Profit uses one
+      // period definition with Monthly Collection above it. Deliberately the
+      // `expenses` table only — HealthBox expenses and settlements live in
+      // pos_healthbox_expenses and are a vendor arrangement, not gym running
+      // costs; netting them here would misstate both sides.
+      supabase.from("expenses").select("amount").is("deleted_at", null).gte("expense_date", monthStart),
       supabase.from("members").select("id, full_name, expiry_date").eq("status", "active").is("deleted_at", null)
         .gte("expiry_date", today).lte("expiry_date", sevenDaysOut).order("expiry_date", { ascending: true }),
       supabase.from("trainer_commission_ledger").select("commission_amount, payout_date").is("deleted_at", null).eq("status", "pending"),
@@ -321,6 +369,7 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
       (monthPayments ?? []).reduce((s, r) => s + (r.amount ?? 0), 0) +
       (monthWalkIns ?? []).reduce((s, w) => s + (w.fee_paid ?? 0), 0)
     );
+    setMonthlyExpenses((monthExpenses ?? []).reduce((s, e) => s + (e.amount ?? 0), 0));
 
     // Outstanding — same expired/unpaid-since-cycle-start definition used
     // on the Fees page, unchanged, plus open balance_due partial payments
@@ -524,6 +573,14 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
           <StatsCard title={`${label} Collection`} value={formatPKR(totalCollected)} icon={Banknote} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" loading={loading} />
           <StatsCard title="Total Outstanding" value={formatPKR(totalOutstanding)} icon={AlertTriangle} iconColor="text-red-600" iconBg="bg-red-50" loading={loading} />
           <StatsCard title="Monthly Collection" value={formatPKR(monthlyCollection)} icon={TrendingUp} iconColor="text-blue-600" iconBg="bg-blue-50" loading={loading} />
+          {isOwner && (
+            <>
+              <StatsCard title="Monthly Expenses" value={formatPKR(monthlyExpenses)} icon={Banknote} iconColor="text-[#F06418]" iconBg="bg-[#FEF0E8]" loading={loading} />
+              <StatsCard title="Net Profit (Month)" value={formatPKR(monthlyCollection - monthlyExpenses)} icon={Wallet}
+                iconColor={monthlyCollection - monthlyExpenses >= 0 ? "text-green-600" : "text-red-600"}
+                iconBg={monthlyCollection - monthlyExpenses >= 0 ? "bg-green-50" : "bg-red-50"} loading={loading} />
+            </>
+          )}
           <StatsCard title="New Members" value={newMembersCount} icon={UserPlus} iconColor="text-green-600" iconBg="bg-green-50" loading={loading} />
           <StatsCard title="Renewals" value={renewalsCount} icon={RotateCcw} iconColor="text-purple-600" iconBg="bg-purple-50" loading={loading} />
           <StatsCard title="PT Members Added" value={ptAddedCount} icon={Dumbbell} iconColor="text-teal-600" iconBg="bg-teal-50" loading={loading} />

@@ -15,6 +15,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { SystemRole } from "@/types/database";
+import { hasPosAccess, posDepartmentScopeFor } from "@/lib/pos/permissions";
 
 export interface PosCaller {
   id: string;
@@ -59,7 +60,7 @@ export async function requirePosUser(
 
   const { data: row, error } = await supabase
     .from("system_users")
-    .select("id, full_name, email, role, staff_id, pos_department_scope")
+    .select("id, full_name, email, role, staff_id, pos_access, pos_department_scope")
     .eq("email", user.email.toLowerCase())
     .eq("status", "active")
     .is("deleted_at", null)
@@ -82,13 +83,39 @@ export async function requirePosUser(
     };
   }
 
+  // Per-user POS grant, checked BEFORE the role allow-list. As of
+  // 2026-09-29 a role no longer grants POS access on its own: the user needs
+  // system_users.pos_access = true and at least one assigned department.
+  // Owner bypasses both. This is the authoritative check for all 59
+  // /api/pos/* routes — the sidebar and middleware are cosmetic in front of
+  // it, exactly as this module's header describes.
+  if (!hasPosAccess({
+    role: row.role as SystemRole,
+    pos_access: row.pos_access,
+    pos_department_scope: row.pos_department_scope,
+  })) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "POS access has not been enabled for your account" },
+        { status: 403 }
+      ),
+    };
+  }
+
   const caller: PosCaller = {
     id: row.id,
     email: row.email,
     fullName: row.full_name,
     role: row.role as SystemRole,
     staffId: row.staff_id ?? null,
-    departmentScope: row.pos_department_scope ?? null,
+    // Owner stays unrestricted (null); everyone else is confined to their
+    // assignment, which the handlers already use to filter departments.
+    departmentScope: posDepartmentScopeFor({
+      role: row.role as SystemRole,
+      pos_access: row.pos_access,
+      pos_department_scope: row.pos_department_scope,
+    }),
   };
 
   if (allowedRoles && !allowedRoles.includes(caller.role)) {

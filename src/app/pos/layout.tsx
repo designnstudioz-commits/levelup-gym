@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { CurrentUserProvider } from "@/contexts/CurrentUserContext";
-import { POS_TERMINAL_ROLES } from "@/lib/pos/permissions";
+import { POS_TERMINAL_ROLES, hasPosAccess } from "@/lib/pos/permissions";
 import type { SystemRole } from "@/types/database";
 
 /**
@@ -25,7 +25,7 @@ export default async function PosLayout({ children }: { children: React.ReactNod
 
   const { data: systemUser } = await supabase
     .from("system_users")
-    .select("id, full_name, role, status, staff_id, pos_department_scope")
+    .select("id, full_name, role, status, staff_id, pos_access, pos_department_scope")
     .eq("email", user.email.toLowerCase())
     .eq("status", "active")
     .is("deleted_at", null)
@@ -35,9 +35,22 @@ export default async function PosLayout({ children }: { children: React.ReactNod
   // staff. Send them to the login screen rather than defaulting to a role.
   if (!systemUser?.role) redirect("/login");
 
+  // Per-user grant first: as of 2026-09-29 a role no longer opens the
+  // terminal on its own. A receptionist or manager without an explicit
+  // grant is turned away here, not just hidden from the menu — nav
+  // visibility never was the boundary.
+  if (!hasPosAccess({
+    role: systemUser.role as SystemRole,
+    pos_access: systemUser.pos_access,
+    pos_department_scope: systemUser.pos_department_scope,
+  })) {
+    redirect("/dashboard");
+  }
+
+  // Role still decides WHICH POS surfaces are reachable, so a granted
+  // HealthBox staff member is sent to their scoped screens rather than the
+  // till. The grant is the gate; the role is the ceiling.
   if (!POS_TERMINAL_ROLES.includes(systemUser.role as SystemRole)) {
-    // A trainer, viewer or HealthBox staff member who lands here goes back
-    // to the gym dashboard, which will route them onward if needed.
     redirect("/dashboard");
   }
 
@@ -51,6 +64,8 @@ export default async function PosLayout({ children }: { children: React.ReactNod
           full_name: systemUser.full_name,
           role: systemUser.role,
           staff_id: systemUser.staff_id,
+          pos_access: systemUser.pos_access ?? false,
+          pos_department_scope: systemUser.pos_department_scope ?? null,
         }}
       >
         {children}

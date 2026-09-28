@@ -8,6 +8,12 @@ export interface CurrentUser {
   full_name: string | null;
   role: SystemRole | null;
   staff_id: string | null;
+  /** Explicit per-user POS grant. Role alone never grants POS access — see
+   *  src/lib/pos/permissions.ts. Owner ignores this and always has access. */
+  pos_access: boolean;
+  /** pos_departments.id[] this user may work in. null = unrestricted, which
+   *  is only ever correct for an owner. */
+  pos_department_scope: string[] | null;
 }
 
 const CurrentUserContext = createContext<CurrentUser | null>(null);

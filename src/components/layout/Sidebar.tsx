@@ -13,6 +13,7 @@ import {
   ClipboardList,
   CalendarCheck,
   CreditCard,
+  Banknote,
   Package,
   UserCog,
   BarChart2,
@@ -40,7 +41,7 @@ import {
   Landmark,
 } from "lucide-react";
 import type { SystemRole } from "@/types/database";
-import { POS_ROUTE_ROLES } from "@/lib/pos/permissions";
+import { POS_ROUTE_ROLES, hasPosAccess } from "@/lib/pos/permissions";
 
 interface NavItem {
   label: string;
@@ -55,6 +56,10 @@ interface SidebarProps {
   userEmail?: string;
   userName?: string;
   userRole?: string;
+  /** Explicit per-user POS grant — role alone no longer reveals the POS
+   *  menu. Owner ignores both and always sees it. */
+  posAccess?: boolean;
+  posDepartmentScope?: string[] | null;
 }
 
 const NAV_ROLES: Record<string, SystemRole[]> = {
@@ -63,6 +68,11 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/submissions": ["owner", "manager", "receptionist"],
   "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],
   "/dashboard/fees":        ["owner", "manager", "receptionist"],
+  // Owner only — the page shows Net Profit, which is management
+  // information. Matches the "owner read expenses" RLS policy and
+  // EXPENSE_VIEW_ROLES exactly. Must be listed: canAccess() fails OPEN, so
+  // an unlisted route would appear for every role.
+  "/dashboard/expenses":    ["owner"],
   "/dashboard/packages":    ["owner", "manager"],
   "/dashboard/family-approvals": ["owner", "manager"],
   "/dashboard/staff":       ["owner", "manager"],
@@ -86,7 +96,15 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
 // or it is shown to all roles. All POS routes are covered by the spread
 // above, and POS pages additionally enforce their own access server-side —
 // this function is cosmetic, never the security boundary.
-function canAccess(href: string, role: string): boolean {
+function canAccess(href: string, role: string, posOk: boolean): boolean {
+  // POS is gated per user, not per role (see src/lib/pos/permissions.ts).
+  // Checked before the role map so a receptionist or manager without an
+  // explicit grant never sees the menu, even though their role still appears
+  // in POS_ROUTE_ROLES — that list is now a ceiling on what they may do once
+  // granted, not the grant itself.
+  if (href === "/pos" || href === "/dashboard/pos" || href.startsWith("/dashboard/pos/")) {
+    if (!posOk) return false;
+  }
   const allowed = NAV_ROLES[href];
   if (!allowed) return true;
   return allowed.includes(role as SystemRole);
@@ -122,7 +140,7 @@ function Tip({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole }: SidebarProps) {
+export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole, posAccess, posDepartmentScope }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [collapsed, setCollapsed] = useState(false);
@@ -155,6 +173,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
     { label: "Submissions",    href: "/dashboard/submissions", icon: ClipboardList, badge: pendingSubmissions },
     { label: "Attendance",     href: "/dashboard/attendance",  icon: CalendarCheck },
     { label: "Fees & Payments",href: "/dashboard/fees",        icon: CreditCard    },
+    { label: "Expenses",       href: "/dashboard/expenses",    icon: Banknote      },
     { label: "Packages",       href: "/dashboard/packages",    icon: Package       },
     { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
     {
@@ -216,11 +235,16 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole 
   // /dashboard/staff?add=1) are absent from NAV_ROLES, so canAccess returns
   // true for them exactly as before.
   const role = userRole ?? "viewer";
+  const posOk = hasPosAccess({
+    role: role as SystemRole,
+    pos_access: posAccess,
+    pos_department_scope: posDepartmentScope,
+  });
   const navItems = allNavItems
-    .filter((item) => canAccess(item.href, role))
+    .filter((item) => canAccess(item.href, role, posOk))
     .map((item) =>
       item.children
-        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role)) }
+        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role, posOk)) }
         : item
     )
     // A group whose children were all filtered away has nothing to show.
