@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   Users,
   ClipboardList,
+  AlertTriangle,
   CalendarCheck,
   CreditCard,
   Banknote,
@@ -48,7 +49,27 @@ interface NavItem {
   href: string;
   icon: React.ElementType;
   badge?: number;
+  /** ISO date (YYYY-MM-DD) after which the NEW pill stops showing. Set it
+   *  when a module ships and never touch it again — isNewFeature() retires
+   *  the badge on its own, so nobody has to remember to come back and
+   *  delete it. */
+  newUntil?: string;
   children?: { label: string; href: string; icon: React.ElementType }[];
+}
+
+/** Whether a module should still be flagged NEW.
+ *
+ *  Compared as plain YYYY-MM-DD strings rather than Date objects: the cutoff
+ *  is a calendar date, and `new Date("2026-10-06")` parses as UTC midnight,
+ *  which in PKT (UTC+5) would retire the badge five hours early on the
+ *  previous evening. String comparison is exact and timezone-free.
+ *
+ *  `now` is injectable so the behaviour can be tested at a simulated date
+ *  without waiting for the calendar. */
+export function isNewFeature(newUntil?: string, now?: string): boolean {
+  if (!newUntil) return false;
+  const today = now ?? new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Karachi" });
+  return today < newUntil;
 }
 
 interface SidebarProps {
@@ -173,7 +194,8 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     { label: "Submissions",    href: "/dashboard/submissions", icon: ClipboardList, badge: pendingSubmissions },
     { label: "Attendance",     href: "/dashboard/attendance",  icon: CalendarCheck },
     { label: "Fees & Payments",href: "/dashboard/fees",        icon: CreditCard    },
-    { label: "Expenses",       href: "/dashboard/expenses",    icon: Banknote      },
+    // Shipped 2026-09-29; the pill retires itself on 2026-10-06.
+    { label: "Expenses",       href: "/dashboard/expenses",    icon: Banknote, newUntil: "2026-10-06" },
     { label: "Packages",       href: "/dashboard/packages",    icon: Package       },
     { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
     {
@@ -186,8 +208,21 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
       ],
     },
     { label: "Trainer Commissions", href: "/dashboard/commissions", icon: Percent },
+    { label: "Reports",        href: "/dashboard/reports",    icon: BarChart2   },
+    { label: "SMS & Notify",   href: "/dashboard/sms",        icon: MessageSquare },
+    { label: "Settings",       href: "/dashboard/settings",   icon: Settings    },
+  ];
+
+  // POS lives in its own section BELOW Settings, split out of the former
+  // combined "POS & Inventory" group. Every href below already existed — no
+  // page was created, moved or duplicated, only regrouped.
+  //
+  // Permissions are untouched: this list goes through exactly the same
+  // canAccess() + hasPosAccess() filter as the main list, so a user without
+  // an explicit POS grant sees the whole section disappear.
+  const posNavItems: NavItem[] = [
     {
-      label: "POS & Inventory",
+      label: "POS",
       href: "/dashboard/pos",
       icon: ShoppingCart,
       children: [
@@ -197,7 +232,6 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
         { label: "Categories",    href: "/dashboard/pos/catalog/categories",  icon: Tags            },
         { label: "Departments",   href: "/dashboard/pos/catalog/departments", icon: Building2       },
         { label: "Modifiers",     href: "/dashboard/pos/catalog/modifiers",   icon: SlidersHorizontal },
-        { label: "Inventory",     href: "/dashboard/pos/inventory",         icon: Warehouse       },
         { label: "Suppliers",     href: "/dashboard/pos/suppliers",         icon: Truck           },
         { label: "Cash Sessions", href: "/dashboard/pos/sessions",          icon: Wallet          },
         { label: "POS Reports",   href: "/dashboard/pos/reports",           icon: BarChart2       },
@@ -215,13 +249,21 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
         { label: "HealthBox Settlement", href: "/dashboard/pos/healthbox/settlement", icon: Landmark },
       ],
     },
-    // Jump straight to the touch terminal. Shown to everyone who may
-    // operate it, so reception can cover the counter without hunting for
-    // the URL.
+    {
+      label: "Inventory",
+      href: "/dashboard/pos/inventory",
+      icon: Warehouse,
+      children: [
+        { label: "Overview",    href: "/dashboard/pos/inventory",             icon: Warehouse },
+        { label: "Receive",     href: "/dashboard/pos/inventory/receive",     icon: Truck     },
+        { label: "Adjustments", href: "/dashboard/pos/inventory/adjustments", icon: SlidersHorizontal },
+        { label: "Counts",      href: "/dashboard/pos/inventory/counts",      icon: ClipboardList },
+        { label: "Movements",   href: "/dashboard/pos/inventory/movements",   icon: TrendingUp },
+        { label: "Alerts",      href: "/dashboard/pos/inventory/alerts",      icon: AlertTriangle },
+      ],
+    },
+    // Jump straight to the touch terminal.
     { label: "Open POS Terminal", href: "/pos", icon: Monitor },
-    { label: "Reports",        href: "/dashboard/reports",    icon: BarChart2   },
-    { label: "SMS & Notify",   href: "/dashboard/sms",        icon: MessageSquare },
-    { label: "Settings",       href: "/dashboard/settings",   icon: Settings    },
   ];
 
   // Filter the group itself, then its children. Child filtering is new in
@@ -250,6 +292,16 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     // A group whose children were all filtered away has nothing to show.
     .filter((item) => !item.children || item.children.length > 0);
 
+  // Same filter, same rules — the POS section is a layout change only.
+  const posItems = posNavItems
+    .filter((item) => canAccess(item.href, role, posOk))
+    .map((item) =>
+      item.children
+        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role, posOk)) }
+        : item
+    )
+    .filter((item) => !item.children || item.children.length > 0);
+
   async function handleLogout() {
     const supabase = createClient();
     await supabase.auth.signOut();
@@ -257,9 +309,19 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     router.push("/login");
   }
 
+  const topLevelHrefs = [...allNavItems, ...posNavItems]
+    .map((i) => i.href)
+    .filter((h) => h !== "/dashboard");
+
   function isActive(href: string) {
     if (href === "/dashboard") return pathname === "/dashboard";
-    return pathname.startsWith(href);
+    if (!pathname.startsWith(href)) return false;
+    // /dashboard/pos and /dashboard/pos/inventory both match an inventory
+    // path; only the longest one counts as active.
+    const best = topLevelHrefs
+      .filter((h) => pathname.startsWith(h))
+      .sort((a, b) => b.length - a.length)[0];
+    return href === best;
   }
 
   const displayName = userName ?? userEmail ?? "Staff";
@@ -269,7 +331,23 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     "/dashboard/members": ["/dashboard/members", "/dashboard/register", "/dashboard/daily-members"],
     "/dashboard/staff":   ["/dashboard/staff"],
     "/dashboard/pos":     ["/dashboard/pos"],
+    "/dashboard/pos/inventory": ["/dashboard/pos/inventory"],
   };
+
+  // POS and Inventory are siblings that share a URL prefix, so a plain
+  // startsWith would open/highlight both on an inventory page. Resolve the
+  // most specific match once and let only that row win.
+  const groupBases = Object.entries(childRoutes)
+    .filter(([, routes]) => routes.some((r) => pathname.startsWith(r)))
+    .map(([base]) => base)
+    .sort((a, b) => b.length - a.length);
+  const expandedBase = groupBases[0];
+
+  // Rendered as the rule between the main nav and the POS section; keeping it
+  // in the same list means one item renderer, not two copies of it.
+  const POS_DIVIDER = "__pos_divider__";
+  const navRows: (NavItem | typeof POS_DIVIDER)[] =
+    posItems.length > 0 ? [...navItems, POS_DIVIDER, ...posItems] : navItems;
 
   return (
     <aside
@@ -306,18 +384,27 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
 
       {/* Navigation */}
       <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto overflow-x-hidden">
-        {navItems.map((item) => {
+        {navRows.map((item) => {
+          if (item === POS_DIVIDER) {
+            return (
+              <div key="pos-divider" className="pt-3 mt-3 border-t border-white/10">
+                {!collapsed && (
+                  <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-white/35">
+                    Point of Sale
+                  </div>
+                )}
+              </div>
+            );
+          }
+
           const active = isActive(item.href);
           const Icon   = item.icon;
-          const shouldExpand = !collapsed && item.children &&
-            Object.entries(childRoutes).some(
-              ([base, routes]) => item.href === base && routes.some((r) => pathname.startsWith(r))
-            );
+          const shouldExpand = !collapsed && !!item.children && item.href === expandedBase;
 
           // Collapsed: icon-only with tooltip
           if (collapsed) {
             return (
-              <Tip key={item.href} label={item.label}>
+              <Tip key={item.href} label={isNewFeature(item.newUntil) ? `${item.label} — NEW` : item.label}>
                 <Link
                   href={item.href}
                   className={cn(
@@ -328,6 +415,9 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
                   )}
                 >
                   <Icon className="w-5 h-5 flex-shrink-0" />
+                  {isNewFeature(item.newUntil) && item.badge == null && (
+                    <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-[#F06418]" />
+                  )}
                   {item.badge != null && item.badge > 0 && (
                     <span className="absolute top-1 right-1 bg-[#F06418] text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center leading-none">
                       {item.badge > 9 ? "9+" : item.badge}
@@ -348,6 +438,11 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
                 )}>
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="truncate">{item.label}</span>
+                  {isNewFeature(item.newUntil) && (
+                    <span className="bg-[#F06418] text-white text-[9px] font-bold px-1.5 py-px rounded-full leading-none tracking-wide flex-shrink-0">
+                      NEW
+                    </span>
+                  )}
                 </div>
                 <div className="ml-4 mt-0.5 space-y-0.5">
                   {item.children.map((child) => {
@@ -380,6 +475,13 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
             >
               <Icon className="w-4 h-4 flex-shrink-0" />
               <span className="flex-1 truncate">{item.label}</span>
+              {isNewFeature(item.newUntil) && (
+                // text-[9px] + py-px + leading-none keeps the pill inside the
+                // existing row height rather than pushing every row taller.
+                <span className="bg-[#F06418] text-white text-[9px] font-bold px-1.5 py-px rounded-full leading-none tracking-wide flex-shrink-0">
+                  NEW
+                </span>
+              )}
               {item.badge != null && item.badge > 0 && (
                 <span className="bg-[#F06418] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center leading-none">
                   {item.badge > 99 ? "99+" : item.badge}
