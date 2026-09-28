@@ -37,6 +37,7 @@ export async function calculateHealthboxSettlement(
     .from("pos_orders")
     .select("id, refund_of_order_id, healthbox_net_amount, settlement_id")
     .in("status", ORDER_STATUSES_FOR_SALES as unknown as string[])
+    .is("deleted_at", null)
     .gte("completed_at", start)
     .lte("completed_at", end);
 

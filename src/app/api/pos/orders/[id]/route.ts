@@ -37,7 +37,7 @@ export async function GET(
     admin.from("pos_order_items").select("*").eq("order_id", id),
     admin.from("pos_payments").select("*").eq("order_id", id),
     admin.from("pos_approvals").select("*").eq("order_id", id).is("deleted_at", null).order("requested_at", { ascending: false }),
-    admin.from("pos_orders").select("id, order_no").eq("refund_of_order_id", id).maybeSingle(),
+    admin.from("pos_orders").select("id, order_no").eq("refund_of_order_id", id).is("deleted_at", null).maybeSingle(),
   ]);
 
   let servedByName = "—";

@@ -49,6 +49,7 @@ export async function GET(
     .from("pos_orders")
     .select("id, order_no, status, gross_amount, discount_amount, net_amount, refund_of_order_id, completed_at, voided_at, void_reason")
     .eq("member_id", memberId)
+    .is("deleted_at", null)
     .not("status", "in", "(open,held)")
     .order("completed_at", { ascending: false, nullsFirst: false })
     .limit(100);

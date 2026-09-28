@@ -32,7 +32,8 @@ export async function GET(req: NextRequest) {
 
   let orderQuery = admin
     .from("pos_orders")
-    .select("id, order_no, status, gross_amount, discount_amount, net_amount, item_count, served_by, member_id, customer_type, refund_of_order_id, completed_at");
+    .select("id, order_no, status, gross_amount, discount_amount, net_amount, item_count, served_by, member_id, customer_type, refund_of_order_id, completed_at")
+    .is("deleted_at", null);
 
   if (statusFilter === "void") {
     orderQuery = orderQuery.eq("status", "voided");

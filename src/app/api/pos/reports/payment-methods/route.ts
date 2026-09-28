@@ -32,15 +32,30 @@ export async function GET(req: NextRequest) {
   const from = req.nextUrl.searchParams.get("from");
   const to = req.nextUrl.searchParams.get("to");
 
-  let query = admin.from("pos_payments").select("method, amount, created_at");
+  let query = admin.from("pos_payments").select("order_id, method, amount, created_at");
   if (from) query = query.gte("created_at", pktDayBounds(from).start);
   if (to) query = query.lte("created_at", pktDayBounds(to).end);
 
-  const { data: payments, error } = await query;
+  const { data: rawPayments, error } = await query;
   if (error) {
     console.error("[POS payment methods report]", error);
     return NextResponse.json({ error: "Could not load the payment method report" }, { status: 500 });
   }
+
+  // pos_payments has no deleted_at of its own — it inherits its parent
+  // order's. Without this the report keeps counting payments that belong to
+  // orders taken off the books.
+  //
+  // Resolved in this direction (payments first, then their orders) rather
+  // than "fetch every live order id and filter by it": that id list would
+  // grow with every order ever taken and eventually overflow the request
+  // URL. This way the lookup is bounded by the report's own date window.
+  const payOrderIds = [...new Set((rawPayments ?? []).map((p) => p.order_id).filter(Boolean))];
+  const { data: liveOrders } = payOrderIds.length
+    ? await admin.from("pos_orders").select("id").in("id", payOrderIds).is("deleted_at", null)
+    : { data: [] };
+  const liveOrderIds = new Set((liveOrders ?? []).map((o) => o.id));
+  const payments = (rawPayments ?? []).filter((p) => liveOrderIds.has(p.order_id));
 
   const byMethod = new Map<string, { total: number; count: number }>();
   for (const p of payments ?? []) {

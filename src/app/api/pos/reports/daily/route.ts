@@ -43,6 +43,7 @@ export async function GET(req: NextRequest) {
   const { data: orders } = await admin
     .from("pos_orders")
     .select("id, status, gross_amount, discount_amount, net_amount, levelup_net_amount, healthbox_net_amount, refund_of_order_id, completed_at, voided_at, void_reason")
+    .is("deleted_at", null)
     .or(`completed_at.gte.${dayStart},voided_at.gte.${dayStart}`)
     .lte("completed_at", dayEnd);
 

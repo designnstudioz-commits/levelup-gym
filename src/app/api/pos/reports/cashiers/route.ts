@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
 
   const sessionIds = (sessions ?? []).map((s) => s.id);
   const { data: orders } = sessionIds.length
-    ? await admin.from("pos_orders").select("id, session_id, status, gross_amount, net_amount, refund_of_order_id").in("session_id", sessionIds)
+    ? await admin.from("pos_orders").select("id, session_id, status, gross_amount, net_amount, refund_of_order_id").in("session_id", sessionIds).is("deleted_at", null)
     : { data: [] };
   const ordersBySession = new Map<string, typeof orders>();
   for (const o of orders ?? []) {

@@ -30,7 +30,8 @@ export async function GET(req: NextRequest) {
   let orderQuery = admin
     .from("pos_orders")
     .select("id, status, refund_of_order_id, healthbox_net_amount, completed_at")
-    .in("status", ORDER_STATUSES_FOR_SALES as unknown as string[]);
+    .in("status", ORDER_STATUSES_FOR_SALES as unknown as string[])
+    .is("deleted_at", null);
   if (from) orderQuery = orderQuery.gte("completed_at", pktDayBounds(from).start);
   if (to) orderQuery = orderQuery.lte("completed_at", pktDayBounds(to).end);
   const { data: orders } = await orderQuery;

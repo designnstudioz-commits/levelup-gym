@@ -30,12 +30,13 @@ export async function GET() {
     .from("pos_orders")
     .select("net_amount, levelup_net_amount, healthbox_net_amount, refund_of_order_id, completed_at")
     .in("status", ORDER_STATUSES_FOR_SALES as unknown as string[])
+    .is("deleted_at", null)
     .gte("completed_at", dayStart)
     .lte("completed_at", dayEnd);
   const posSalesToday = (orders ?? []).reduce((s, o) => s + Number(o.net_amount), 0);
 
   const orderIds: string[] = [];
-  const { data: allOrders } = await admin.from("pos_orders").select("id").in("status", ORDER_STATUSES_FOR_SALES as unknown as string[]).gte("completed_at", dayStart).lte("completed_at", dayEnd);
+  const { data: allOrders } = await admin.from("pos_orders").select("id").in("status", ORDER_STATUSES_FOR_SALES as unknown as string[]).is("deleted_at", null).gte("completed_at", dayStart).lte("completed_at", dayEnd);
   for (const o of allOrders ?? []) orderIds.push(o.id);
   const { data: items } = orderIds.length
     ? await admin.from("pos_order_items").select("department_name, line_net").in("order_id", orderIds)

@@ -44,6 +44,7 @@ export async function GET(
     .from("pos_orders")
     .select("id, order_no, status, gross_amount, discount_amount, net_amount, member_id, completed_at, voided_at, void_reason, note")
     .eq("id", orderId)
+    .is("deleted_at", null)
     .maybeSingle();
 
   if (error || !order || order.member_id !== memberId) {

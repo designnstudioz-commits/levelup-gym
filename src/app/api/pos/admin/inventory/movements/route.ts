@@ -22,9 +22,22 @@ export async function GET(req: NextRequest) {
   const admin = getServiceClient();
   const params = req.nextUrl.searchParams;
 
+  // pos_stock_movements is deliberately immutable — it has no deleted_at,
+  // because it is the source of truth for stock. So an archived product's
+  // movements never disappear on their own. Scope the list to the live
+  // catalogue instead, which is what the rest of the Inventory section
+  // (Overview, Alerts, Counts) already shows; archiving a product should
+  // take its history off the operational screens without destroying it.
+  const { data: liveProducts } = await admin
+    .from("pos_products")
+    .select("id")
+    .is("deleted_at", null);
+  const liveProductIds = (liveProducts ?? []).map((p) => p.id);
+
   let query = admin
     .from("pos_stock_movements")
     .select("id, product_id, variant_id, type, qty_delta, qty_before, qty_after, order_id, receipt_id, stock_count_id, unit_cost, reason_note, created_by, created_at")
+    .in("product_id", liveProductIds)
     .order("created_at", { ascending: false })
     .limit(200);
 
