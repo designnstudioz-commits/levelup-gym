@@ -48,8 +48,17 @@ export default function supabaseImageLoader({
   const [base, existingQuery] = src.split("?");
   const rendered = base.replace(PUBLIC_OBJECT, RENDER_IMAGE);
 
+  // Square, cover-cropped. Every consumer renders in a fixed box with
+  // object-cover, so this is the same crop the browser would do, done
+  // server-side. Width-only is NOT safe: for a 3:4 portrait Supabase returned
+  // a 112x1024 strip (verified 2026-10-05), and the browser then cropped the
+  // middle of that strip - which cut member faces out of their circles.
+  // Supabase cover is centred, which keeps the face for ordinary headshots.
+  const size = Math.min(Math.round(width), MAX_WIDTH);
   const params = new URLSearchParams(existingQuery);
-  params.set("width", String(Math.min(Math.round(width), MAX_WIDTH)));
+  params.set("width", String(size));
+  params.set("height", String(size));
+  params.set("resize", "cover");
   // Supabase accepts 20-100. Next's default is 75 when unspecified.
   params.set("quality", String(Math.min(Math.max(quality ?? 75, 20), 100)));
 
