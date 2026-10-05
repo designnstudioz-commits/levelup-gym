@@ -1,14 +1,18 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Phase 3D: lets next/image optimise images served from this project's
-  // own Supabase Storage buckets (member-photos, member-docs, and the new
-  // pos-products). Scoped to exactly this project's storage host via
-  // pathname, not a wildcard "any supabase.co project" pattern — the
-  // narrowest rule that makes next/image work at all. Public buckets only;
-  // this grants no read access beyond what the bucket's own public flag
-  // already allows.
+  // Images are resized by Supabase Storage, not by Vercel's optimiser — see
+  // src/lib/supabaseImageLoader.ts for why (Vercel's allowance ran out on
+  // 2026-10-05 and every uncached avatar started rendering as "needs
+  // re-upload"). With a custom loader Next never proxies an image itself, so
+  // there is no Vercel image quota to exhaust.
+  //
+  // remotePatterns is kept deliberately: it is unused while loader is
+  // "custom", but it documents the one storage host this app renders from,
+  // and it is what would take over again if the loader were ever removed.
   images: {
+    loader: "custom",
+    loaderFile: "./src/lib/supabaseImageLoader.ts",
     remotePatterns: [
       {
         protocol: "https",
