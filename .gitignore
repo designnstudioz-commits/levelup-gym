@@ -42,3 +42,18 @@ next-env.d.ts
 
 # Supabase CLI scratch (version cache), not part of the project
 supabase/.temp
+
+# Operational artefacts that must never enter the repository.
+# Exact filenames, not globs: these are specific files that were found
+# sitting in the project root on 2026-10-06 and moved to a restricted
+# folder outside it. The rules remain so that regenerating one here
+# cannot be committed by accident.
+#
+# Member PII — the 45-member recovery manifest from the September
+# Storage-deletion incident (names, phone numbers, photo paths).
+/affected_members_recovery_manifest.csv
+# Security audit of the live system (auth/RLS findings).
+/Level-Up-Auth-RLS-Audit.pdf
+# Product-catalogue upload template. No PII, kept locally for convenience;
+# ignored so it is not committed without a deliberate decision.
+/Level_Up_Bulk_Product_Upload_Template.xlsx
