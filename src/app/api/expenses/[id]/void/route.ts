@@ -42,12 +42,42 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ success: true, alreadyVoided: true });
     }
 
+    // A bill with money already paid against it cannot be voided. Voiding it
+    // would strip the bill from the books while its payments stayed in the
+    // month they were paid, so funds and outstanding would disagree. The
+    // payments must be voided first, each with its own reason, which also
+    // leaves a clearer audit trail than one blanket void.
+    const { data: livePayments } = await admin
+      .from("expense_payments")
+      .select("id, amount")
+      .eq("expense_id", id)
+      .is("deleted_at", null);
+    if ((livePayments ?? []).length > 0) {
+      const total = (livePayments ?? []).reduce((t, r) => t + Number(r.amount ?? 0), 0);
+      return NextResponse.json(
+        {
+          // Deliberately does NOT tell the owner to void the payments. Voiding
+          // a payment asserts the money never moved, so it is only ever right
+          // for an entry made in error — not a way to clear a bill that was
+          // genuinely paid.
+          error:
+            "This bill has recorded payments (" +
+            (livePayments ?? []).length + " totalling Rs " + total.toLocaleString("en-PK") +
+            ") and cannot be voided. Only void payments entered by mistake.",
+        },
+        { status: 409 }
+      );
+    }
+
     const { error } = await admin
       .from("expenses")
       .update({
         deleted_at: new Date().toISOString(),
         deleted_by: auth.caller.id,
         void_reason: reason || null,
+        // Identifies this as a current-build write; the database rejects
+        // updates without it (expense_legacy_write_guard).
+        write_marker: "v2",
       })
       .eq("id", id);
 

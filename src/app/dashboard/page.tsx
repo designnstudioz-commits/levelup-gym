@@ -323,10 +323,20 @@ function ManagementCockpit({ header }: { header: React.ReactNode }) {
       supabase.from("daily_members").select("fee_paid").is("deleted_at", null).gte("visit_date", monthStart),
       // Gym operating expenses for the same month, so Net Profit uses one
       // period definition with Monthly Collection above it. Deliberately the
-      // `expenses` table only — HealthBox expenses and settlements live in
+      // `expenses` book only — HealthBox expenses and settlements live in
       // pos_healthbox_expenses and are a vendor arrangement, not gym running
       // costs; netting them here would misstate both sides.
-      supabase.from("expenses").select("amount").is("deleted_at", null).gte("expense_date", monthStart),
+      //
+      // Reads PAYMENTS, not bills. Since 2026-10-05 an `expenses` row is a
+      // bill, which may be unpaid or part-paid, and money only leaves when an
+      // expense_payments row exists. Summing expenses.amount here would count
+      // a bill the gym has not actually paid yet, and would double-count
+      // against its own payments. paid_on, not expense_date: a bill dated last
+      // month but paid this month belongs to this month's outgoings.
+      supabase.from("expense_payments")
+        .select("amount, expenses!inner(deleted_at)")
+        .is("deleted_at", null).is("expenses.deleted_at", null)
+        .gte("paid_on", monthStart),
       supabase.from("members").select("id, full_name, expiry_date").eq("status", "active").is("deleted_at", null)
         .gte("expiry_date", today).lte("expiry_date", sevenDaysOut).order("expiry_date", { ascending: true }),
       supabase.from("trainer_commission_ledger").select("commission_amount, payout_date").is("deleted_at", null).eq("status", "pending"),

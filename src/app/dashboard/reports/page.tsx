@@ -111,7 +111,13 @@ export default function ReportsPage() {
       supabase.from("attendances").select("id, punch_time, punch_type, member_id, device_id").gte("punch_time", `${from}T00:00:00+05:00`).lte("punch_time", `${to}T23:59:59+05:00`),
       supabase.from("submissions").select("id, status, referral_source, created_at, reviewed_at, gender").is("deleted_at", null).gte("created_at", `${from}T00:00:00`).lte("created_at", `${to}T23:59:59`),
       supabase.from("staff_members").select("id, full_name, role, salary").in("role", ["Trainer", "Nutritionist", "Other"]).eq("status", "active").is("deleted_at", null),
-      supabase.from("expenses").select("id, amount, expense_date, expense_head").is("deleted_at", null).gte("expense_date", from).lte("expense_date", to),
+      // Expense PAYMENTS, not bills — an expenses row is a bill and may be
+      // unpaid or part-paid (see src/lib/expenses.ts). Scoped by paid_on so
+      // this report counts money that actually left during the period.
+      supabase.from("expense_payments")
+        .select("id, amount, paid_on, expenses!inner(expense_head, deleted_at)")
+        .is("deleted_at", null).is("expenses.deleted_at", null)
+        .gte("paid_on", from).lte("paid_on", to),
       supabase.from("daily_members").select("id, fee_paid, visit_date, gender, converted_to_member_id").is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
       // Trainer commission — sourced from the historical ledger (frozen PT
       // Fee × rate at generation time), NOT from fee_payments.commission_*
