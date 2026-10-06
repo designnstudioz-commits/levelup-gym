@@ -3,7 +3,9 @@
 
 This document is a complete, self-contained snapshot of a production gym management web application, written for another AI coding assistant to read and immediately understand the system — what it does, how it's built, its data model, its business rules, and its known rough edges. It reflects the **actual current state of the codebase**, not an aspirational spec.
 
-**Scale:** ~41,000 lines of TypeScript across 209 files, 78 API routes, 49 pages, 39 database tables, 94 migrations.
+**Scale (as of 6 October 2026):** ~43,600 lines of TypeScript across 223 files, 86 API routes, 50 pages, 43 public database tables (21 of them `pos_*`), 105 migrations.
+
+**Last revised 6 October 2026.** Changes since 19 September are in §8.10–§8.16 and §12. Where this document and the code disagree, the code wins.
 
 ---
 
@@ -92,7 +94,7 @@ A `BEFORE UPDATE` trigger (`enforce_access_control_columns`) additionally blocks
 
 Postgres via Supabase. **Hard rules** (convention, not DB-enforced): never hard-delete (soft-delete via `deleted_at`), never drop or rename columns (only add), every change is a timestamped file in `supabase/migrations/`. Migrations are **not auto-applied** — run manually in the Supabase SQL editor.
 
-39 tables across four domains.
+40 public tables across four domains.
 
 ### 5.1 Membership & finance (core)
 
@@ -149,7 +151,7 @@ Postgres via Supabase. **Hard rules** (convention, not DB-enforced): never hard-
 
 **`unverified_attendances`** — a punch whose PIN matches no enrollment on that device.
 
-### 5.4 POS / cafe / inventory (22 tables)
+### 5.4 POS / cafe / inventory (21 tables)
 
 Built Sept 2026 (Phase 3). The gym has an on-site cafe with **two sellers in one basket**: the house (supplements, shakes, merch — 100% gym revenue) and a vendor ("HealthBox" — cafe food, commission-split). The POS splits a mixed basket at the **line level**, which drives most of the data model.
 
@@ -160,6 +162,10 @@ Constraints it was built to: touch monitor, **no physical keyboard** (on-screen 
 - **Inventory:** `pos_stock_movements`, `pos_stock_receipts`, `pos_stock_receipt_items`, `pos_stock_counts`, `pos_stock_count_items`, `pos_suppliers`
 - **Vendor settlement:** `pos_healthbox_expenses`, `pos_settlements`
 - **Config:** `pos_settings`
+
+**Access (added 2026-09-29):** `system_users.pos_access` (boolean) and `system_users.pos_department_scope` (uuid[]). POS access is granted per user, never by role. See §7.
+
+**Soft-delete rule for POS money (added 2026-10-05):** every money report and order read must filter `pos_orders.deleted_at IS NULL`. Before that date twelve POS reads did not, so a soft-deleted order stayed in every revenue total. `pos_payments` and `pos_order_items` have no `deleted_at` of their own and inherit it through their parent order. `pos_stock_movements` is deliberately immutable (no `deleted_at`) and is scoped by its product instead.
 
 Money-moving operations are **Postgres functions, not application logic** — `pos_complete_order`, `pos_void_order`, `pos_refund_order`, `pos_open/close/review_session`, `pos_receive_stock`, `pos_adjust_stock`, `pos_apply_stock_count`, `pos_finalize_healthbox_settlement`, `pos_mark_settlement_paid`, `pos_next_order_no`, `pos_next_hold_ref`. This keeps atomicity in the database rather than across HTTP calls.
 
@@ -221,6 +227,64 @@ Mechanism: `DATA UPDATE USERINFO` with `Grp=2 TZ1=2` to block, `Grp=1 TZ1=0` to 
 
 **HealthBox** (`/dashboard/pos/healthbox/*`) is the vendor side: expenses with an approval workflow, a vendor report, and settlement (preview → finalize → mark paid).
 
+### 6.6a Expenses — bills, payments and carry-forward (owner only)
+Added 2026-09-29, rebuilt as a bill/payment model on 2026-10-06 (`aa1f205`).
+
+Owner only, enforced at four layers: sidebar `NAV_ROLES`, a server
+`layout.tsx` guard, `requireStaff(EXPENSE_*_ROLES)` on every
+`/api/expenses` route, and RLS admitting `owner` alone on all four tables.
+Receipts live in a private `expense-receipts` bucket.
+
+**An `expenses` row is a BILL, not a payment.** `expense_payments` holds each
+dated payment against it. The invariant everything rests on:
+
+> **Only payments move funds.** "Expenses paid" sums
+> `expense_payments.amount` by `paid_on` — **never** `expenses.amount`.
+> Summing both double-counts. A bill on its own reduces nothing.
+
+The owner dashboard and the Revenue report were changed to read payments for
+exactly this reason; left as they were they would have counted bills the gym
+has not actually paid.
+
+**Balances are derived, never stored.** Opening = previous month's closing;
+closing = opening + income − paid. A back-dated entry, a correction or a void
+therefore recalculates every later month with nothing to reconcile.
+Carry-forward enters only through the opening balance, so it is never
+mistaken for income. Income scope is unchanged from `src/lib/finance.ts` —
+gym fees plus walk-ins, never POS.
+
+**History is effective-dated**, because deriving balances alone does not
+preserve it (`expense_amount_history` + `expense_amount_as_of()`):
+* a **correction** restates every past month (effective from the bill date);
+* a **revision** applies only from a stated date;
+* a **void** counts from the day it happened, so voiding a bill in November
+  does not erase it from September where it was genuinely owed.
+
+Payment voids are the deliberate exception: they are **not** effective-dated,
+because voiding a payment asserts the money never moved. It is a correction
+of a mistaken entry, not a refund, and the UI says so.
+
+**Writes are atomic Postgres functions, not application logic** — the same
+principle the POS already follows:
+* `update_expense_bill` — locks the bill, validates against payments, writes
+  history, updates, audits. Any failure rolls back everything. The lock is
+  taken first so a payment racing an edit cannot leave the bill overpaid.
+* `record_expense_payment` — same lock; rejects overpayment; a
+  `client_token` makes a retried or double-clicked submit idempotent.
+* `void_expense_payment`, `expense_month_summary`, `expense_amount_as_of`.
+
+All five are `SECURITY DEFINER` with EXECUTE revoked from `anon` and
+`authenticated` — they are reachable only through the API routes.
+
+**Back-dating is allowed and never silent.** Moving a bill or payment into a
+previous month, or changing a bill's total, requires a reason, which is
+recorded in `activity_logs`. There is no approval workflow and no month
+locking — a deliberate choice, revisit it if the books ever need signing off.
+
+**Starting balances are never assumed.** Until an owner sets `expense_settings`
+the module reports "Not configured" rather than presenting zero as real cash.
+As at deployment it is deliberately unset.
+
 ### 6.7 Staff & commission
 `/dashboard/staff` → `/dashboard/staff/[id]` (details, assigned members, per-member commission, device enrollment, attendance) → `/salary-slip` (printable monthly slip: base salary + computed commissions). PT pricing is fully custom per member.
 
@@ -236,7 +300,11 @@ Mechanism: `DATA UPDATE USERINFO` with `Grp=2 TZ1=2` to block, `Grp=1 TZ1=0` to 
 
 ## 7. Roles & permissions — how it actually works
 
-Roles: `owner`, `manager`, `receptionist`, `trainer`, `viewer`.
+Roles: `owner`, `manager`, `receptionist`, `cashier`, `healthbox_staff`, `trainer`, `viewer`. (`cashier` and `healthbox_staff` were added for POS.)
+
+**POS access is not a role grant.** A user can use the POS only if they are `owner`, or if `pos_access = true` AND they have at least one department in `pos_department_scope`. A role lists which POS screens exist for that role; it does not grant POS. Managers, receptionists and cashiers without an explicit grant see no POS at all. Non-owners are department-scoped inside the POS.
+
+**Expenses are owner only** (§6.6a). Nothing else grants it.
 
 Enforcement is **layered and uneven in strength**:
 
@@ -284,16 +352,87 @@ Fixes: `.limit(1)` in both relay and Next.js copies; `CHUNK_SIZE = 1` in the swe
 
 **8.9 — Supabase Storage deletion incident.** An overly broad cleanup script deleted 45 real members' photos permanently by matching a filename/timestamp prefix. The bucket has no versioning or trash. **Every Storage deletion must target exact, individually-verified object paths** — never a prefix, timestamp, "most recent N" listing, or any heuristic match. See CLAUDE.md rule 11.
 
+### 8.10 — Vercel image quota silently broke member photos (2026-10-05).
+Vercel's Image Optimization allowance ran out. `next/image` returned HTTP 402 `OPTIMIZED_IMAGE_REQUEST_PAYMENT_REQUIRED`, and `MemberAvatar` reports any image error as "photo file missing from storage" with a Re-upload button. The photos were fine; the message was false. Fixed by a custom loader (`src/lib/supabaseImageLoader.ts`) that serves resized images from Supabase Storage (`render/image`), so Next never proxies an image and there is no Vercel quota to exhaust. **Do not revert to the default loader.** The same fix requests a square `resize=cover`: a width-only request returned a 112×1024 strip and the browser's centre crop cut faces out. Each cached size fails separately, so one member can look fine in a list and broken on their profile.
+
+### 8.11 — POS reports counted soft-deleted orders (2026-10-05).
+Hiding a test order did not change any total, because twelve POS money reads never filtered `deleted_at`. The dashboard showed Rs −149,000 after test reversals. Fixed in `ec11509`. **Every new POS money query must filter `deleted_at IS NULL`.** Test data was removed by soft delete only, through the app's own refund/void mechanism, never by hard delete.
+
+### 8.12 — Expenses and POS access (2026-09-29).
+Owner-only expenses and per-user POS access shipped in `427a3db`. A live browser test found that `/dashboard/expenses` returned HTTP 200 with the full page to non-owners, because `useRoleGuard` is client-side and runs after the server has already rendered. The server layout guard is the real boundary. **Client-side guards are cosmetic.**
+
+### 8.13 — Staff were using an old deployment link (2026-09-30).
+Two owners reported missing tabs. Their accounts were correct; they were on an old `*.vercel.app` deployment. An old build still talks to the live production database, so it can show stale or wrong figures. **When someone reports "can't see X", ask which URL they opened before auditing roles or RLS.** Canonical URL: `https://app.levelupfitness.com.pk`. `levelup-gym-liard.vercel.app` remains allowed.
+
+### 8.14 — Supabase Auth Site URL (2026-10-05).
+Site URL moved to `https://app.levelupfitness.com.pk`, with the old Vercel URL still in the redirect allow-list. No password-reset flow exists yet, so this matters when one is added.
+
+### 8.15 — Expense bills, payments and the legacy-write guard (2026-10-06).
+The single-row model could not express a bill that is partly paid, or paid in
+a later month than it was raised. Splitting it created two problems worth
+remembering.
+
+*Readers that summed the wrong thing.* Twelve POS money reads had already been
+caught not filtering `deleted_at` (§8.11); the same class of bug appears here
+in a different guise — any reader that sums `expenses.amount` now counts
+money the gym has not paid. The owner dashboard and Revenue report were
+migrated to `expense_payments` by `paid_on` in the same commit.
+
+*The deploy window.* Migrations must land before the app, so for a period the
+previous build is live against the new schema. Two guards close that:
+`payments_managed` + an INSERT trigger gives any old-style insert a matching
+full payment (reproducing what that row used to mean), and `write_marker` +
+a BEFORE UPDATE trigger rejects any update that does not come from the current
+build, with an instruction to refresh. Without the second, the old editor
+could lower a total below what is already paid, move a bill away from its
+payments, or void a bill that has them — the old void route never looked at
+payments at all.
+
+A third lesson: two migrations initially both defined `expense_month_summary`.
+Re-running the earlier one silently reverted effective-dated history to "use
+today's amount and today's deleted flag", quietly rewriting closed months.
+Caught in staging. **One function, one definition, one file** — and migrations
+in this set must be applied in filename order.
+
+### 8.16 — pgsodium root key exposed and rotated (2026-10-06).
+The project's pgsodium/Vault root encryption key was printed into a working
+transcript while probing the Management API for the connection pooler
+hostname. The `/v1/projects/{ref}/pgsodium` endpoint returns the key in
+plaintext, which is easy to trip over when exploring that API.
+
+Impact was assessed before acting, and was nil: `pgsodium` is **not
+installed** (available, never created), `pgsodium.key` does not exist, there
+are **zero** pgsodium security labels (so no encrypted columns),
+`vault.secrets` is **empty**, and no application function or migration
+references either. The only functions mentioning pgsodium are
+`supabase_vault`'s own internals. Nothing in the database was protected by
+that key, so there was no data to re-encrypt and no secret to lose.
+
+**Rotated and verified the same day** via the documented method —
+`PUT /v1/projects/{ref}/pgsodium` with a freshly generated 64-character hex
+key. Verification compared the live value against the generated one in
+memory and confirmed both that it matches the new key and that it differs
+from the exposed one; neither value was printed or written to disk. Dependency
+counts were re-checked before and after, and the app was health-checked
+afterwards.
+
+**The warning that makes this safe here and not in general:** after rotation,
+anything encrypted under the previous key is permanently unrecoverable, and
+Vault secrets must be re-encrypted *before* the old key goes away. That was
+only acceptable because the dependent set was verified empty. Supabase is
+deprecating pgsodium in favour of Vault, so this should stay a one-off.
+
 ---
 
 ## 9. Not yet built
 
 - **Mobile app** (Flutter) — not started.
+- **Member photos** — the 477 stored photos are not re-processed; the square crop is applied at display time.
 - **SMS** (Telenor CCSMS) / **WhatsApp** (WATI/Meta) — `/dashboard/sms` is a placeholder.
 - **Payment gateways** (JazzCash/EasyPaisa online collection) — not integrated; payments are recorded manually.
 - **Multi-branch support, public marketing website** — not started.
 - **AI features** (churn prediction, chatbot, smart reminders) — not started.
-- **A staging environment** — one production Supabase project, one Vercel deployment. The procedure has been planned but not executed. Note ZKTeco devices can only talk to the one production relay regardless.
+- **A staging environment** — a staging Supabase project (`tzlydyoltuiguufgbpgo`) exists and migrations were replayed there in September. Keep it separate from production and never copy real member data into it. ZKTeco devices can only talk to the one production relay regardless.
 - **Automated tests** — none. Verification is manual plus `npm run check:doors` for the access subsystem.
 - **A validated relay disaster-recovery run** — `provision-relay-vm.sh` exists and is reasoned from the live config, but has never been executed.
 
@@ -336,10 +475,65 @@ sudo journalctl -u zkteco-relay -n 30 --no-pager | grep -E "config|Sending"
 ```
 Must read `commands per device poll: 1` and `Sending 1 command(s)`. **Any number above 1 means the §8.6 regression is back.**
 
-**Accounts:** GitHub pushes require the `designnstudioz-commits` account. Vercel project `levelup-gym` under `designnstudioz-2623`. Production URL `https://levelup-gym-liard.vercel.app`.
+### Backup and recovery posture (as at 6 October 2026)
+
+**Automated backups and PITR are UNAVAILABLE.** The Supabase organisation is
+on the **free plan**: point-in-time recovery is disabled and the API lists
+zero restore points. There is no platform-side rollback for this database.
+Treat every destructive operation accordingly, and read CLAUDE.md rule 11
+before touching Storage.
+
+**A manual encrypted backup was created and restore-tested on 2026-10-06**,
+immediately before the expense migration:
+
+* `pg_dump` / `pg_dumpall` 17.6 (matching the server exactly) producing
+  roles, schema and data for the `public`, `auth` and `storage` schemas.
+* Encrypted with AES-256-CBC (PBKDF2, 600k iterations), stored **outside the
+  repository** in an access-restricted folder on the maintainer's machine,
+  with its passphrase held separately. Never committed.
+* **Restore-tested**, not merely written: loaded into a throwaway local
+  PostgreSQL 17.6 cluster (loopback-only, non-standard port, no outbound
+  integrations), which produced all 75 tables, 41 RLS policies and 14
+  triggers with **zero data errors**, and reconciled against live production
+  — the only differences were rows the gym created during the dump. The test
+  cluster and its copy of the data were destroyed afterwards.
+
+**Excluded from that backup — know these before relying on it:**
+
+1. **Storage file contents.** The binaries live in S3, not Postgres. A
+   `pg_dump` captures only the `storage.objects` metadata rows, so the
+   ~477 member photos (~120 MB), expense receipts, POS product images and
+   member documents are **not** in it.
+2. **Project-level configuration** — API keys, JWT secret, Edge Functions,
+   auth provider settings, scheduled jobs. None of it is in the database.
+3. **Vault ciphertext**, which would not decrypt elsewhere.
+4. **The relay VM**, which is a separate machine with its own deploy path.
+
+It is a one-off snapshot, not a schedule. Repeat it before any risky change,
+or move the project to a plan with automated backups.
+
+**Accounts:** GitHub pushes require the `designnstudioz-commits` account. The active `gh` account drifts; check `gh auth status` before pushing. Vercel project `levelup-gym` under `designnstudioz-2623`. Production URL `https://app.levelupfitness.com.pk` (the `*.vercel.app` URL remains live). Supabase project ref `vravpfergmzparbqsgkk` (ap-southeast-1).
 
 **Further reading in this repo:** `CLAUDE.md` (conventions, brand, schema rules), `ZKTECO_DEVICES.md` (the device subsystem in depth — 568 lines, the most detailed doc here), `docs/pos-plan.md` and `docs/phase3-*.md` (POS design and audits).
 
 ---
 
-*Generated by reviewing the live codebase as of 19 September 2026. A snapshot, not a live-synced spec — re-verify against the actual code for anything load-bearing. Where this document says "verify before relying on it", that is a genuine open question, not hedging.*
+## 12. Changes since 19 September 2026
+
+| Date | Commit | What |
+|---|---|---|
+| 29 Sep | `427a3db` | Owner-only Expense module; per-user POS access (`pos_access` + department scope) |
+| 29 Sep | `3fe2450` | Sidebar: POS split out below Settings; reusable self-retiring NEW badge (Expenses until 6 Oct) |
+| 5 Oct | `ec11509` | POS reports respect `deleted_at` |
+| 5 Oct | `8a4cddb`, `9da1f18` | Member and product images served through Supabase render (square cover); Vercel image optimiser no longer used |
+| 5 Oct | (database only) | POS test data soft-deleted: 10 test orders, 3 test register sessions, 4 test products. Nothing hard-deleted. |
+| 6 Oct | `aa1f205` | **Expense bills/payments + carry-forward, deployed.** 4 migrations, 3 new tables (`expense_payments`, `expense_settings`, `expense_amount_history`), 5 new functions, 4 new API routes. Backfill: 20 eligible expenses → 20 payments, Rs 736,570.00, reconciled exactly. |
+
+**Open items as of 6 October 2026:**
+- Expense opening balances are deliberately **unconfigured** — awaiting the owner's starting month and figures.
+- The old deployment link, if staff still use it, must be traced and retired.
+- Vercel image quota: the app no longer uses it, but `/_next/image` still exists and returns 402.
+- **No automated database backups or PITR** (free plan). A manual encrypted backup was created and restore-tested on 2026-10-06, but it is a one-off and excludes Storage file contents. See "Backup and recovery posture" in §11.
+- ~~pgsodium root key exposure~~ — **resolved 2026-10-06**, see §8.16.
+
+*Revised 5 October 2026 from the codebase at commit `9da1f18`. A snapshot, not a live-synced spec. Where this document says "verify before relying on it", that is a genuine open question.*
