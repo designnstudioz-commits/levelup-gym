@@ -112,8 +112,13 @@ export async function pushAccessCommand(
     member_id?: string | null;
     created_by?: string | null;
   },
-  opts?: { ackTimeoutMs?: number; pollIntervalMs?: number }
-): Promise<{ ok: true; commandId: number } | { ok: false; pending: boolean; error: string }> {
+  // waitForAck: false queues the command and returns immediately, without
+  // blocking on the terminal's confirmation. Use it for unattended batch work
+  // (the nightly sweep), where the ack wait is pure latency: an unacked
+  // command stays queued and the relay hands it over on the device's next
+  // poll regardless. Leave it true wherever a human is waiting on the result.
+  opts?: { ackTimeoutMs?: number; pollIntervalMs?: number; waitForAck?: boolean }
+): Promise<{ ok: true; commandId: number; queued?: boolean } | { ok: false; pending: boolean; error: string }> {
   const command = buildUserInfoCommand(params.uid, params.name, params.access);
 
   // Only the allocate+insert step needs the lock — the (much longer) ack
@@ -165,6 +170,11 @@ export async function pushAccessCommand(
 
   if (lastError) return { ok: false, pending: false, error: lastError.message };
 
+  // Queued is the whole job when nobody is waiting. The command is durably
+  // in device_commands; the relay delivers one per poll. Returning here is
+  // what lets a run get through its entire backlog instead of ~4 members.
+  if (opts?.waitForAck === false) return { ok: true, commandId: commandId!, queued: true };
+
   const ack = await waitForAck(
     supabase,
     params.device_serial,
@@ -189,8 +199,8 @@ export async function pushAccessToAllDevices(
   // pass a timeout covering at least two device poll cycles. The default 15s
   // is shorter than a single ~20s cycle, so a device that simply hadn't
   // polled yet was being reported as a failure — see the route's own comment.
-  opts?: { ackTimeoutMs?: number }
-): Promise<{ device_serial: string; ok: boolean; pending?: boolean; error?: string }[]> {
+  opts?: { ackTimeoutMs?: number; waitForAck?: boolean }
+): Promise<{ device_serial: string; ok: boolean; pending?: boolean; queued?: boolean; error?: string }[]> {
   const { data: enrollments } = await supabase
     .from("device_enrollments")
     .select("device_serial, device_user_id")
@@ -211,6 +221,7 @@ export async function pushAccessToAllDevices(
         device_serial: e.device_serial,
         ok: res.ok,
         pending: res.ok ? undefined : res.pending,
+        queued: res.ok ? res.queued : undefined,
         error: res.ok ? undefined : res.error,
       };
     })
