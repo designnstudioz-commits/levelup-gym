@@ -66,6 +66,13 @@ interface NavItem {
  *
  *  `now` is injectable so the behaviour can be tested at a simulated date
  *  without waiting for the calendar. */
+/** A labelled group of nav items. `heading: null` renders the items with no
+ *  heading and no divider — used only for Dashboard at the very top. */
+interface NavSection {
+  heading: string | null;
+  items: NavItem[];
+}
+
 export function isNewFeature(newUntil?: string, now?: string): boolean {
   if (!newUntil) return false;
   const today = now ?? new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Karachi" });
@@ -179,39 +186,64 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     });
   }
 
-  const allNavItems: NavItem[] = [
-    { label: "Dashboard",      href: "/dashboard",            icon: LayoutDashboard },
+  // The nav is grouped so a page can be found by what it is about rather than
+  // by scanning one long list. Point of Sale was the first section (split out
+  // on 2026-09-29); the rest follow the same shape.
+  //
+  // Grouping is DATA, not layout: adding or moving an entry means editing a
+  // list here, and a heading disappears on its own when a role can see
+  // nothing inside it — see visibleSections below. No route, page or
+  // permission changes when this list is reordered.
+  const mainSections: NavSection[] = [
+    // Ungrouped, pinned at the top. A heading above a single Dashboard link
+    // would be noise.
     {
-      label: "Members",
-      href: "/dashboard/members",
-      icon: Users,
-      children: [
-        { label: "All Members",   href: "/dashboard/members",       icon: UserCheck },
-        { label: "Add Member",    href: "/dashboard/register",      icon: UserPlus  },
-        { label: "Daily Members", href: "/dashboard/daily-members", icon: Users     },
+      heading: null,
+      items: [{ label: "Dashboard", href: "/dashboard", icon: LayoutDashboard }],
+    },
+    {
+      // "Members" used to be a collapsible group holding All/Add/Daily. With
+      // a heading above them that wrapper was doing the same job twice, so
+      // the three are flat now and reachable in one click.
+      heading: "Members",
+      items: [
+        { label: "All Members",      href: "/dashboard/members",          icon: UserCheck },
+        { label: "Add Member",       href: "/dashboard/register",         icon: UserPlus },
+        { label: "Daily Members",    href: "/dashboard/daily-members",    icon: Users },
+        { label: "Submissions",      href: "/dashboard/submissions",      icon: ClipboardList, badge: pendingSubmissions },
+        { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
+        { label: "Attendance",       href: "/dashboard/attendance",       icon: CalendarCheck },
       ],
     },
-    { label: "Submissions",    href: "/dashboard/submissions", icon: ClipboardList, badge: pendingSubmissions },
-    { label: "Attendance",     href: "/dashboard/attendance",  icon: CalendarCheck },
-    { label: "Fees & Payments",href: "/dashboard/fees",        icon: CreditCard    },
-    // Shipped 2026-09-29; the pill retires itself on 2026-10-06.
-    { label: "Expenses",       href: "/dashboard/expenses",    icon: Banknote, newUntil: "2026-10-06" },
-    { label: "Packages",       href: "/dashboard/packages",    icon: Package       },
-    { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
     {
-      label: "Staff & Trainers",
-      href: "/dashboard/staff",
-      icon: UserCog,
-      children: [
-        { label: "All Staff", href: "/dashboard/staff",       icon: UserCog  },
-        { label: "Add Staff", href: "/dashboard/staff?add=1", icon: UserPlus },
+      heading: "Money",
+      items: [
+        { label: "Fees & Payments",     href: "/dashboard/fees",        icon: CreditCard },
+        { label: "Packages",            href: "/dashboard/packages",    icon: Package },
+        // Shipped 2026-09-29; the pill retires itself on 2026-10-06.
+        { label: "Expenses",            href: "/dashboard/expenses",    icon: Banknote, newUntil: "2026-10-06" },
+        { label: "Trainer Commissions", href: "/dashboard/commissions", icon: Percent },
+        { label: "Reports",             href: "/dashboard/reports",     icon: BarChart2 },
       ],
     },
-    { label: "Trainer Commissions", href: "/dashboard/commissions", icon: Percent },
-    { label: "Reports",        href: "/dashboard/reports",    icon: BarChart2   },
-    { label: "SMS & Notify",   href: "/dashboard/sms",        icon: MessageSquare },
-    { label: "Settings",       href: "/dashboard/settings",   icon: Settings    },
   ];
+
+  const adminSection: NavSection = {
+    heading: "Admin",
+    items: [
+      {
+        label: "Staff & Trainers",
+        href: "/dashboard/staff",
+        icon: UserCog,
+        children: [
+          { label: "All Staff", href: "/dashboard/staff",       icon: UserCog  },
+          { label: "Add Staff", href: "/dashboard/staff?add=1", icon: UserPlus },
+        ],
+      },
+      { label: "SMS & Notify", href: "/dashboard/sms",      icon: MessageSquare },
+      { label: "Settings",     href: "/dashboard/settings", icon: Settings },
+    ],
+  };
 
   // POS lives in its own section BELOW Settings, split out of the former
   // combined "POS & Inventory" group. Every href below already existed — no
@@ -282,25 +314,30 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     pos_access: posAccess,
     pos_department_scope: posDepartmentScope,
   });
-  const navItems = allNavItems
-    .filter((item) => canAccess(item.href, role, posOk))
-    .map((item) =>
-      item.children
-        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role, posOk)) }
-        : item
-    )
-    // A group whose children were all filtered away has nothing to show.
-    .filter((item) => !item.children || item.children.length > 0);
+  // One filter, applied to every section — so a new section cannot
+  // accidentally skip the permission check by forgetting to call it.
+  const visibleItems = (items: NavItem[]) =>
+    items
+      .filter((item) => canAccess(item.href, role, posOk))
+      .map((item) =>
+        item.children
+          ? { ...item, children: item.children.filter((c) => canAccess(c.href, role, posOk)) }
+          : item
+      )
+      // A group whose children were all filtered away has nothing to show.
+      .filter((item) => !item.children || item.children.length > 0);
 
-  // Same filter, same rules — the POS section is a layout change only.
-  const posItems = posNavItems
-    .filter((item) => canAccess(item.href, role, posOk))
-    .map((item) =>
-      item.children
-        ? { ...item, children: item.children.filter((c) => canAccess(c.href, role, posOk)) }
-        : item
-    )
-    .filter((item) => !item.children || item.children.length > 0);
+  // Every section, in display order, with anything this role cannot reach
+  // removed — and then any section left with nothing in it dropped entirely.
+  // That is why a receptionist sees no "Money" heading at all rather than an
+  // empty one: every page under it is manager-or-owner.
+  const visibleSections: NavSection[] = [
+    ...mainSections,
+    { heading: "Point of Sale", items: posNavItems },
+    adminSection,
+  ]
+    .map((section) => ({ ...section, items: visibleItems(section.items) }))
+    .filter((section) => section.items.length > 0);
 
   async function handleLogout() {
     const supabase = createClient();
@@ -309,7 +346,11 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     router.push("/login");
   }
 
-  const topLevelHrefs = [...allNavItems, ...posNavItems]
+  const topLevelHrefs = [
+    ...mainSections.flatMap((s) => s.items),
+    ...posNavItems,
+    ...adminSection.items,
+  ]
     .map((i) => i.href)
     .filter((h) => h !== "/dashboard");
 
@@ -328,7 +369,6 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
   const avatarChar  = (userName ?? userEmail ?? "S").charAt(0).toUpperCase();
 
   const childRoutes: Record<string, string[]> = {
-    "/dashboard/members": ["/dashboard/members", "/dashboard/register", "/dashboard/daily-members"],
     "/dashboard/staff":   ["/dashboard/staff"],
     "/dashboard/pos":     ["/dashboard/pos"],
     "/dashboard/pos/inventory": ["/dashboard/pos/inventory"],
@@ -343,11 +383,13 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
     .sort((a, b) => b.length - a.length);
   const expandedBase = groupBases[0];
 
-  // Rendered as the rule between the main nav and the POS section; keeping it
-  // in the same list means one item renderer, not two copies of it.
-  const POS_DIVIDER = "__pos_divider__";
-  const navRows: (NavItem | typeof POS_DIVIDER)[] =
-    posItems.length > 0 ? [...navItems, POS_DIVIDER, ...posItems] : navItems;
+  // Headings are flattened into the same list as the items so there is one
+  // renderer below rather than a copy per section. A heading row is just a
+  // row that happens to draw a rule and a label.
+  type NavRow = NavItem | { heading: string };
+  const navRows: NavRow[] = visibleSections.flatMap((section) =>
+    section.heading ? [{ heading: section.heading }, ...section.items] : section.items
+  );
 
   return (
     <aside
@@ -385,12 +427,14 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
       {/* Navigation */}
       <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto overflow-x-hidden">
         {navRows.map((item) => {
-          if (item === POS_DIVIDER) {
+          if ("heading" in item) {
+            // Collapsed to icons there is no room for a label, so the rule
+            // alone carries the grouping.
             return (
-              <div key="pos-divider" className="pt-3 mt-3 border-t border-white/10">
+              <div key={`heading-${item.heading}`} className="pt-3 mt-3 border-t border-white/10">
                 {!collapsed && (
                   <div className="px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-white/35">
-                    Point of Sale
+                    {item.heading}
                   </div>
                 )}
               </div>
