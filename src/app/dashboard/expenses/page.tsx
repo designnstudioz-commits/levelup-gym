@@ -54,6 +54,9 @@ const emptyBillForm = () => ({
   reason: "",
   amount_change_kind: "correction" as "correction" | "revision",
   amount_effective_from: "",
+  // Default ON: a bill entered with the wrong total was almost always paid
+  // with that same wrong total, since "Record a payment now" is the default.
+  correct_payment: true,
 });
 
 export default function ExpensesPage() {
@@ -263,6 +266,7 @@ export default function ExpensesPage() {
             ? {
                 amount_change_kind: form.amount_change_kind,
                 amount_effective_from: form.amount_effective_from || undefined,
+                correct_payment: form.correct_payment,
               }
             : {}),
           expense_date: form.expense_date,
@@ -747,6 +751,34 @@ export default function ExpensesPage() {
                     )}
                   </div>
                 )}
+
+                {amountChanged && (() => {
+              // Offer the one-step correction only where it is unambiguous:
+              // a single payment that settled the bill in full. With a part
+              // payment or several payments there is no obvious way to
+              // redistribute the difference, so those stay manual and the
+              // server refuses them too.
+              const live = (editing!.payments ?? []).filter((p) => !p.deleted_at);
+              const settledInFull =
+                live.length === 1 && Math.abs(Number(live[0].amount) - Number(editing!.amount)) < 0.005;
+              if (!settledInFull) return null;
+              return (
+                <label className="flex items-start gap-2 text-xs text-amber-900 rounded-md bg-amber-100/60 p-2">
+                  <input type="checkbox" checked={form.correct_payment}
+                    onChange={(e) => setForm({ ...form, correct_payment: e.target.checked })}
+                    className="mt-0.5 rounded border-amber-300 text-[#F06418] focus:ring-[#F06418]" />
+                  <span>
+                    <span className="font-semibold">The payment was wrong too</span> — correct the
+                    recorded {formatPKR(Number(live[0].amount))} payment to {formatPKR(Number(form.amount) || 0)} as well.
+                    <span className="block mt-0.5 text-amber-800">
+                      Leave this ticked if the amount was simply mistyped. Untick it only if the
+                      money really did leave at {formatPKR(Number(live[0].amount))} — then you have
+                      overpaid and that difference is owed back to you.
+                    </span>
+                  </span>
+                </label>
+              );
+            })()}
 
                 <div>
                   <label className="text-xs font-semibold text-amber-900 block mb-1">Reason (required)</label>

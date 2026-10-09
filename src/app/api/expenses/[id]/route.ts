@@ -145,6 +145,10 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         fields,
         amount_change_kind: amountKind,
         amount_effective_from: body.amount_effective_from ?? null,
+        // "the payment was wrong too" — the function voids the mistaken
+        // payment and records a corrected one in the same transaction.
+        // It refuses unless exactly one payment settled the bill in full.
+        correct_payment: body.correct_payment === true,
         changed: changed.join(", "),
       },
     });
