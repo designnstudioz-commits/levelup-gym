@@ -97,6 +97,7 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/submissions": ["owner", "manager", "receptionist"],
   "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],
   "/dashboard/attendance/member": ["owner", "manager", "receptionist", "trainer"],
+  "/dashboard/attendance/staff":  ["owner", "manager", "receptionist", "trainer"],
   "/dashboard/fees":        ["owner", "manager", "receptionist"],
   // Owner only — the page shows Net Profit, which is management
   // information. Matches the "owner read expenses" RLS policy and
@@ -223,6 +224,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
             // Shipped 2026-10-15; the pill retires itself on 2026-10-22.
             // Members and staff both — staff punch under their own PINs.
             { label: "By Person",   href: "/dashboard/attendance/member", icon: UserSearch, newUntil: "2026-10-22" },
+            { label: "Staff",       href: "/dashboard/attendance/staff",  icon: Users,      newUntil: "2026-10-22" },
           ],
         },
       ],
