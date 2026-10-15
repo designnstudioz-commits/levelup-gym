@@ -17,6 +17,7 @@ import {
   Banknote,
   Package,
   UserCog,
+  UserSearch,
   BarChart2,
   MessageSquare,
   Settings,
@@ -54,7 +55,7 @@ interface NavItem {
    *  the badge on its own, so nobody has to remember to come back and
    *  delete it. */
   newUntil?: string;
-  children?: { label: string; href: string; icon: React.ElementType }[];
+  children?: { label: string; href: string; icon: React.ElementType; newUntil?: string }[];
 }
 
 /** Whether a module should still be flagged NEW.
@@ -95,6 +96,7 @@ const NAV_ROLES: Record<string, SystemRole[]> = {
   "/dashboard/members":     ["owner", "manager", "receptionist", "viewer"],
   "/dashboard/submissions": ["owner", "manager", "receptionist"],
   "/dashboard/attendance":  ["owner", "manager", "receptionist", "trainer"],
+  "/dashboard/attendance/member": ["owner", "manager", "receptionist", "trainer"],
   "/dashboard/fees":        ["owner", "manager", "receptionist"],
   // Owner only — the page shows Net Profit, which is management
   // information. Matches the "owner read expenses" RLS policy and
@@ -212,7 +214,16 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
         { label: "Daily Members",    href: "/dashboard/daily-members",    icon: Users },
         { label: "Submissions",      href: "/dashboard/submissions",      icon: ClipboardList, badge: pendingSubmissions },
         { label: "Family Approvals", href: "/dashboard/family-approvals", icon: HeartHandshake },
-        { label: "Attendance",       href: "/dashboard/attendance",       icon: CalendarCheck },
+        {
+          label: "Attendance",
+          href: "/dashboard/attendance",
+          icon: CalendarCheck,
+          children: [
+            { label: "All Punches", href: "/dashboard/attendance",        icon: CalendarCheck },
+            // Shipped 2026-10-15; the pill retires itself on 2026-10-22.
+            { label: "By Member",   href: "/dashboard/attendance/member", icon: UserSearch, newUntil: "2026-10-22" },
+          ],
+        },
       ],
     },
     {
@@ -370,6 +381,7 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
 
   const childRoutes: Record<string, string[]> = {
     "/dashboard/staff":   ["/dashboard/staff"],
+    "/dashboard/attendance": ["/dashboard/attendance"],
     "/dashboard/pos":     ["/dashboard/pos"],
     "/dashboard/pos/inventory": ["/dashboard/pos/inventory"],
   };
