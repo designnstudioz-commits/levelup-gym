@@ -8,6 +8,7 @@ import {
   ArrowLeft, User, Phone, Mail, CreditCard, Calendar,
   Edit3, Check, X, Dumbbell, Users, Banknote,
   UserCheck, Clock, CheckCircle, XCircle, Fingerprint, Send, Loader2, Printer,
+  Camera, Trash2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -96,6 +97,11 @@ export default function StaffDetailPage() {
     specialization: "", phone: "", email: "",
     cnic: "", salary: "", joining_date: "", bio: "",
   });
+  // Photo is held apart from editForm because it is uploaded immediately
+  // rather than on save — same shape as the member profile.
+  const [editPhotoUrl, setEditPhotoUrl] = useState<string | null>(null);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   const fetchStaff = useCallback(async () => {
     const supabase = createClient();
@@ -127,6 +133,7 @@ export default function StaffDetailPage() {
         joining_date: staffData.joining_date ?? "",
         bio: staffData.bio ?? "",
       });
+      setEditPhotoUrl(staffData.photo_url ?? null);
     }
     const membersList = (members as MemberWithPackage[]) ?? [];
     setAssignedMembers(membersList);
@@ -278,8 +285,45 @@ export default function StaffDetailPage() {
     setPushingDevice(null);
   }
 
+  // Same /api/upload/photo route the member profile and the public
+  // registration form use: magic-byte sniffing, server-generated storage
+  // path, resize/compress to ~100-250KB WebP. Nothing staff-specific is
+  // needed, so nothing staff-specific is written.
+  async function handleEditPhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast.error("Only images allowed"); return; }
+    if (file.size > 20 * 1024 * 1024) { toast.error("Image must be under 20 MB"); return; }
+    setPhotoUploading(true);
+    // Show the local file immediately; the blob: URL is replaced by the
+    // stored URL on success and is never saved to the database.
+    const preview = URL.createObjectURL(file);
+    setEditPhotoUrl(preview);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/upload/photo", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok || json.error) {
+        toast.error(json.error ?? "Upload failed");
+        setEditPhotoUrl(staff?.photo_url ?? null);
+      } else {
+        setEditPhotoUrl(json.url);
+        toast.success("Photo uploaded");
+      }
+    } catch {
+      toast.error("Upload failed");
+      setEditPhotoUrl(staff?.photo_url ?? null);
+    } finally {
+      setPhotoUploading(false);
+      // Let the same file be picked again after a failure.
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
+  }
+
   async function handleSave() {
     if (!editForm.full_name.trim()) { toast.error("Full name is required"); return; }
+    if (photoUploading) { toast.error("Wait for the photo to finish uploading"); return; }
     setSaving(true);
     const supabase = createClient();
     const { error } = await supabase.from("staff_members").update({
@@ -292,6 +336,9 @@ export default function StaffDetailPage() {
       salary: editForm.salary ? Number(editForm.salary) : null,
       joining_date: editForm.joining_date || null,
       bio: editForm.bio || null,
+      // A blob: URL means the upload never completed — keep whatever was
+      // already stored rather than writing a link that resolves nowhere.
+      photo_url: editPhotoUrl?.startsWith("blob:") ? staff?.photo_url ?? null : (editPhotoUrl || null),
     }).eq("id", id);
 
     if (error) { toast.error("Failed to save"); setSaving(false); return; }
@@ -632,6 +679,48 @@ export default function StaffDetailPage() {
                 <h3 className="text-sm font-semibold text-[#1A1A16] mb-4 flex items-center gap-2">
                   <Edit3 className="w-4 h-4 text-[#F06418]" /> Edit Profile
                 </h3>
+
+                {/* Photo — same control and copy as the member profile, so
+                    staff do not have to learn a second way of doing this. */}
+                <div className="flex items-center gap-4 pb-4 mb-4 border-b border-[#E4E4DE]">
+                  <div className="w-20 h-20 rounded-full bg-[#FEF0E8] border-2 border-[#FDDCC8] overflow-hidden flex items-center justify-center flex-shrink-0">
+                    {photoUploading ? (
+                      <Loader2 className="w-7 h-7 text-[#F06418] animate-spin" />
+                    ) : editPhotoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={editPhotoUrl} alt="" className="w-full h-full object-cover" onError={() => setEditPhotoUrl(null)} />
+                    ) : (
+                      <User className="w-9 h-9 text-[#F06418]" />
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-[#1A1A16]">Profile Photo</p>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => photoInputRef.current?.click()}
+                        disabled={photoUploading}
+                        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-[#FEF0E8] text-[#C04E10] border border-[#FDDCC8] rounded-lg hover:bg-[#FDDCC8] disabled:opacity-50 transition-colors"
+                      >
+                        <Camera className="w-3.5 h-3.5" />
+                        {editPhotoUrl ? "Change Photo" : "Upload Photo"}
+                      </button>
+                      {editPhotoUrl && !photoUploading && (
+                        <button
+                          type="button"
+                          onClick={() => setEditPhotoUrl(null)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-red-600 border border-red-200 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-xs text-[#7A7A72]">JPG, PNG or WEBP · Max 20 MB (auto-optimized)</p>
+                  </div>
+                  <input ref={photoInputRef} type="file" accept="image/*" className="hidden" onChange={handleEditPhotoChange} />
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <Input
                     label="Full Name" required
