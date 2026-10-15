@@ -16,19 +16,30 @@ import { MemberAvatar } from "@/components/ui/MemberAvatar";
 import { getMemberStatusDisplay } from "@/lib/utils";
 import type { Device } from "@/types/database";
 
-// One member, one month. The main /dashboard/attendance page answers "who is
+// One person, one month. The main /dashboard/attendance page answers "who is
 // in the gym right now" — it is gym-wide, capped at 500 rows and cannot look
 // further back than the start of the current month. This page answers the
-// other question: "how often did THIS member come, in THAT month".
+// other question: "how often did THIS person come, in THAT month".
+//
+// Members and staff both punch at the same readers, but a punch is filed
+// against attendances.member_id OR attendances.staff_id, never both. Staff
+// were invisible here until 2026-10-15, which matters because somebody can
+// legitimately be both — a staff member training on a PT package keeps
+// punching under their staff PIN, so their visits are on the staff record.
+// One search box covers both rather than a second page, so nobody has to
+// know which kind of record a person is before they can look them up.
 
-interface MemberHit {
+type Kind = "member" | "staff";
+
+interface Subject {
+  kind: Kind;
   id: string;
-  full_name: string;
-  membership_no: string;
-  photo_url: string | null;
-  phone: string | null;
+  name: string;
+  /** Membership number for a member, job role for staff. */
+  subtitle: string;
+  photoUrl: string | null;
   status: string;
-  expiry_date: string | null;
+  expiryDate: string | null;
 }
 
 interface Punch {
@@ -112,12 +123,12 @@ function monthMeta(ym: string) {
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export default function MemberAttendancePage() {
+export default function PersonAttendancePage() {
   const [query, setQuery]         = useState("");
-  const [hits, setHits]           = useState<MemberHit[]>([]);
+  const [hits, setHits]           = useState<Subject[]>([]);
   const [searching, setSearching] = useState(false);
   const [showHits, setShowHits]   = useState(false);
-  const [member, setMember]       = useState<MemberHit | null>(null);
+  const [subject, setSubject]     = useState<Subject | null>(null);
 
   const [ym, setYm]           = useState(currentYm);
   const [punches, setPunches] = useState<Punch[]>([]);
@@ -131,7 +142,7 @@ export default function MemberAttendancePage() {
   const thisYm   = currentYm();
   const todayKey = new Date().toLocaleDateString("en-CA", { timeZone: PKT });
 
-  // ── Member search ──────────────────────────────────────────────────────
+  // ── Search members and staff together ──────────────────────────────────
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
     const q = query.trim();
@@ -144,15 +155,52 @@ export default function MemberAttendancePage() {
       const safe = q.replace(/[,()*\\]/g, " ").trim();
       if (!safe) { setHits([]); setSearching(false); return; }
 
-      const { data } = await createClient()
-        .from("members")
-        .select("id, full_name, membership_no, photo_url, phone, status, expiry_date")
-        .is("deleted_at", null)
-        .or(`full_name.ilike.%${safe}%,membership_no.ilike.%${safe}%,phone.ilike.%${safe}%`)
-        .order("full_name")
-        .limit(8);
+      const supabase = createClient();
+      const [{ data: members }, { data: staff }] = await Promise.all([
+        supabase
+          .from("members")
+          .select("id, full_name, membership_no, photo_url, status, expiry_date")
+          .is("deleted_at", null)
+          .or(`full_name.ilike.%${safe}%,membership_no.ilike.%${safe}%,phone.ilike.%${safe}%`)
+          .order("full_name")
+          .limit(6),
+        // staff_directory_public, NOT staff_members. Direct reads of the
+        // base table were narrowed to owner/manager on 2026-09-13 (the
+        // salary/CNIC column leak fix), so a receptionist or trainer
+        // querying it gets zero rows and no error — staff would simply
+        // vanish from this search for them. The view is granted to every
+        // authenticated role, so all four roles see the same thing. It
+        // carries no phone or device_user_id, hence name-only matching.
+        supabase
+          .from("staff_directory_public")
+          .select("id, full_name, role, photo_url, status")
+          .ilike("full_name", `%${safe}%`)
+          .order("full_name")
+          .limit(6),
+      ]);
 
-      setHits((data as MemberHit[] | null) ?? []);
+      const asMembers: Subject[] = (members ?? []).map((m) => ({
+        kind: "member",
+        id: m.id,
+        name: m.full_name,
+        subtitle: m.membership_no,
+        photoUrl: m.photo_url,
+        status: m.status,
+        expiryDate: m.expiry_date,
+      }));
+      const asStaff: Subject[] = (staff ?? []).map((s) => ({
+        kind: "staff",
+        id: s.id,
+        name: s.full_name,
+        subtitle: s.role ?? "Staff",
+        photoUrl: s.photo_url,
+        status: s.status,
+        expiryDate: null,
+      }));
+
+      // Staff first: someone who is both a member and staff punches under
+      // their staff PIN, so that is the record their attendance is on.
+      setHits([...asStaff, ...asMembers]);
       setSearching(false);
     }, 250);
 
@@ -173,23 +221,23 @@ export default function MemberAttendancePage() {
       .then(({ data }) => setDevices((data as Device[] | null) ?? []));
   }, []);
 
-  // ── Punches for the chosen member + month ──────────────────────────────
+  // ── Punches for the chosen person + month ──────────────────────────────
   const fetchPunches = useCallback(async () => {
-    if (!member) { setPunches([]); return; }
+    if (!subject) { setPunches([]); return; }
     setLoading(true);
     // Bounds are written in PKT so the month starts at local midnight rather
-    // than 05:00. One member's month cannot approach the 1000-row ceiling.
+    // than 05:00. One person's month cannot approach the 1000-row ceiling.
     const { data } = await createClient()
       .from("attendances")
       .select("id, punch_time, punch_type, device_id")
-      .eq("member_id", member.id)
+      .eq(subject.kind === "staff" ? "staff_id" : "member_id", subject.id)
       .gte("punch_time", `${meta.start}T00:00:00+05:00`)
       .lte("punch_time", `${meta.end}T23:59:59+05:00`)
       .order("punch_time", { ascending: true })
       .limit(1000);
     setPunches((data as Punch[] | null) ?? []);
     setLoading(false);
-  }, [member, meta.start, meta.end]);
+  }, [subject, meta.start, meta.end]);
 
   useEffect(() => { fetchPunches(); }, [fetchPunches]);
 
@@ -207,7 +255,7 @@ export default function MemberAttendancePage() {
         const firstIn = list.find((p) => p.punch_type === "in") ?? null;
         const outs    = list.filter((p) => p.punch_type === "out");
         const lastOut = outs.length ? outs[outs.length - 1] : null;
-        // Only a genuine in-then-out pair gives a duration. Most members
+        // Only a genuine in-then-out pair gives a duration. Most people
         // never punch out, so assuming a closing time would invent numbers.
         const minutes =
           firstIn && lastOut && new Date(lastOut.punch_time) > new Date(firstIn.punch_time)
@@ -254,7 +302,7 @@ export default function MemberAttendancePage() {
   }
 
   function downloadCsv() {
-    if (!member) return;
+    if (!subject) return;
     const rows: string[][] = [
       ["Date", "Day", "First In", "Last Out", "Time Inside", "Punches", "Doors"],
       ...[...days].reverse().map((d) => {
@@ -274,18 +322,25 @@ export default function MemberAttendancePage() {
       .join("\n");
     // BOM so Excel opens the file as UTF-8 rather than mangling names.
     const url = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" }));
+    const slug = subject.kind === "member"
+      ? subject.subtitle
+      : `staff-${subject.name.replace(/\s+/g, "-").toLowerCase()}`;
     const a = document.createElement("a");
     a.href = url;
-    a.download = `attendance-${member.membership_no}-${ym}.csv`;
+    a.download = `attendance-${slug}-${ym}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   }
 
+  const profileHref = subject
+    ? subject.kind === "member" ? `/dashboard/members/${subject.id}` : `/dashboard/staff/${subject.id}`
+    : "#";
+
   return (
     <div className="min-h-screen bg-[#F8F8F6]">
       <DashboardHeader
-        title="Attendance by Member"
-        subtitle="Search a member, then browse their punch history one month at a time"
+        title="Attendance by Person"
+        subtitle="Search a member or staff member, then browse their punch history one month at a time"
       />
 
       <div className="p-6 space-y-5 max-w-6xl">
@@ -293,7 +348,7 @@ export default function MemberAttendancePage() {
         <Card>
           <div ref={boxRef} className="relative">
             <label className="text-xs font-semibold text-[#4A4A44] block mb-1.5">
-              Member name, membership number or phone
+              Member name, membership number, phone — or a staff name
             </label>
             <div className="relative">
               <Search className="w-4 h-4 text-[#7A7A72] absolute left-3 top-1/2 -translate-y-1/2" />
@@ -301,7 +356,7 @@ export default function MemberAttendancePage() {
                 type="text"
                 value={query}
                 autoComplete="off"
-                placeholder="e.g. Jawad, 0359 or 0300-1234567"
+                placeholder="e.g. Faisal, LUM-2026-0536 or 0300-1234567"
                 onChange={(e) => { setQuery(e.target.value); setShowHits(true); }}
                 onFocus={() => setShowHits(true)}
                 className="w-full pl-9 pr-9 py-2.5 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
@@ -318,22 +373,35 @@ export default function MemberAttendancePage() {
             </div>
 
             {showHits && query.trim().length >= 2 && (
-              <div className="absolute z-20 mt-1 w-full bg-white border border-[#E4E4DE] rounded-lg shadow-lg overflow-hidden">
+              <div className="absolute z-20 mt-1 w-full bg-white border border-[#E4E4DE] rounded-lg shadow-lg overflow-hidden max-h-96 overflow-y-auto">
                 {searching ? (
                   <div className="px-4 py-3 text-sm text-[#7A7A72]">Searching…</div>
                 ) : hits.length === 0 ? (
-                  <div className="px-4 py-3 text-sm text-[#7A7A72]">No member matches that.</div>
+                  <div className="px-4 py-3 text-sm text-[#7A7A72]">No member or staff member matches that.</div>
                 ) : (
                   hits.map((h) => (
                     <button
-                      key={h.id}
-                      onClick={() => { setMember(h); setShowHits(false); setQuery(""); }}
+                      key={`${h.kind}-${h.id}`}
+                      onClick={() => { setSubject(h); setShowHits(false); setQuery(""); }}
                       className="w-full px-3 py-2.5 flex items-center gap-3 hover:bg-[#FEF0E8] transition-colors text-left"
                     >
-                      <MemberAvatar photoUrl={h.photo_url} name={h.full_name} membershipNo={h.membership_no} size={64} memberId={h.id} />
+                      <MemberAvatar
+                        photoUrl={h.photoUrl} name={h.name}
+                        membershipNo={h.kind === "member" ? h.subtitle : null}
+                        size={64} memberId={h.kind === "member" ? h.id : undefined}
+                      />
                       <span className="flex-1 min-w-0">
-                        <span className="block text-sm font-semibold text-[#1A1A16] truncate">{h.full_name}</span>
-                        <span className="block text-xs text-[#7A7A72]">{h.membership_no}</span>
+                        <span className="block text-sm font-semibold text-[#1A1A16] truncate">{h.name}</span>
+                        <span className="block text-xs text-[#7A7A72]">{h.subtitle}</span>
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0 ${
+                          h.kind === "staff"
+                            ? "bg-[#1A1A1A] text-white"
+                            : "bg-[#FEF0E8] text-[#C04E10]"
+                        }`}
+                      >
+                        {h.kind}
                       </span>
                     </button>
                   ))
@@ -343,33 +411,40 @@ export default function MemberAttendancePage() {
           </div>
         </Card>
 
-        {!member ? (
+        {!subject ? (
           <Card>
             <div className="py-16 text-center">
               <UserSearch className="w-10 h-10 text-[#C9C9C2] mx-auto mb-3" />
-              <p className="text-sm font-semibold text-[#1A1A16]">Pick a member to begin</p>
-              <p className="text-xs text-[#7A7A72] mt-1">Start typing a name or membership number above.</p>
+              <p className="text-sm font-semibold text-[#1A1A16]">Pick someone to begin</p>
+              <p className="text-xs text-[#7A7A72] mt-1">
+                Members and staff are both searchable — start typing a name above.
+              </p>
             </div>
           </Card>
         ) : (
           <>
-            {/* ── Chosen member + month ─────────────────────────────── */}
+            {/* ── Chosen person + month ─────────────────────────────── */}
             <Card>
               <div className="flex flex-wrap items-center gap-4">
-                <MemberAvatar photoUrl={member.photo_url} name={member.full_name} membershipNo={member.membership_no} size={96} memberId={member.id} />
+                <MemberAvatar
+                  photoUrl={subject.photoUrl} name={subject.name}
+                  membershipNo={subject.kind === "member" ? subject.subtitle : null}
+                  size={96} memberId={subject.kind === "member" ? subject.id : undefined}
+                />
                 <div className="min-w-0">
-                  <Link
-                    href={`/dashboard/members/${member.id}`}
-                    className="text-base font-bold text-[#1A1A16] hover:text-[#F06418] transition-colors"
-                  >
-                    {member.full_name}
+                  <Link href={profileHref} className="text-base font-bold text-[#1A1A16] hover:text-[#F06418] transition-colors">
+                    {subject.name}
                   </Link>
                   <div className="text-xs text-[#7A7A72] flex items-center gap-2 mt-0.5">
-                    <span>{member.membership_no}</span>
-                    {(() => {
-                      const { label, variant } = getMemberStatusDisplay(member.status, member.expiry_date);
+                    <span>{subject.subtitle}</span>
+                    {subject.kind === "member" ? (() => {
+                      const { label, variant } = getMemberStatusDisplay(subject.status, subject.expiryDate);
                       return <Badge variant={variant}>{label}</Badge>;
-                    })()}
+                    })() : (
+                      <Badge variant={subject.status === "active" ? "active" : "inactive"}>
+                        {subject.status === "active" ? "Staff" : "Inactive staff"}
+                      </Badge>
+                    )}
                   </div>
                 </div>
 
@@ -437,12 +512,12 @@ export default function MemberAttendancePage() {
                   ))}
                   {Array.from({ length: meta.firstDow }).map((_, i) => <div key={`pad-${i}`} />)}
                   {Array.from({ length: meta.days }).map((_, i) => {
-                    const dayNo  = i + 1;
-                    const key    = `${ym}-${String(dayNo).padStart(2, "0")}`;
-                    const group  = days.find((d) => d.key === key);
-                    const here   = presentKeys.has(key);
+                    const dayNo   = i + 1;
+                    const key     = `${ym}-${String(dayNo).padStart(2, "0")}`;
+                    const group   = days.find((d) => d.key === key);
+                    const here    = presentKeys.has(key);
                     const isToday = key === todayKey;
-                    const future = key > todayKey;
+                    const future  = key > todayKey;
                     return (
                       <div
                         key={key}
@@ -488,7 +563,7 @@ export default function MemberAttendancePage() {
                 <div className="px-5 py-12 text-center">
                   <p className="text-sm font-semibold text-[#1A1A16]">No attendance in {meta.label}</p>
                   <p className="text-xs text-[#7A7A72] mt-1">
-                    This member did not punch at any door during this month.
+                    {subject.name} did not punch at any door during this month.
                   </p>
                 </div>
               ) : (

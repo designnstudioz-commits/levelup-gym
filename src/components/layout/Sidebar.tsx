@@ -221,7 +221,8 @@ export function Sidebar({ pendingSubmissions = 0, userEmail, userName, userRole,
           children: [
             { label: "All Punches", href: "/dashboard/attendance",        icon: CalendarCheck },
             // Shipped 2026-10-15; the pill retires itself on 2026-10-22.
-            { label: "By Member",   href: "/dashboard/attendance/member", icon: UserSearch, newUntil: "2026-10-22" },
+            // Members and staff both — staff punch under their own PINs.
+            { label: "By Person",   href: "/dashboard/attendance/member", icon: UserSearch, newUntil: "2026-10-22" },
           ],
         },
       ],
