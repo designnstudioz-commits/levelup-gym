@@ -39,7 +39,28 @@ interface PaymentRow extends FeePayment {
   member?: { id: string; full_name: string; membership_no: string; photo_url: string | null } | null;
   packages?: { name: string; color: string | null } | null;
   collector?: { full_name: string } | null;
+  // Set only on walk-in day passes, which come from daily_members and are
+  // folded into this list so they can be seen and filtered alongside real
+  // fee_payments. Everything that only makes sense for a fee_payment —
+  // receipt number, coverage period, partial balance, reverse — is
+  // suppressed on these rows rather than faked.
+  is_walk_in?: boolean;
+  walk_in_purpose?: string | null;
 }
+
+interface WalkInRow {
+  id: string;
+  full_name: string;
+  phone: string | null;
+  fee_paid: number | null;
+  payment_method: string | null;
+  visit_date: string;
+  purpose: string | null;
+}
+
+/** The Method-column value that means "this was a walk-in day pass".
+ *  Kept as a constant because it is both a filter value and a badge key. */
+const DAY_PASS = "Day Pass";
 
 interface MemberWithPackage extends Member {
   packages?: { name: string; monthly_fee: number; color: string | null; duration_months: number | null } | null;
@@ -84,7 +105,7 @@ export default function FeesPage() {
   // rather than merged into the fee_payments-based Transactions rows,
   // since walk-ins aren't members and don't share that table's shape
   // (no receipt_no, no coverage period, no reverse/detail actions).
-  const [walkIns, setWalkIns]             = useState<{ fee_paid: number | null; visit_date: string }[]>([]);
+  const [walkIns, setWalkIns]             = useState<WalkInRow[]>([]);
   const [recentPayments30, setRecentP30]  = useState<{ member_id: string; payment_date: string }[]>([]);
   const [loading, setLoading]             = useState(true);
 
@@ -211,9 +232,12 @@ export default function FeesPage() {
       // Walk-ins have no coverage-period concept, so they're scoped by
       // visit_date regardless of the Collection Date / Coverage Period
       // filter toggle above.
-      supabase.from("daily_members").select("fee_paid, visit_date").is("deleted_at", null).gte("visit_date", from).lte("visit_date", to),
+      supabase.from("daily_members")
+        .select("id, full_name, phone, fee_paid, payment_method, visit_date, purpose")
+        .is("deleted_at", null).gte("visit_date", from).lte("visit_date", to)
+        .order("visit_date", { ascending: false }),
     ]);
-    setWalkIns(walkIns ?? []);
+    setWalkIns((walkIns ?? []) as WalkInRow[]);
 
     // "Unpaid" lookback is per-member: since membership_start_date (the
     // start of their CURRENT billing cycle), falling back to the 30-day
@@ -524,10 +548,44 @@ export default function FeesPage() {
 
   const collectorNames = [...new Set(payments.map((p) => p.collector?.full_name).filter(Boolean))] as string[];
 
-  const txFiltered = payments.filter((p) => {
+  // Walk-in day passes live in daily_members, not fee_payments, but the
+  // front desk thinks of them as one list of money taken — so they are
+  // mapped into the same row shape for the transactions table ONLY. The
+  // `payments` state itself stays pure fee_payments, because the Overview
+  // tab adds walkInTotal to it separately and would otherwise double-count.
+  const walkInRows: PaymentRow[] = walkIns.map((w) => ({
+    // Prefixed so it can never collide with a fee_payment id and so a
+    // stray detail lookup cannot match a real payment.
+    id: `walkin-${w.id}`,
+    is_walk_in: true,
+    walk_in_purpose: w.purpose,
+    member: { id: "", full_name: w.full_name, membership_no: "", photo_url: null },
+    amount: w.fee_paid ?? 0,
+    payment_method: w.payment_method,
+    payment_date: w.visit_date,
+    payment_type: "day_pass",
+    receipt_no: null,
+    balance_due: 0,
+    collector: null,
+  } as unknown as PaymentRow));
+
+  const txSource: PaymentRow[] = [...payments, ...walkInRows];
+
+  const txFiltered = txSource.filter((p) => {
+    // "Day Pass" is offered in the Method dropdown because that is the
+    // column it shows up in, but it selects a KIND of record, not a
+    // method — a day pass still has its own Cash/Bank/Card method.
+    if (txMethodFilter === DAY_PASS) {
+      if (!p.is_walk_in) return false;
+    } else if (txMethodFilter !== "all" && p.payment_method !== txMethodFilter) {
+      return false;
+    }
+    // Payment type, balance and receipt are fee_payment concepts; a walk-in
+    // has none of them, so those filters exclude walk-ins rather than
+    // silently matching on empty values.
     if (txTypeFilter !== "all" && p.payment_type !== txTypeFilter) return false;
-    if (txMethodFilter !== "all" && p.payment_method !== txMethodFilter) return false;
     if (txCollectorFilter !== "all" && p.collector?.full_name !== txCollectorFilter) return false;
+    if (txBalanceFilter === "partial" && p.is_walk_in) return false;
     if (txBalanceFilter === "paid" && (p.balance_due ?? 0) > 0) return false;
     if (txBalanceFilter === "partial" && (p.balance_due ?? 0) <= 0) return false;
     if (txAmountMin && p.amount < Number(txAmountMin)) return false;
@@ -608,7 +666,6 @@ export default function FeesPage() {
           collectorFilter={txCollectorFilter} setCollectorFilter={setTxCollectorFilter} collectorNames={collectorNames}
           balanceFilter={txBalanceFilter} setBalanceFilter={setTxBalanceFilter}
           amountMin={txAmountMin} setAmountMin={setTxAmountMin} amountMax={txAmountMax} setAmountMax={setTxAmountMax}
-          walkInTotal={walkInTotal} walkInCount={walkIns.length}
           onRefresh={fetchAll} hideRevenue={hideRevenue} onOpenDetail={setDetailPaymentId} />}
         {tab === "outstanding"  && <OutstandingTab expired={expired} unpaidActive={unpaidActive} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
         {tab === "renewals"    && <RenewalsTab dueSoon3={dueSoon3} dueSoon7={dueSoon7} loading={loading} onCollect={(m) => { selectMember(m); setCollectModal(true); }} />}
@@ -1052,10 +1109,8 @@ function TransactionsTab({ payments, totalRevenue, loading,
   search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter,
   collectorFilter, setCollectorFilter, collectorNames, balanceFilter, setBalanceFilter,
   amountMin, setAmountMin, amountMax, setAmountMax,
-  walkInTotal, walkInCount,
   onRefresh, hideRevenue, onOpenDetail }: {
   payments: PaymentRow[]; totalRevenue: number; loading: boolean;
-  walkInTotal: number; walkInCount: number;
   dateField: "collection" | "coverage"; setDateField: (v: "collection" | "coverage") => void;
   dateRange: DateRange; setDateRange: (v: DateRange) => void;
   customFrom: string; setCustomFrom: (v: string) => void;
@@ -1148,7 +1203,11 @@ function TransactionsTab({ payments, totalRevenue, loading,
     chips.push({ key: "date", label: `${dateTypeLabel}: ${rangeLabel}`, onRemove: () => { setDateField("collection"); setDateRange("month"); } });
   }
   if (typeFilter !== "all") chips.push({ key: "type", label: `Type: ${TYPE_LABELS[typeFilter] ?? typeFilter}`, onRemove: () => setTypeFilter("all") });
-  if (methodFilter !== "all") chips.push({ key: "method", label: `Method: ${methodFilter}`, onRemove: () => setMethodFilter("all") });
+  if (methodFilter !== "all") chips.push({
+    key: "method",
+    label: methodFilter === DAY_PASS ? "Walk-in / Day Passes only" : `Method: ${methodFilter}`,
+    onRemove: () => setMethodFilter("all"),
+  });
   if (collectorFilter !== "all") chips.push({ key: "collector", label: `Collected By: ${collectorFilter}`, onRemove: () => setCollectorFilter("all") });
   if (balanceFilter !== "all") chips.push({ key: "balance", label: `Balance: ${balanceFilter === "partial" ? "Outstanding" : "Fully Paid"}`, onRemove: () => setBalanceFilter("all") });
   if (amountMin || amountMax) chips.push({ key: "amount", label: `Amount: Rs ${amountMin || "0"}–${amountMax || "∞"}`, onRemove: () => { setAmountMin(""); setAmountMax(""); } });
@@ -1157,20 +1216,22 @@ function TransactionsTab({ payments, totalRevenue, loading,
     clearSecondaryFilters();
   }
 
-  // Totals by method for summary row — payment methods only. Walk-in day
-  // passes aren't a payment method (they're a different revenue category,
-  // daily_members not fee_payments), so they're kept as their own separate
-  // summary line below rather than mixed into this breakdown.
+  // Walk-in day passes are rows in this list now, and a day pass still has
+  // a real Cash/Bank/Card method, so the method breakdown counts them like
+  // any other row. These chips therefore still add up to the grand total.
   const byMethod = PAYMENT_METHODS.map((m) => ({
     method: m,
     total: payments.filter((p) => p.payment_method === m).reduce((s, p) => s + (p.amount ?? 0), 0),
   })).filter((m) => m.total > 0);
 
-  // Includes walk-in day passes (daily_members) so this matches the
-  // Overview tab's Revenue figure — walk-ins aren't shown as rows in the
-  // table below (different shape, no receipt/coverage/reverse), so they're
-  // added here as one line rather than merged into the row list.
-  const grandTotal = payments.reduce((s, p) => s + (p.amount ?? 0), 0) + walkInTotal;
+  // Derived from the rows actually on screen rather than passed in, so it
+  // responds to the filters above like every other number here.
+  const dayPassRows   = payments.filter((p) => p.is_walk_in);
+  const dayPassTotal  = dayPassRows.reduce((s, p) => s + (p.amount ?? 0), 0);
+
+  // Sum of the rows shown. Walk-ins are among them, so nothing is added on
+  // top — doing both is what would double-count.
+  const grandTotal = payments.reduce((s, p) => s + (p.amount ?? 0), 0);
 
   // Colours for method badges
   const METHOD_BADGE: Record<string, string> = {
@@ -1251,6 +1312,7 @@ function TransactionsTab({ payments, totalRevenue, loading,
                   <Select label="Payment Method" value={draftMethod} onChange={(e) => setDraftMethod(e.target.value)}>
                     <option value="all">All Methods</option>
                     {PAYMENT_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                    <option value={DAY_PASS}>Walk-in / Day Pass</option>
                   </Select>
                   <Select label="Collected By" value={draftCollector} onChange={(e) => setDraftCollector(e.target.value)}>
                     <option value="all">All Staff</option>
@@ -1296,7 +1358,7 @@ function TransactionsTab({ payments, totalRevenue, loading,
       )}
 
       {/* ── Payment method summary — reconciliation reference, not filter controls ── */}
-      {!hideRevenue && (byMethod.length > 0 || walkInTotal > 0) && (
+      {!hideRevenue && (byMethod.length > 0 || dayPassTotal > 0) && (
         <div className="flex flex-wrap items-center gap-2">
           {byMethod.map((m) => (
             <div key={m.method} className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold ${METHOD_BADGE[m.method] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
@@ -1304,12 +1366,17 @@ function TransactionsTab({ payments, totalRevenue, loading,
               <span className="font-bold">{formatPKR(m.total)}</span>
             </div>
           ))}
-          {walkInTotal > 0 && (
+          {dayPassTotal > 0 && (
             <>
               <span className="w-px h-4 bg-[#E4E4DE] mx-1" />
+              {/* A subset of the method chips to its left, not an extra
+                  amount on top: this money is already inside Cash/Bank/
+                  Card. Before walk-ins became rows this chip WAS an
+                  addition, so anyone adding every chip up will now land on
+                  the grand total only if they skip this one. */}
               <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-teal-200 bg-teal-50 text-teal-700 text-xs font-semibold">
-                <span>Walk-in / Day Passes ({walkInCount}):</span>
-                <span className="font-bold">{formatPKR(walkInTotal)}</span>
+                <span>Walk-in / Day Passes ({dayPassRows.length}):</span>
+                <span className="font-bold">{formatPKR(dayPassTotal)}</span>
               </div>
             </>
           )}
@@ -1344,28 +1411,46 @@ function TransactionsTab({ payments, totalRevenue, loading,
                 {sortedPayments.map((p) => {
                   const mem = (p as any).member;
                   const { label: coverageLabel, inferred: coverageInferred } = describeCoveredPeriod(p.coverage_start, p.coverage_end, p.month_covered, p.payment_date, p.months_covered);
-                  const isPartial = (p.balance_due ?? 0) > 0;
+                  const isPartial = !p.is_walk_in && (p.balance_due ?? 0) > 0;
+                  const walkIn = !!p.is_walk_in;
                   return (
-                    <tr key={p.id} onClick={() => onOpenDetail(p.id)} className="hover:bg-[#F8F8F6] transition-colors cursor-pointer">
+                    <tr
+                      key={p.id}
+                      // A walk-in has no fee_payment behind it, so the
+                      // detail modal would look up an id that does not
+                      // exist. The row simply is not clickable.
+                      onClick={walkIn ? undefined : () => onOpenDetail(p.id)}
+                      className={`transition-colors ${walkIn ? "bg-teal-50/30 hover:bg-teal-50/60" : "hover:bg-[#F8F8F6] cursor-pointer"}`}
+                    >
                       <td className="px-5 py-3">
-                        <span className="text-[11px] font-mono font-semibold text-[#F06418]">
-                          {p.receipt_no ?? `RCP-${p.id.slice(-8, -4).toUpperCase()}-${p.id.slice(-4).toUpperCase()}`}
-                        </span>
+                        {walkIn ? (
+                          <span className="text-[11px] font-mono font-semibold text-teal-700">DAY PASS</span>
+                        ) : (
+                          <span className="text-[11px] font-mono font-semibold text-[#F06418]">
+                            {p.receipt_no ?? `RCP-${p.id.slice(-8, -4).toUpperCase()}-${p.id.slice(-4).toUpperCase()}`}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-7 h-7 rounded-full bg-[#FEF0E8] flex items-center justify-center text-[#F06418] text-xs font-bold flex-shrink-0">
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${walkIn ? "bg-teal-100 text-teal-700" : "bg-[#FEF0E8] text-[#F06418]"}`}>
                             {mem?.full_name?.charAt(0) ?? "?"}
                           </div>
                           <div>
                             <p className="text-sm font-semibold text-[#1A1A16] whitespace-nowrap">{mem?.full_name ?? "—"}</p>
-                            <p className="text-[10px] text-[#7A7A72] font-mono">{mem?.membership_no ?? "—"}</p>
+                            <p className="text-[10px] text-[#7A7A72] font-mono">
+                              {walkIn ? (p.walk_in_purpose ?? "Walk-in") : (mem?.membership_no || "—")}
+                            </p>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
                       <td className="px-4 py-3">
-                        {coverageLabel ? (
+                        {walkIn ? (
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-teal-700 bg-teal-50 border-teal-200">
+                            {formatDate(p.payment_date)}
+                          </span>
+                        ) : coverageLabel ? (
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
                             coverageInferred
                               ? "text-[#7A7A72] bg-[#F8F8F6] border-[#E4E4DE]"
@@ -1381,9 +1466,20 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
                       </td>
                       <td className="px-4 py-3">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${METHOD_BADGE[p.payment_method ?? ""] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
-                          {p.payment_method ?? "—"}
-                        </span>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${METHOD_BADGE[p.payment_method ?? ""] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
+                            {p.payment_method ?? "—"}
+                          </span>
+                          {/* The money still arrived as Cash/Bank/Card, so
+                              that badge stays. This second one says what
+                              KIND of sale it was, which is what could not
+                              be told apart in this list before. */}
+                          {walkIn && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap bg-teal-50 text-teal-700 border-teal-200">
+                              Day Pass
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {p.collector?.full_name ? (
@@ -1398,10 +1494,21 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         </span>
                       </td>
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                        <button onClick={() => setDeleteId(p.id)}
-                          className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" title="Reverse this payment">
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {/* Reverse soft-deletes a fee_payments row. A walk
+                            -in is not one, so it is managed on Daily
+                            Members rather than deleted from the wrong
+                            table here. */}
+                        {walkIn ? (
+                          <Link href="/dashboard/daily-members" title="Open in Daily Members"
+                            className="p-1.5 rounded-lg text-[#7A7A72] hover:text-teal-700 hover:bg-teal-50 transition-colors flex-shrink-0 inline-flex">
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </Link>
+                        ) : (
+                          <button onClick={() => setDeleteId(p.id)}
+                            className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0" title="Reverse this payment">
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
