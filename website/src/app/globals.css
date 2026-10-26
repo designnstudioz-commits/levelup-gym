@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/* Brand tokens, matching the management app so the two read as one product.
+   See CLAUDE.md "Brand guidelines" in the repository root. */
+@theme {
+  --color-brand: #f06418;
+  --color-brand-dark: #c04e10;
+  --color-brand-light: #fef0e8;
+  --color-brand-mid: #fddcc8;
+
+  --color-ink: #111111;
+  --color-ink-soft: #1a1a1a;
+  --color-ink-line: #262626;
+
+  --color-paper: #ffffff;
+  --color-paper-line: #e4e4de;
+
+  --font-display: var(--font-barlow-condensed), "Barlow Condensed", sans-serif;
+  --font-body: var(--font-barlow), "Barlow", system-ui, sans-serif;
+}
+
+html {
+  scroll-behavior: smooth;
+  /* The header is fixed; without this an anchor lands under it. */
+  scroll-padding-top: 5rem;
+}
+
+body {
+  background: var(--color-ink);
+  color: #ffffff;
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Display type is the brand's loudest signal: condensed, heavy, tight,
+   upright. Used for every heading and nothing else. */
+.display {
+  font-family: var(--font-display);
+  font-weight: 800;
+  line-height: 0.92;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+}
+
+/* The numbered section label the whole page is organised around. */
+.section-n {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
