@@ -74,6 +74,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${barlow.variable} ${barlowCondensed.variable}`}>
       <body>
+        {/* Scroll reveals start at opacity 0 and are brought in by Motion.
+            With JavaScript off nothing would ever run, so the page would be
+            blank — the text is in the HTML, it is just invisible. This hands
+            those elements straight back. Search engines execute JS and never
+            see this; a reader without it sees a static, complete page. */}
+        <noscript>
+          <style>{`[style*="opacity:0"]{opacity:1!important;filter:none!important;transform:none!important}`}</style>
+        </noscript>
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}

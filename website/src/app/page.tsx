@@ -5,6 +5,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { Header } from "@/components/Header";
 import { PhotoSlot, TrainerPhoto } from "@/components/PhotoSlot";
+import { Reveal, RevealGroup, RevealItem } from "@/components/Reveal";
 import { photoStats, trainerPhotoBrief } from "@/content/photos";
 import { EnquiryForm } from "@/components/EnquiryForm";
 import {
@@ -68,15 +69,20 @@ export default function Home() {
             {hero.eyebrow}
           </p>
 
+          <Reveal blur={16} y={34}>
           <h1 className="display mt-6 text-[3.25rem] leading-[0.9] sm:text-8xl lg:text-9xl text-white max-w-5xl">
             {hero.headline[0]}
             <br />
             <span className="text-brand">{hero.headline[1]}</span>
           </h1>
 
+          </Reveal>
+
+          <Reveal delay={0.08}>
           <p className="mt-7 text-base sm:text-lg text-white/65 max-w-2xl leading-relaxed">
             {hero.sub}
           </p>
+          </Reveal>
 
           <div className="mt-9 flex flex-col sm:flex-row gap-3 sm:items-center">
             <a
@@ -94,16 +100,16 @@ export default function Home() {
             </a>
           </div>
 
-          <dl className="mt-14 grid grid-cols-2 lg:grid-cols-4 gap-px bg-ink-line border border-ink-line rounded-2xl overflow-hidden">
+          <RevealGroup className="mt-14 grid grid-cols-2 lg:grid-cols-4 gap-px bg-ink-line border border-ink-line rounded-2xl overflow-hidden">
             {hero.stats.map((s) => (
-              <div key={s.label} className="bg-ink px-5 py-6">
-                <dt className="display text-4xl sm:text-5xl text-brand">{s.value}</dt>
-                <dd className="mt-1 text-xs sm:text-sm text-white/55">{s.label}</dd>
-              </div>
+              <RevealItem key={s.label} className="bg-ink px-5 py-6">
+                <p className="display text-4xl sm:text-5xl text-brand">{s.value}</p>
+                <p className="mt-1 text-xs sm:text-sm text-white/55">{s.label}</p>
+              </RevealItem>
             ))}
-          </dl>
+          </RevealGroup>
 
-          <PhotoSlot id="HERO-01" className="mt-12" />
+          <Reveal className="mt-12" blur={18}><PhotoSlot id="HERO-01" /></Reveal>
 
           <ul className="mt-8 flex flex-wrap gap-2">
             {hero.tags.map((t) => (
@@ -118,14 +124,14 @@ export default function Home() {
       {/* ── 01 What we do ──────────────────────────────────────── */}
       <section id="what-we-do" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="01">What we do</SectionLabel>
+          <Reveal><SectionLabel n="01">What we do</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             Four reasons people stay
           </h2>
 
-          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          <RevealGroup className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
             {pillars.map((p, i) => (
-              <article
+              <RevealItem
                 key={p.n}
                 className="group rounded-2xl border border-ink-line bg-ink-soft p-6 flex flex-col hover:border-brand/50 transition-colors"
               >
@@ -140,9 +146,9 @@ export default function Home() {
                   {p.linkLabel}
                   <ArrowRight className="w-3.5 h-3.5" />
                 </a>
-              </article>
+              </RevealItem>
             ))}
-          </div>
+          </RevealGroup>
         </div>
       </section>
 
@@ -150,28 +156,28 @@ export default function Home() {
       <section id="about" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 grid lg:grid-cols-2 gap-14">
           <div>
-            <SectionLabel n="02">Who we are</SectionLabel>
+            <Reveal><SectionLabel n="02">Who we are</SectionLabel></Reveal>
             <h2 className="display text-4xl sm:text-6xl text-white">{whoWeAre.heading}</h2>
-            <div className="mt-7 space-y-4">
+            <Reveal className="mt-7 space-y-4" delay={0.05}>
               {whoWeAre.body.map((p, i) => (
                 <p key={i} className="text-base text-white/65 leading-relaxed">{p}</p>
               ))}
-            </div>
+            </Reveal>
           </div>
 
-          <div className="lg:pt-16 space-y-4">
-            <PhotoSlot id="ABOUT-01" />
+          <RevealGroup className="lg:pt-16 space-y-4">
+            <RevealItem><PhotoSlot id="ABOUT-01" /></RevealItem>
             {whoWeAre.points.map((pt) => (
-              <div key={pt.title} className="flex gap-4 rounded-xl border border-ink-line bg-ink-soft p-5">
+              <RevealItem key={pt.title} className="flex gap-4 rounded-xl border border-ink-line bg-ink-soft p-5">
                 <Check className="w-5 h-5 text-brand shrink-0 mt-0.5" />
                 <div>
                   <h3 className="font-bold text-white">{pt.title}</h3>
                   <p className="text-sm text-white/55 mt-1">{pt.body}</p>
                 </div>
-              </div>
+              </RevealItem>
             ))}
 
-            <div className="rounded-xl border border-brand/30 bg-brand/5 p-5">
+            <RevealItem className="rounded-xl border border-brand/30 bg-brand/5 p-5">
               <h3 className="display text-2xl text-white">Everything on one floor</h3>
               <ul className="mt-4 flex flex-wrap gap-2">
                 {facilities.map((f) => (
@@ -180,15 +186,15 @@ export default function Home() {
                   </li>
                 ))}
               </ul>
-            </div>
-          </div>
+            </RevealItem>
+          </RevealGroup>
         </div>
       </section>
 
       {/* ── 03 Memberships ─────────────────────────────────────── */}
       <section id="memberships" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="03">Memberships</SectionLabel>
+          <Reveal><SectionLabel n="03">Memberships</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             Pick what you will actually use
           </h2>
@@ -205,7 +211,7 @@ export default function Home() {
                 <p className="text-sm text-white/45">{group.note}</p>
               </div>
 
-              <div
+              <RevealGroup
                 className={`grid gap-4 ${
                   group.id === "single"
                     ? "sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
@@ -213,7 +219,7 @@ export default function Home() {
                 }`}
               >
                 {group.plans.map((plan) => (
-                  <article
+                  <RevealItem
                     key={plan.name}
                     className={`rounded-2xl border p-6 flex flex-col ${
                       plan.featured
@@ -264,9 +270,9 @@ export default function Home() {
                     >
                       Enquire
                     </a>
-                  </article>
+                  </RevealItem>
                 ))}
-              </div>
+              </RevealGroup>
             </div>
           ))}
 
@@ -300,7 +306,7 @@ export default function Home() {
       {/* ── 04 Recovery ────────────────────────────────────────── */}
       <section id="recovery" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="04">Recovery</SectionLabel>
+          <Reveal><SectionLabel n="04">Recovery</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             The part most gyms here skip
           </h2>
@@ -309,11 +315,11 @@ export default function Home() {
             session at a time with no membership at all.
           </p>
 
-          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <RevealGroup className="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {recovery.map((r, i) => {
               const Icon = RECOVERY_ICONS[i % RECOVERY_ICONS.length];
               return (
-                <div key={r.name} className="rounded-2xl border border-ink-line bg-ink-soft p-6">
+                <RevealItem key={r.name} className="rounded-2xl border border-ink-line bg-ink-soft p-6">
                   <PhotoSlot id={`REC-0${i + 1}`} className="mb-5" compact />
                   <div className="w-11 h-11 rounded-xl bg-brand/15 flex items-center justify-center">
                     <Icon className="w-5 h-5 text-brand" />
@@ -321,17 +327,17 @@ export default function Home() {
                   <h3 className="display text-2xl text-white mt-5">{r.name}</h3>
                   <p className="mt-2 text-brand font-bold">{r.price}</p>
                   <p className="text-xs text-white/45">{r.unit}</p>
-                </div>
+                </RevealItem>
               );
             })}
-          </div>
+          </RevealGroup>
         </div>
       </section>
 
       {/* ── 05 Trainers ────────────────────────────────────────── */}
       <section id="trainers" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="05">The team</SectionLabel>
+          <Reveal><SectionLabel n="05">The team</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             Nine certified trainers
           </h2>
@@ -347,9 +353,9 @@ export default function Home() {
             </p>
           </div>
 
-          <div className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <RevealGroup className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {trainers.map((t) => (
-              <article key={t.name} className="rounded-2xl border border-ink-line bg-ink-soft p-6 flex items-center gap-4">
+              <RevealItem key={t.name} className="rounded-2xl border border-ink-line bg-ink-soft p-6 flex items-center gap-4">
                 {/* Initials until real headshots exist — a stock silhouette
                     would look worse than an honest monogram. */}
                 <TrainerPhoto name={t.name} />
@@ -358,16 +364,16 @@ export default function Home() {
                   <p className="text-sm text-brand">{t.speciality}</p>
                   {t.note && <p className="text-xs text-white/45 mt-0.5">{t.note}</p>}
                 </div>
-              </article>
+              </RevealItem>
             ))}
-          </div>
+          </RevealGroup>
         </div>
       </section>
 
       {/* ── 06 The floor ───────────────────────────────────────── */}
       <section id="the-floor" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="06">The floor</SectionLabel>
+          <Reveal><SectionLabel n="06">The floor</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             What you are actually paying for
           </h2>
@@ -375,11 +381,11 @@ export default function Home() {
             Equipment, not stock photography. Every frame below is a real corner of the club.
           </p>
 
-          <div className="mt-12 grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <RevealGroup className="mt-12 grid grid-cols-2 lg:grid-cols-3 gap-4">
             {["FLOOR-01", "FLOOR-02", "FLOOR-03", "FLOOR-04", "FLOOR-05", "FLOOR-06"].map((id) => (
-              <PhotoSlot key={id} id={id} compact />
+              <RevealItem key={id}><PhotoSlot id={id} compact /></RevealItem>
             ))}
-          </div>
+          </RevealGroup>
         </div>
       </section>
 
@@ -387,7 +393,7 @@ export default function Home() {
       <section id="enquire" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 grid lg:grid-cols-2 gap-12 items-start">
           <div>
-            <SectionLabel n="07">Start here</SectionLabel>
+            <Reveal><SectionLabel n="07">Start here</SectionLabel></Reveal>
             <h2 className="display text-4xl sm:text-6xl text-white">{enquiry.heading}</h2>
             <p className="mt-5 text-white/65 leading-relaxed max-w-lg">{enquiry.body}</p>
 
@@ -415,15 +421,15 @@ export default function Home() {
       {/* ── 08 Visit ───────────────────────────────────────────── */}
       <section id="visit" className="py-20 sm:py-28 border-t border-ink-line">
         <div className="mx-auto max-w-7xl px-4 sm:px-6">
-          <SectionLabel n="08">Come and see it</SectionLabel>
+          <Reveal><SectionLabel n="08">Come and see it</SectionLabel></Reveal>
           <h2 className="display text-4xl sm:text-6xl text-white max-w-3xl">
             Third floor, High Street Mall
           </h2>
 
-          <div className="mt-12 grid sm:grid-cols-2 gap-4">
-            <PhotoSlot id="VISIT-01" />
-            <PhotoSlot id="VISIT-02" />
-          </div>
+          <RevealGroup className="mt-12 grid sm:grid-cols-2 gap-4">
+            <RevealItem><PhotoSlot id="VISIT-01" /></RevealItem>
+            <RevealItem><PhotoSlot id="VISIT-02" /></RevealItem>
+          </RevealGroup>
 
           <div className="mt-4 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div className="rounded-2xl border border-ink-line bg-ink-soft p-6">
@@ -477,7 +483,7 @@ export default function Home() {
 
       {/* ── Closing ────────────────────────────────────────────── */}
       <section className="py-20 sm:py-28 border-t border-ink-line">
-        <div className="mx-auto max-w-4xl px-4 sm:px-6 text-center">
+        <Reveal className="mx-auto max-w-4xl px-4 sm:px-6 text-center" blur={16}>
           <Image
             src="/logo.png" alt={club.name}
             width={320} height={197}
@@ -496,7 +502,7 @@ export default function Home() {
               Call {club.phone}
             </a>
           </div>
-        </div>
+        </Reveal>
       </section>
 
       {/* ── Footer ─────────────────────────────────────────────── */}
