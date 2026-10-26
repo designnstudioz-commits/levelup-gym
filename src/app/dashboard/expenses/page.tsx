@@ -5,12 +5,13 @@ import { format, startOfMonth, endOfMonth, addMonths, parseISO } from "date-fns"
 import {
   Wallet, TrendingUp, Receipt, Plus, Search, RefreshCw, Settings2,
   Pencil, Ban, FileText, ChevronLeft, ChevronRight, HandCoins, History,
-  ArrowDownToLine, ArrowUpFromLine, AlertTriangle,
+  ArrowDownToLine, ArrowUpFromLine, AlertTriangle, Printer,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
+import { ExpensePrintSheet } from "./ExpensePrintSheet";
 import { StatsCard } from "@/components/ui/StatsCard";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -406,23 +407,38 @@ export default function ExpensesPage() {
   const monthlyNet = summary?.monthly_net ?? 0;
   const outstanding = summary?.outstanding_at_month_end ?? 0;
 
+  // Stated on the printed sheet itself. A filtered list that looks like a
+  // whole month is how a hand tally goes wrong.
+  const printFilterNote = [
+    category !== "all" ? `Category: ${category}` : null,
+    status !== "all" ? `Status: ${status}` : null,
+    search.trim() ? `Search: "${search.trim()}"` : null,
+  ].filter(Boolean).join(" \u00b7 ") || null;
+
   return (
     <div className="flex flex-col flex-1">
-      <DashboardHeader
-        title="Expenses"
-        subtitle="Bills, payments and what carries forward month to month."
-        action={
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={openSetup} title="Starting balance">
-              <Settings2 className="w-4 h-4" />
-            </Button>
-            <Button variant="ghost" size="sm" onClick={fetchData}><RefreshCw className="w-4 h-4" /></Button>
-            <Button onClick={openAdd}><Plus className="w-4 h-4" /> Add Bill</Button>
-          </div>
-        }
-      />
+      <div className="no-print">
+        <DashboardHeader
+          title="Expenses"
+          subtitle="Bills, payments and what carries forward month to month."
+          action={
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={openSetup} title="Starting balance">
+                <Settings2 className="w-4 h-4" />
+              </Button>
+              <Button variant="ghost" size="sm" onClick={fetchData}><RefreshCw className="w-4 h-4" /></Button>
+              {/* Named rather than icon-only: this one was asked for by the
+                  people who will use it, and they look for the word. */}
+              <Button variant="secondary" onClick={() => window.print()} title="Print this month's expenses to check off by hand">
+                <Printer className="w-4 h-4" /> Print Month
+              </Button>
+              <Button onClick={openAdd}><Plus className="w-4 h-4" /> Add Bill</Button>
+            </div>
+          }
+        />
+      </div>
 
-      <div className="flex-1 p-6 space-y-5">
+      <div className="flex-1 p-6 space-y-5 no-print">
         {/* ── Month navigator ─────────────────────────────────────── */}
         <div className="flex items-center justify-between bg-white border border-[#E4E4DE] rounded-xl px-4 py-3">
           <button onClick={() => setMonth(format(addMonths(parseISO(monthStart), -1), "yyyy-MM"))}
@@ -952,6 +968,22 @@ export default function ExpensesPage() {
           </div>
         </div>
       </Modal>
+
+      {/* Paper only. Renders every filtered row, not the current page of the
+          table above — a printed tally that silently stops at row 20 is the
+          worst way this could fail. */}
+      <ExpensePrintSheet
+        monthStart={monthStart}
+        monthEnd={monthEnd}
+        bills={filtered}
+        filterNote={printFilterNote}
+        configured={configured}
+        opening={opening}
+        income={income}
+        paidOut={paidOut}
+        closing={closing}
+        outstanding={outstanding}
+      />
     </div>
   );
 }

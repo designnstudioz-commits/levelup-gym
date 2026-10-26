@@ -114,3 +114,50 @@ input[type="number"] {
     display: none !important;
   }
 }
+
+/* Expenses month sheet (src/app/dashboard/expenses/ExpensePrintSheet.tsx).
+   The dashboard shell is a fixed-height flex column with its own scrolling
+   main element — h-screen + overflow-hidden on the outer div, overflow-y-auto
+   on <main>. A printer has no scrollbar: left alone, that clips the sheet to
+   one screen's worth and silently drops every row past it. These rules undo
+   the shell for print only. */
+@media print {
+  @page {
+    /* Ten columns of figures. Portrait squeezes "Expense" and "Paid to" to
+       the point of wrapping every row. */
+    size: A4 landscape;
+    margin: 12mm;
+  }
+
+  html, body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Any ancestor that scrolls or caps height has to let go. */
+  body * {
+    overflow: visible !important;
+  }
+
+  .print-sheet {
+    color: #000;
+    background: #fff;
+    font-size: 10pt;
+  }
+
+  /* Repeat the column headings on every sheet of paper — without this,
+     page two onwards is unlabelled columns of numbers. */
+  .print-sheet thead {
+    display: table-header-group;
+  }
+
+  .print-sheet tfoot {
+    display: table-footer-group;
+  }
+
+  /* Never split a bill across two pages. */
+  .print-sheet tr {
+    break-inside: avoid;
+  }
+}
