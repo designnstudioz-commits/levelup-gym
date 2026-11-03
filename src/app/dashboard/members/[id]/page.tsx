@@ -2731,9 +2731,27 @@ export default function MemberDetailPage() {
 
 // ── Device Enrollments Field ──────────────────────────────────────────
 type Device = { id: string; serial_no: string; name: string | null };
-type Enrollment = { id: string; device_serial: string; device_user_id: string };
+type Enrollment = { id: string; device_serial: string; device_user_id: string; enrolled_at: string };
 type CmdStatus = "pending" | "sent" | "acked" | "failed";
-type LastCmd = { status: CmdStatus; created_at: string };
+type LastCmd = { status: CmdStatus; created_at: string; command_type: string };
+
+/** What the reader actually knows about this member, as far as we can tell
+ *  from the command log plus when the enrolment was created.
+ *
+ *  Previously the badge read only the newest `push_user` row, which answers
+ *  "did a push ever succeed" — not "is this member on this door". Those
+ *  diverge the moment a user is deleted, and they diverged in production:
+ *  Manzoor Hussain (LUM-2026-0458) was deleted from the Male Door on
+ *  2026-10-28, re-enrolled in the app seconds later with no push behind it,
+ *  and the badge kept showing the September push as "Done ✓" for six days.
+ *  Worse, `showPushBtn` hid the Push button precisely because that stale row
+ *  said acked — so the one remedy was unreachable. */
+type DeviceState =
+  | "on-device"    // a write landed after the current enrolment was created
+  | "not-pushed"   // enrolled in the app, the reader was never told
+  | "removed"      // a delete was confirmed and nothing has been sent since
+  | "in-flight"    // queued or sent, not yet acknowledged
+  | "failed";
 
 function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   memberId: string;
@@ -2743,6 +2761,7 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   const [devices, setDevices] = useState<Device[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [lastCmds, setLastCmds] = useState<Record<string, LastCmd>>({});
+  const [lastWrites, setLastWrites] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [editingSerial, setEditingSerial] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -2758,11 +2777,13 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
     setLoading(true);
     const [{ data: devs }, { data: enrs }, { data: cmds }, { data: allEnrs }] = await Promise.all([
       supabase.from("devices").select("id, serial_no, name").order("name"),
-      supabase.from("device_enrollments").select("id, device_serial, device_user_id")
+      supabase.from("device_enrollments").select("id, device_serial, device_user_id, enrolled_at")
         .eq("member_id", memberId).is("deleted_at", null),
-      supabase.from("device_commands").select("device_serial, status, created_at")
-        .eq("member_id", memberId).eq("command_type", "push_user")
-        .order("created_at", { ascending: false }).limit(20),
+      // Every command type. Filtering to push_user is what made a deletion
+      // invisible to this panel — see the DeviceState comment above.
+      supabase.from("device_commands").select("device_serial, status, created_at, command_type")
+        .eq("member_id", memberId)
+        .order("created_at", { ascending: false }).limit(40),
       // All enrollments across all members to compute next available ID per device
       supabase.from("device_enrollments").select("device_serial, device_user_id").is("deleted_at", null),
     ]);
@@ -2770,9 +2791,21 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
     setEnrollments(enrs ?? []);
     const map: Record<string, LastCmd> = {};
     for (const c of (cmds ?? [])) {
-      if (!map[c.device_serial]) map[c.device_serial] = { status: c.status, created_at: c.created_at };
+      if (!map[c.device_serial]) {
+        map[c.device_serial] = { status: c.status, created_at: c.created_at, command_type: c.command_type };
+      }
     }
     setLastCmds(map);
+    // The newest write that actually put this member ON a door, per device.
+    // Compared against the enrolment date below: a write older than the
+    // current enrolment proves nothing about the current one.
+    const writes: Record<string, string> = {};
+    for (const c of (cmds ?? [])) {
+      if (c.status !== "acked") continue;
+      if (!["push_user", "unblock_user", "block_user"].includes(c.command_type)) continue;
+      if (!writes[c.device_serial]) writes[c.device_serial] = c.created_at;
+    }
+    setLastWrites(writes);
     // Compute next available user ID per device (max existing + 1, default 1)
     const maxMap: Record<string, number> = {};
     for (const row of (allEnrs ?? [])) {
@@ -2789,14 +2822,23 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
   // Poll only command statuses every 5s while any command is pending/sent
   async function refreshCmds(): Promise<Record<string, LastCmd>> {
     const { data: cmds } = await supabase
-      .from("device_commands").select("device_serial, status, created_at")
-      .eq("member_id", memberId).eq("command_type", "push_user")
-      .order("created_at", { ascending: false }).limit(20);
+      .from("device_commands").select("device_serial, status, created_at, command_type")
+      .eq("member_id", memberId)
+      .order("created_at", { ascending: false }).limit(40);
     const map: Record<string, LastCmd> = {};
     for (const c of (cmds ?? [])) {
-      if (!map[c.device_serial]) map[c.device_serial] = { status: c.status, created_at: c.created_at };
+      if (!map[c.device_serial]) {
+        map[c.device_serial] = { status: c.status, created_at: c.created_at, command_type: c.command_type };
+      }
     }
     setLastCmds(map);
+    const writes: Record<string, string> = {};
+    for (const c of (cmds ?? [])) {
+      if (c.status !== "acked") continue;
+      if (!["push_user", "unblock_user", "block_user"].includes(c.command_type)) continue;
+      if (!writes[c.device_serial]) writes[c.device_serial] = c.created_at;
+    }
+    setLastWrites(writes);
     return map;
   }
 
@@ -2927,18 +2969,75 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
     }
   }
 
-  function CmdBadge({ serial }: { serial: string }) {
+  /** Labels are deliberately short — they sit beside the door name, and the
+   *  long form ("Removed from device") was wide enough to crush the action
+   *  links next to it. The full meaning lives in the tooltip, and `hint`
+   *  is shown in the card body where there is room for a sentence. */
+  const STATE_CFG: Record<DeviceState, {
+    label: string; cls: string; icon: React.ReactNode; title: string; hint?: string;
+  }> = {
+    "in-flight": {
+      label: "Sending", cls: "text-blue-700 bg-blue-50 border-blue-200",
+      icon: <Send className="w-2.5 h-2.5" />,
+      title: "Queued — the reader collects it within about 30 seconds",
+    },
+    "on-device": {
+      label: "On device", cls: "text-green-700 bg-green-50 border-green-200",
+      icon: <Check className="w-2.5 h-2.5" />,
+      title: "This reader currently holds this member",
+    },
+    "not-pushed": {
+      label: "Not pushed", cls: "text-amber-800 bg-amber-50 border-amber-300",
+      icon: <Clock className="w-2.5 h-2.5" />,
+      title: "Enrolled here in the app, but the reader has never been told",
+      hint: "Saved here but never sent to the reader — push it to fix.",
+    },
+    "removed": {
+      label: "Removed", cls: "text-red-700 bg-red-50 border-red-200",
+      icon: <X className="w-2.5 h-2.5" />,
+      title: "The reader was told to delete this member and nothing has been sent since",
+      hint: "The reader has deleted this member — push to put them back.",
+    },
+    "failed": {
+      label: "Failed", cls: "text-red-700 bg-red-50 border-red-200",
+      icon: <X className="w-2.5 h-2.5" />,
+      title: "The last command was not accepted by the reader",
+      hint: "The last attempt did not reach the reader. Try pushing again.",
+    },
+  };
+
+  /** Is this member on this door? Answered from the newest command plus the
+   *  enrolment date, never from "a push once succeeded". */
+  function deviceState(serial: string): DeviceState | null {
+    const enr = enrollmentFor(serial);
+    if (!enr) return null;
+
     const cmd = lastCmds[serial];
-    if (!cmd) return null;
-    const cfg: Record<CmdStatus, { label: string; cls: string; icon: React.ReactNode }> = {
-      pending: { label: "Queued", cls: "text-amber-600 bg-amber-50 border-amber-200", icon: <Clock className="w-2.5 h-2.5" /> },
-      sent:    { label: "Sent",   cls: "text-blue-600 bg-blue-50 border-blue-200",   icon: <Send className="w-2.5 h-2.5" /> },
-      acked:   { label: "Done ✓", cls: "text-green-600 bg-green-50 border-green-200", icon: <Check className="w-2.5 h-2.5" /> },
-      failed:  { label: "Failed", cls: "text-red-600 bg-red-50 border-red-200",      icon: <X className="w-2.5 h-2.5" /> },
-    };
-    const { label, cls, icon } = cfg[cmd.status];
+    if (cmd && (cmd.status === "pending" || cmd.status === "sent")) return "in-flight";
+
+    // A confirmed delete with nothing sent afterwards means the reader has
+    // forgotten them, whatever happened before that.
+    if (cmd?.status === "acked" && cmd.command_type === "delete_user") return "removed";
+
+    const wrote = lastWrites[serial];
+    if (!wrote) return "not-pushed";
+    // A write that predates the current enrolment belongs to the previous
+    // one. This is the exact case the old badge got wrong.
+    if (wrote < enr.enrolled_at) return "not-pushed";
+
+    if (cmd?.status === "failed" && cmd.created_at > wrote) return "failed";
+    return "on-device";
+  }
+
+  function CmdBadge({ serial }: { serial: string }) {
+    const state = deviceState(serial);
+    if (!state) return null;
+    const { label, cls, icon, title } = STATE_CFG[state];
     return (
-      <span className={`inline-flex items-center gap-0.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full border ${cls}`}>
+      <span
+        title={title}
+        className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full border whitespace-nowrap ${cls}`}
+      >
         {icon} {label}
       </span>
     );
@@ -2962,83 +3061,125 @@ function DeviceEnrollmentsField({ memberId, membershipNo, onSaved }: {
             const isEditing = editingSerial === dev.serial_no;
             const isPushing = pushing === dev.serial_no;
             const label = dev.name || dev.serial_no;
-            const cmdStatus = lastCmds[dev.serial_no]?.status;
-            const showPushBtn = enr && cmdStatus !== "acked";
+            // Shown whenever the reader does NOT currently hold this member.
+            // The old condition hid it the moment any push had ever been
+            // acknowledged, which is why a deleted member could not be put
+            // back from this panel at all.
+            const state = deviceState(dev.serial_no);
+            const showPushBtn = !!enr && state !== "on-device" && state !== "in-flight";
+
+            const hint = state ? STATE_CFG[state].hint : undefined;
+            const busy = isPushing || removing === dev.serial_no;
 
             return (
-              <div key={dev.serial_no} className="rounded-lg border border-[#E4E4DE] bg-[#F8F8F6] px-2.5 py-2">
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] font-medium text-[#1A1A16]">{label}</span>
-                    <CmdBadge serial={dev.serial_no} />
-                  </div>
-                  {!isEditing ? (
-                    <div className="flex items-center gap-2">
-                      {showPushBtn && (
-                        <button
-                          onClick={() => pushToDevice(dev.serial_no)}
-                          disabled={isPushing}
-                          title="Send user info to this device — device picks it up within ~30s"
-                          className="text-[10px] text-[#F06418] hover:underline flex items-center gap-0.5 disabled:opacity-50"
-                        >
-                          {isPushing
-                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            : <Send className="w-2.5 h-2.5" />
-                          }
-                          {isPushing ? "Sending…" : "Push to Device"}
-                        </button>
+              <div key={dev.serial_no} className="rounded-lg border border-[#E4E4DE] bg-white overflow-hidden">
+                {/* Header — door name on the left, status on the right. The
+                    badge used to sit next to the name and push the actions
+                    into each other. */}
+                <div className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-2">
+                  <span className="text-xs font-semibold text-[#1A1A16] truncate">{label}</span>
+                  <CmdBadge serial={dev.serial_no} />
+                </div>
+
+                {/* Body — the enrolment itself, and what to do about it. */}
+                <div className="px-3 pb-2.5">
+                  {isEditing ? (
+                    <>
+                      <input
+                        type="text"
+                        placeholder="User ID from the reader (e.g. 458)"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        autoFocus
+                        className="w-full px-2 py-1.5 text-xs rounded border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+                      />
+                      <p className="text-[10px] text-[#7A7A72] mt-1">Leave blank to remove the enrollment.</p>
+                    </>
+                  ) : enr ? (
+                    <>
+                      <div className="flex items-center gap-1.5 text-xs text-[#1A1A16]">
+                        <Fingerprint className="w-3.5 h-3.5 text-[#7A7A72]" />
+                        <span>User ID <span className="font-mono font-semibold">{enr.device_user_id}</span></span>
+                      </div>
+                      {hint && (
+                        <p className="text-[11px] text-amber-800 mt-1.5 leading-snug">{hint}</p>
                       )}
-                      <button onClick={() => startEdit(dev.serial_no)}
-                        className="text-[10px] text-[#4A4A44] hover:text-[#F06418] hover:underline flex items-center gap-0.5">
-                        <Edit3 className="w-2.5 h-2.5" /> {enr ? "Edit" : `Enroll (ID ${suggestedId(dev.serial_no)})`}
-                      </button>
-                      {enr && (
-                        <button onClick={() => removeEnrollment(dev.serial_no)}
-                          disabled={removing === dev.serial_no}
-                          className="text-[10px] text-red-500 hover:underline flex items-center gap-0.5 disabled:opacity-50">
-                          {removing === dev.serial_no
-                            ? <Loader2 className="w-2.5 h-2.5 animate-spin" />
-                            : <X className="w-2.5 h-2.5" />
-                          }
-                          {removing === dev.serial_no ? "Removing…" : "Remove"}
-                        </button>
-                      )}
-                    </div>
+                    </>
                   ) : (
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => saveEnrollment(dev.serial_no)} disabled={saving}
-                        className="text-[10px] text-green-600 hover:underline flex items-center gap-0.5 disabled:opacity-50">
-                        <Check className="w-2.5 h-2.5" /> Save
-                      </button>
-                      <button onClick={() => setEditingSerial(null)}
-                        className="text-[10px] text-red-500 hover:underline">
-                        <X className="w-2.5 h-2.5" />
-                      </button>
-                    </div>
+                    <span className="text-[11px] text-[#7A7A72]">Not enrolled on this reader</span>
                   )}
                 </div>
 
-                {isEditing ? (
-                  <>
-                    <input
-                      type="text"
-                      placeholder="User ID from ZKTeco (e.g. 1)"
-                      value={editValue}
-                      onChange={(e) => setEditValue(e.target.value)}
-                      autoFocus
-                      className="w-full px-2 py-1 text-xs rounded border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]"
-                    />
-                    <p className="text-[10px] text-[#7A7A72] mt-1">Leave blank to remove enrollment.</p>
-                  </>
-                ) : enr ? (
-                  <div className="flex items-center gap-1.5 text-xs text-green-700">
-                    <Fingerprint className="w-3 h-3 text-green-600" />
-                    <span className="font-semibold">Enrolled — User ID: {enr.device_user_id}</span>
-                  </div>
-                ) : (
-                  <span className="text-[11px] text-[#7A7A72]">Not enrolled</span>
-                )}
+                {/* Footer — every action lives here, on its own line, so no
+                    two of them ever compete for the same space. */}
+                <div className="flex items-center gap-2 px-3 py-2 border-t border-[#E4E4DE] bg-[#F8F8F6]">
+                  {isEditing ? (
+                    <>
+                      <button
+                        onClick={() => saveEnrollment(dev.serial_no)}
+                        disabled={saving}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F06418] text-white text-[11px] font-bold hover:bg-[#C04E10] disabled:opacity-50"
+                      >
+                        {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                        Save
+                      </button>
+                      <button
+                        onClick={() => setEditingSerial(null)}
+                        className="text-[11px] font-semibold text-[#7A7A72] hover:text-[#1A1A16] ml-auto"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      {/* The fix is the primary action whenever the reader
+                          does not hold this member — a filled button, not a
+                          text link lost among the others. */}
+                      {showPushBtn ? (
+                        <button
+                          onClick={() => pushToDevice(dev.serial_no)}
+                          disabled={busy}
+                          title="Sends this member to the reader. It collects the change within about 30 seconds."
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F06418] text-white text-[11px] font-bold hover:bg-[#C04E10] disabled:opacity-50"
+                        >
+                          {isPushing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
+                          {isPushing ? "Sending…" : "Push to device"}
+                        </button>
+                      ) : !enr ? (
+                        <button
+                          onClick={() => startEdit(dev.serial_no)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#F06418] text-white text-[11px] font-bold hover:bg-[#C04E10]"
+                        >
+                          <Plus className="w-3 h-3" />
+                          Enroll as {suggestedId(dev.serial_no)}
+                        </button>
+                      ) : null}
 
+                      {/* Secondary, pushed to the far side. */}
+                      {enr && (
+                        <div className="ml-auto flex items-center gap-3">
+                          <button
+                            onClick={() => startEdit(dev.serial_no)}
+                            className="text-[11px] font-semibold text-[#4A4A44] hover:text-[#F06418]"
+                          >
+                            Edit ID
+                          </button>
+                          <button
+                            onClick={() => removeEnrollment(dev.serial_no)}
+                            disabled={busy}
+                            title="Deletes this member from the reader and clears the enrollment here"
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                          >
+                            {removing === dev.serial_no
+                              ? <Loader2 className="w-3 h-3 animate-spin" />
+                              : null}
+                            {removing === dev.serial_no ? "Removing…" : "Remove"}
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             );
           })}
