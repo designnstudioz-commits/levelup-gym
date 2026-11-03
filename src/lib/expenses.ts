@@ -19,6 +19,18 @@ export const EXPENSE_CATEGORIES = [
 
 export const EXPENSE_CATEGORY_VALUES = EXPENSE_CATEGORIES.map((c) => c.value) as readonly string[];
 
+/** A row of expense_categories — the owner-maintained list that superseded
+ *  the constant above. EXPENSE_CATEGORIES is now the seed the migration
+ *  planted and the fallback the page uses if the fetch fails; it is no longer
+ *  what a bill is validated against (see lib/server/expenseCategories.ts). */
+export interface ExpenseCategoryRow {
+  id: string;
+  value: string;
+  label: string;
+  sort_order: number;
+  is_default: boolean;
+}
+
 export function expenseCategoryLabel(value: string | null | undefined): string {
   if (!value) return "—";
   return EXPENSE_CATEGORIES.find((c) => c.value === value)?.label ?? value;

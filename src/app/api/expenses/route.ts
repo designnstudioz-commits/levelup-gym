@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { requireStaff } from "@/lib/server/requireStaff";
-import { EXPENSE_CREATE_ROLES, EXPENSE_CATEGORY_VALUES, isBackdated } from "@/lib/expenses";
+import { EXPENSE_CREATE_ROLES, isBackdated } from "@/lib/expenses";
+import { isKnownExpenseCategory } from "@/lib/server/expenseCategories";
 
 function getServiceClient() {
   return createServiceClient(
@@ -50,7 +51,9 @@ export async function POST(req: NextRequest) {
     if (due_date && !ISO_DATE.test(String(due_date))) {
       return NextResponse.json({ error: "Due date must be a valid date" }, { status: 400 });
     }
-    if (!EXPENSE_CATEGORY_VALUES.includes(expense_head)) {
+    // Checked against the owner's live list, not a constant — the list is
+    // editable now, so a hardcoded check would reject every category he adds.
+    if (!(await isKnownExpenseCategory(getServiceClient(), expense_head))) {
       return NextResponse.json({ error: "Unknown category" }, { status: 400 });
     }
     if (!PAYMENT_METHODS.includes(payment_method)) {

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient as createServiceClient } from "@supabase/supabase-js";
 import { requireStaff } from "@/lib/server/requireStaff";
-import { EXPENSE_CREATE_ROLES, EXPENSE_CATEGORY_VALUES, canEditExpense, isBackdated } from "@/lib/expenses";
+import { EXPENSE_CREATE_ROLES, canEditExpense, isBackdated } from "@/lib/expenses";
+import { isKnownExpenseCategory } from "@/lib/server/expenseCategories";
 
 function getServiceClient() {
   return createServiceClient(
@@ -82,7 +83,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       fields.title = String(body.title).trim(); changed.push("name");
     }
     if (body.expense_head !== undefined) {
-      if (!EXPENSE_CATEGORY_VALUES.includes(body.expense_head)) {
+      // See the note in POST /api/expenses — validated against the live
+      // expense_categories list rather than a hardcoded array.
+      if (!(await isKnownExpenseCategory(admin, body.expense_head))) {
         return NextResponse.json({ error: "Unknown category" }, { status: 400 });
       }
       fields.expense_head = body.expense_head; changed.push("category");

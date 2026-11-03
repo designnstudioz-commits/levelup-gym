@@ -5,7 +5,7 @@ import { format, startOfMonth, endOfMonth, addMonths, parseISO } from "date-fns"
 import {
   Wallet, TrendingUp, Receipt, Plus, Search, RefreshCw, Settings2,
   Pencil, Ban, FileText, ChevronLeft, ChevronRight, HandCoins, History,
-  ArrowDownToLine, ArrowUpFromLine, AlertTriangle, Printer,
+  ArrowDownToLine, ArrowUpFromLine, AlertTriangle, Printer, Tags, Trash2, Check, X,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
@@ -20,7 +20,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { formatPKR, formatDate, safeDateValue } from "@/lib/utils";
 import {
-  EXPENSE_CATEGORIES, expenseCategoryLabel, EXPENSE_VIEW_ROLES,
+  EXPENSE_CATEGORIES, EXPENSE_VIEW_ROLES, type ExpenseCategoryRow,
   EXPENSE_VOID_ROLES, canEditExpense, expenseStatus, outstandingOn, paidAgainst,
   EXPENSE_STATUS_LABELS, isBackdated, billLiveAsOf, amountAsOf,
   type ExpenseBillRow, type ExpensePaymentRow, type ExpenseStatus, type ExpenseMonthSummary,
@@ -92,6 +92,16 @@ export default function ExpensesPage() {
   const [paying, setPaying] = useState(false);
 
   const [historyFor, setHistoryFor] = useState<ExpenseBillRow | null>(null);
+  // The category list is the owner's, held in expense_categories, not the
+  // hardcoded EXPENSE_CATEGORIES constant. That constant is now only the seed
+  // the migration planted and the fallback below if this fetch fails.
+  const [categories, setCategories] = useState<ExpenseCategoryRow[]>([]);
+  const [catsOpen, setCatsOpen] = useState(false);
+  const [newCat, setNewCat] = useState("");
+  const [catBusy, setCatBusy] = useState(false);
+  const [renaming, setRenaming] = useState<{ id: string; label: string } | null>(null);
+  const [archiving, setArchiving] = useState<ExpenseCategoryRow | null>(null);
+
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupForm, setSetupForm] = useState({ start_month: "", opening_funds: "" });
   const [savingSetup, setSavingSetup] = useState(false);
@@ -120,7 +130,37 @@ export default function ExpensesPage() {
     setLoading(false);
   }, [month, monthEnd]);
 
+  /** Label for a stored expense_head. Falls back to the raw text, so a bill
+   *  filed under a category that has since been archived still reads
+   *  correctly instead of showing a blank. */
+  const categoryLabel = useCallback(
+    (v: string | null | undefined) =>
+      !v ? "—" : (categories.find((c) => c.value === v)?.label ?? v),
+    [categories]
+  );
+
+  const fetchCategories = useCallback(async () => {
+    try {
+      const res = await fetch("/api/expenses/categories");
+      const json = await res.json();
+      if (res.ok && Array.isArray(json.categories)) {
+        setCategories(json.categories);
+        return;
+      }
+      throw new Error(json.error ?? "load failed");
+    } catch {
+      // Falling back to the shipped ten rather than rendering an empty
+      // dropdown: a form whose required field has no options cannot be
+      // filled at all, which is worse than a stale list.
+      setCategories(EXPENSE_CATEGORIES.map((c, i) => ({
+        id: `fallback-${c.value}`, value: c.value, label: c.label,
+        sort_order: (i + 1) * 10, is_default: true,
+      })));
+    }
+  }, []);
+
   useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { fetchCategories(); }, [fetchCategories]);
   useEffect(() => { setPage(1); }, [search, category, status, month]);
 
   // Which bills belong on this month's screen: those raised in the month,
@@ -364,6 +404,71 @@ export default function ExpensesPage() {
     window.open(json.url, "_blank", "noopener,noreferrer");
   }
 
+  async function addCategory(label: string): Promise<boolean> {
+    const name = label.trim();
+    if (!name) return false;
+    setCatBusy(true);
+    try {
+      const res = await fetch("/api/expenses/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: name }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "Could not add that category"); return false; }
+      await fetchCategories();
+      // Select it straight away — someone adding a category mid-bill wants it
+      // chosen, not to have to find it in the list again.
+      setForm((f) => ({ ...f, expense_head: json.category.value }));
+      toast.success(json.restored ? `Restored "${name}"` : `Added "${name}"`);
+      setNewCat("");
+      return true;
+    } catch {
+      toast.error("Could not add that category");
+      return false;
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
+  async function renameCategory() {
+    if (!renaming?.label.trim()) return;
+    setCatBusy(true);
+    try {
+      const res = await fetch("/api/expenses/categories", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: renaming.id, label: renaming.label.trim() }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "Could not rename"); return; }
+      await fetchCategories();
+      setRenaming(null);
+      toast.success("Category renamed");
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
+  async function archiveCategory() {
+    if (!archiving) return;
+    setCatBusy(true);
+    try {
+      const res = await fetch("/api/expenses/categories", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: archiving.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error ?? "Could not remove"); return; }
+      await fetchCategories();
+      setArchiving(null);
+      toast.success(`Removed "${json.archived}" from the list`);
+    } finally {
+      setCatBusy(false);
+    }
+  }
+
   async function openSetup() {
     const res = await fetch("/api/expenses/settings");
     const json = await res.json();
@@ -423,6 +528,9 @@ export default function ExpensesPage() {
           subtitle="Bills, payments and what carries forward month to month."
           action={
             <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setCatsOpen(true)} title="Manage categories">
+                <Tags className="w-4 h-4" />
+              </Button>
               <Button variant="ghost" size="sm" onClick={openSetup} title="Starting balance">
                 <Settings2 className="w-4 h-4" />
               </Button>
@@ -513,7 +621,7 @@ export default function ExpensesPage() {
             <select value={category} onChange={(e) => setCategory(e.target.value)}
               className="text-xs px-3 py-1.5 rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]">
               <option value="all">All Categories</option>
-              {EXPENSE_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
+              {categories.map((c) => <option key={c.id} value={c.value}>{c.label}</option>)}
             </select>
 
             <div className="flex-1 min-w-40 max-w-sm relative">
@@ -592,7 +700,7 @@ export default function ExpensesPage() {
                         </td>
                         <td className="px-4 py-3">
                           <span className="text-xs font-medium px-2 py-1 rounded-full bg-[#F8F8F6] border border-[#E4E4DE] text-[#4A4A44] whitespace-nowrap">
-                            {expenseCategoryLabel(b.expense_head)}
+                            {categoryLabel(b.expense_head)}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-sm text-[#4A4A44]">{b.paid_to || "—"}</td>
@@ -681,11 +789,20 @@ export default function ExpensesPage() {
           <div className="grid grid-cols-2 gap-4">
             <Input label="Bill Total (Rs)" type="number" required min="1" step="0.01" value={form.amount}
               onChange={(e) => setForm({ ...form, amount: e.target.value })} />
-            <Select label="Category" required value={form.expense_head}
-              onChange={(e) => setForm({ ...form, expense_head: e.target.value })}>
-              <option value="">Select category</option>
-              {EXPENSE_CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-            </Select>
+            <div>
+              <Select label="Category" required value={form.expense_head}
+                onChange={(e) => {
+                  if (e.target.value === "__new__") { setCatsOpen(true); return; }
+                  setForm({ ...form, expense_head: e.target.value });
+                }}>
+                <option value="">Select category</option>
+                {categories.map((c) => <option key={c.id} value={c.value}>{c.label}</option>)}
+                {/* Not a category — picking it opens the manager. Sits in the
+                    dropdown because that is where someone realises the one
+                    they want is missing. */}
+                <option value="__new__">+ Add or edit categories…</option>
+              </Select>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -965,6 +1082,105 @@ export default function ExpensesPage() {
           <div className="flex gap-3 pt-1">
             <Button variant="secondary" onClick={() => setSetupOpen(false)} className="flex-1">Cancel</Button>
             <Button onClick={saveSetup} loading={savingSetup} className="flex-1">Save</Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* ── Categories ─────────────────────────────────────────── */}
+      <Modal open={catsOpen} onClose={() => { setCatsOpen(false); setRenaming(null); setArchiving(null); }}
+        title="Expense categories" size="md">
+        <div className="space-y-4">
+          <p className="text-xs text-[#7A7A72]">
+            These are the categories offered when adding a bill. Add your own as the
+            business needs them.
+          </p>
+
+          {/* Add */}
+          <form
+            onSubmit={async (e) => { e.preventDefault(); await addCategory(newCat); }}
+            className="flex gap-2"
+          >
+            <input
+              value={newCat}
+              onChange={(e) => setNewCat(e.target.value)}
+              maxLength={40}
+              placeholder="e.g. Fuel, Security, Taxes"
+              className="flex-1 px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] focus:outline-none focus:ring-2 focus:ring-[#F06418]"
+            />
+            <Button type="submit" loading={catBusy} disabled={!newCat.trim()}>
+              <Plus className="w-4 h-4" /> Add
+            </Button>
+          </form>
+
+          {/* List */}
+          <div className="border border-[#E4E4DE] rounded-lg divide-y divide-[#E4E4DE] max-h-80 overflow-y-auto">
+            {categories.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-[#7A7A72]">No categories yet.</p>
+            ) : categories.map((c) => (
+              <div key={c.id} className="px-3 py-2 flex items-center gap-2">
+                {renaming?.id === c.id ? (
+                  <>
+                    <input
+                      value={renaming.label} autoFocus maxLength={40}
+                      onChange={(e) => setRenaming({ id: c.id, label: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === "Enter") renameCategory(); if (e.key === "Escape") setRenaming(null); }}
+                      className="flex-1 px-2 py-1 text-sm rounded border border-[#F06418] focus:outline-none"
+                    />
+                    <button onClick={renameCategory} disabled={catBusy}
+                      className="p-1.5 rounded-lg text-green-600 hover:bg-green-50" title="Save">
+                      <Check className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => setRenaming(null)}
+                      className="p-1.5 rounded-lg text-[#7A7A72] hover:bg-[#F8F8F6]" title="Cancel">
+                      <X className="w-4 h-4" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm text-[#1A1A16]">{c.label}</span>
+                    {c.is_default && (
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-[#7A7A72]">
+                        Built in
+                      </span>
+                    )}
+                    <button onClick={() => setRenaming({ id: c.id, label: c.label })}
+                      className="p-1.5 rounded-lg text-[#7A7A72] hover:text-[#F06418] hover:bg-[#FEF0E8]" title="Rename">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => setArchiving(c)}
+                      className="p-1.5 rounded-lg text-[#7A7A72] hover:text-red-600 hover:bg-red-50" title="Remove from the list">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+
+          <p className="text-xs text-[#7A7A72]">
+            Removing a category only stops it being offered on new bills. Bills already
+            filed under it keep their category and still appear in reports.
+          </p>
+
+          <Button variant="secondary" onClick={() => setCatsOpen(false)} className="w-full">Done</Button>
+        </div>
+      </Modal>
+
+      {/* Archive confirmation — separate because it is the one irreversible-
+          feeling action here, even though it is only a soft delete. */}
+      <Modal open={!!archiving} onClose={() => setArchiving(null)} title="Remove this category?" size="sm">
+        <div className="space-y-4">
+          <p className="text-sm text-[#4A4A44]">
+            <span className="font-semibold text-[#1A1A16]">{archiving?.label}</span> will no
+            longer be offered when adding a bill. Nothing already recorded changes — bills
+            filed under it keep their category and still show in reports.
+          </p>
+          <p className="text-xs text-[#7A7A72]">
+            You can add it back later under the same name.
+          </p>
+          <div className="flex gap-3">
+            <Button variant="secondary" onClick={() => setArchiving(null)} className="flex-1">Cancel</Button>
+            <Button onClick={archiveCategory} loading={catBusy} className="flex-1">Remove</Button>
           </div>
         </div>
       </Modal>
