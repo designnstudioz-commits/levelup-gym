@@ -1486,7 +1486,12 @@ function TransactionsTab({ payments, totalRevenue, loading,
                   <SortableTh label="Receipt #" sortKey="receipt_no" currentKey={sortKey} direction={sortDir} onSort={handleSort} className="px-5" />
                   <SortableTh label="Member" sortKey="member" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Collected" sortKey="payment_date" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
-                  <SortableTh label="For" sortKey="coverage" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
+                  {/* "For" (the coverage period) hidden on request,
+                      2026-11-23. The data is untouched — coverage_start /
+                      coverage_end are still written on every payment and
+                      still drive expiry and fee status. Restoring the
+                      column means putting this header and its cell back;
+                      the sort key "coverage" is still handled below. */}
                   <SortableTh label="Amount" sortKey="amount" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Method" sortKey="payment_method" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
                   <SortableTh label="Collected By" sortKey="collected_by" currentKey={sortKey} direction={sortDir} onSort={handleSort} />
@@ -1497,7 +1502,6 @@ function TransactionsTab({ payments, totalRevenue, loading,
               <tbody className="divide-y divide-[#E4E4DE]">
                 {sortedPayments.map((p) => {
                   const mem = (p as any).member;
-                  const { label: coverageLabel, inferred: coverageInferred } = describeCoveredPeriod(p.coverage_start, p.coverage_end, p.month_covered, p.payment_date, p.months_covered);
                   const isPartial = !p.is_walk_in && (p.balance_due ?? 0) > 0;
                   const walkIn = !!p.is_walk_in;
                   return (
@@ -1532,28 +1536,6 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
-                      <td className="px-4 py-3">
-                        {/* A day pass and a one-off service have no coverage
-                            period, and repeating the collection date here
-                            just doubled a column that is already on screen.
-                            Left blank so "For" only speaks when it has
-                            something to add — which, measured against live
-                            data, is 71% of the payments that do carry a
-                            period. */}
-                        {walkIn || p.service_name ? (
-                          <span className="text-[#7A7A72] text-xs">—</span>
-                        ) : coverageLabel ? (
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
-                            coverageInferred
-                              ? "text-[#7A7A72] bg-[#F8F8F6] border-[#E4E4DE]"
-                              : "text-[#1A1A16] bg-[#F8F8F6] border-[#E4E4DE]"
-                          }`}>
-                            {coverageLabel}
-                          </span>
-                        ) : (
-                          <span className="text-[#7A7A72] text-xs">—</span>
-                        )}
-                      </td>
                       <td className="px-4 py-3">
                         <span className="text-sm font-bold text-green-700 whitespace-nowrap">{formatPKR(p.amount)}</span>
                       </td>
