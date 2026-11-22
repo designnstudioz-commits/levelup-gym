@@ -1538,8 +1538,8 @@ function TransactionsTab({ payments, totalRevenue, loading,
                             {formatDate(p.payment_date)}
                           </span>
                         ) : p.service_name ? (
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-purple-700 bg-purple-50 border-purple-200">
-                            {p.service_name}
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-teal-700 bg-teal-50 border-teal-200">
+                            {formatDate(p.payment_date)}
                           </span>
                         ) : coverageLabel ? (
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
@@ -1568,6 +1568,11 @@ function TransactionsTab({ payments, totalRevenue, loading,
                           {walkIn && (
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap bg-teal-50 text-teal-700 border-teal-200">
                               Day Pass
+                            </span>
+                          )}
+                          {p.service_name && (
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap bg-purple-50 text-purple-700 border-purple-200">
+                              {p.service_name}
                             </span>
                           )}
                         </div>
