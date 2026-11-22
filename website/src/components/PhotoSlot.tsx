@@ -82,24 +82,65 @@ export function PhotoSlot({
   );
 }
 
-/** The same idea for a trainer headshot: initials now, photograph later. */
-export function TrainerPhoto({ name, src }: { name: string; src?: string }) {
+/**
+ * A trainer card: portrait photograph, name and speciality beneath it.
+ *
+ * Was a 56px circle with initials. The supplied photographs are full-length
+ * studio portraits shot against the club's own walls — rendering those as
+ * thumbnails would throw away the only real images the site has.
+ *
+ * Trainers still without a photograph keep a labelled frame at the same size,
+ * so the grid stays even and the gap stays visible.
+ */
+export function TrainerCard({
+  name,
+  speciality,
+  note,
+  photo,
+}: {
+  name: string;
+  speciality: string;
+  note?: string;
+  photo?: string;
+}) {
   const initials = name.split(" ").slice(0, 2).map((w) => w[0]).join("");
 
-  if (src) {
-    return (
-      <div className="relative w-14 h-14 rounded-full overflow-hidden shrink-0">
-        <Image src={src} alt={name} fill className="object-cover" sizes="56px" />
-      </div>
-    );
-  }
-
   return (
-    <div
-      className="w-14 h-14 rounded-full border-2 border-dashed border-brand/50 bg-brand/10 flex items-center justify-center shrink-0"
-      title={`Headshot needed — ${name}`}
-    >
-      <span className="display text-lg text-brand">{initials}</span>
-    </div>
+    <article className="group rounded-2xl overflow-hidden border border-ink-line bg-ink-soft">
+      <div className="relative aspect-3/4 overflow-hidden bg-ink">
+        {photo ? (
+          <>
+            <Image
+              src={photo}
+              alt={name}
+              fill
+              className="object-cover transition-transform duration-500 group-hover:scale-105"
+              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            />
+            {/* Keeps the name legible over a busy gym background. */}
+            <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-ink to-transparent" />
+          </>
+        ) : (
+          <div className="absolute inset-0 border-2 border-dashed border-brand/40 bg-brand/[0.04] flex flex-col items-center justify-center text-center p-4">
+            <div className="w-16 h-16 rounded-full border-2 border-dashed border-brand/50 bg-brand/10 flex items-center justify-center">
+              <span className="display text-2xl text-brand">{initials}</span>
+            </div>
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-brand text-white text-[10px] font-bold tracking-wider mt-4">
+              <Camera className="w-3 h-3" />
+              PHOTO NEEDED
+            </span>
+            <p className="mt-2 text-[10px] text-white/45 leading-snug">
+              Head and shoulders<br />min 800px
+            </p>
+          </div>
+        )}
+      </div>
+
+      <div className="p-4">
+        <h3 className="font-bold text-white truncate">{name}</h3>
+        <p className="text-sm text-brand">{speciality}</p>
+        {note && <p className="text-xs text-white/45 mt-0.5">{note}</p>}
+      </div>
+    </article>
   );
 }

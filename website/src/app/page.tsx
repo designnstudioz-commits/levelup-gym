@@ -4,7 +4,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { Header } from "@/components/Header";
-import { PhotoSlot, TrainerPhoto } from "@/components/PhotoSlot";
+import { PhotoSlot, TrainerCard } from "@/components/PhotoSlot";
 import { Reveal, RevealGroup, RevealItem } from "@/components/Reveal";
 import { photoStats, trainerPhotoBrief } from "@/content/photos";
 import { EnquiryForm } from "@/components/EnquiryForm";
@@ -355,15 +355,8 @@ export default function Home() {
 
           <RevealGroup className="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {trainers.map((t) => (
-              <RevealItem key={t.name} className="rounded-2xl border border-ink-line bg-ink-soft p-6 flex items-center gap-4">
-                {/* Initials until real headshots exist — a stock silhouette
-                    would look worse than an honest monogram. */}
-                <TrainerPhoto name={t.name} />
-                <div className="min-w-0">
-                  <h3 className="font-bold text-white truncate">{t.name}</h3>
-                  <p className="text-sm text-brand">{t.speciality}</p>
-                  {t.note && <p className="text-xs text-white/45 mt-0.5">{t.note}</p>}
-                </div>
+              <RevealItem key={t.name}>
+                <TrainerCard name={t.name} speciality={t.speciality} note={t.note} photo={t.photo} />
               </RevealItem>
             ))}
           </RevealGroup>

@@ -240,16 +240,23 @@ export interface Trainer {
   name: string;
   speciality: string;
   note?: string;
+  /** Path under /public. Without one the card shows a labelled empty frame. */
+  photo?: string;
 }
 
-// Names come from the system's public trainer directory. No photos exist yet
-// — the cards fall back to initials until they do.
+// Names come from the system's public trainer directory.
+//
+// PROVISIONAL PAIRINGS (2026-10-30): the four photographs were supplied as
+// chat attachments, which strip filenames, so they are matched to the first
+// four names in this list by the order they arrived — NOT by anyone
+// identifying the faces. Confirm with the club before this is published;
+// correcting one is a matter of moving a photo path between lines.
+// Trainers without a photo show a labelled empty frame.
 export const trainers: Trainer[] = [
-  { name: "Muneeb Ahmed", speciality: "Strength & Conditioning" },
-  { name: "Fizza Salman", speciality: "Strength & Conditioning", note: "5 years of experience" },
-  { name: "Rana Zeeshan Iftikhar", speciality: "Strength & Conditioning" },
-  { name: "Abdullah Arshad", speciality: "Strength & Conditioning" },
-  { name: "Khalid Saeed", speciality: "Cardio & Weight Loss" },
+  { name: "Muneeb Ahmed", speciality: "Strength & Conditioning", photo: "/trainers/1.webp" },
+  { name: "Fizza Salman", speciality: "Strength & Conditioning", note: "5 years of experience", photo: "/trainers/2.webp" },
+  { name: "Rana Zeeshan Iftikhar", speciality: "Strength & Conditioning", photo: "/trainers/3.webp" },
+  { name: "Khalid Saeed", speciality: "Cardio & Weight Loss", photo: "/trainers/4.webp" },
   { name: "Robin Gulzar", speciality: "General Fitness" },
   { name: "Muhammad Haseeb", speciality: "General Fitness" },
   { name: "Asim Qureshi", speciality: "Table Tennis Coaching" },
