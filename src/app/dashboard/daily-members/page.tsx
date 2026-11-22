@@ -150,12 +150,13 @@ export default function DailyMembersPage() {
       payment_method: form.fee_paid ? form.payment_method : null,
       notes: form.notes || null,
       visit_date: format(new Date(), "yyyy-MM-dd"),
+      added_by: currentUser?.id ?? null,
     });
     await supabase.from("activity_logs").insert({
       user_id: currentUser?.id ?? null,
       action: "logged_daily_visitor",
       entity_type: "daily_member",
-      description: `Logged walk-in: ${form.full_name} (${form.purpose})${form.fee_paid ? ` — paid ${formatPKR(Number(form.fee_paid))}` : ""}`,
+      description: `Logged walk-in: ${form.full_name.trim()} (${form.purpose})${form.fee_paid ? ` — paid ${formatPKR(Number(form.fee_paid))}` : ""}`,
       metadata: { purpose: form.purpose, fee_paid: form.fee_paid },
     });
     toast.success(`Walk-in logged: ${form.full_name}`);
