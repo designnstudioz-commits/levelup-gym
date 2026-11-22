@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { format, subDays, startOfMonth, endOfMonth, startOfWeek, subMonths } from "date-fns";
 import { toast } from "sonner";
@@ -11,6 +11,11 @@ import {
   ArrowRight, Clock, Trash2, Lock,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import {
+  SERVICE_PREFIX, resolvePaymentType, isServiceValue, servicePackageId,
+  type ServiceOption as SvcOption,
+  type ServiceOption,
+} from "@/lib/paymentServices";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { useRoleGuard } from "@/hooks/useRoleGuard";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
@@ -46,6 +51,10 @@ interface PaymentRow extends FeePayment {
   // suppressed on these rows rather than faked.
   is_walk_in?: boolean;
   walk_in_purpose?: string | null;
+  /** Which service this was collected against, if any. Null on ordinary
+   *  membership, admission and trainer payments. */
+  service_package_id?: string | null;
+  service_name?: string | null;
 }
 
 interface WalkInRow {
@@ -67,6 +76,8 @@ interface MemberWithPackage extends Member {
 }
 
 const PAYMENT_METHODS = ["Cash", "Bank", "Card", "EasyPaisa", "JazzCash"];
+
+
 const TYPE_LABELS: Record<string, string> = {
   membership:    "Monthly Membership",
   trainer:       "Trainer Fee",
@@ -150,6 +161,9 @@ export default function FeesPage() {
   const [discountType, setDiscountType]       = useState<"none" | "percent" | "amount">("none");
   const [discountValue, setDiscountValue]     = useState("");
   const [collectSaving, setCollectSaving]     = useState(false);
+  // Every active package, offered in the Payment Type dropdown so money can
+  // be taken against a specific service rather than only the six categories.
+  const [services, setServices]               = useState<ServiceOption[]>([]);
   const [alreadyPaidWarning, setAlreadyPaidWarning] = useState(false);
 
   // ── Discount computed ───────────────────────────────────────────
@@ -238,6 +252,11 @@ export default function FeesPage() {
         .order("visit_date", { ascending: false }),
     ]);
     setWalkIns((walkIns ?? []) as WalkInRow[]);
+
+    supabase.from("packages")
+      .select("id, name, monthly_fee")
+      .eq("status", "active").is("deleted_at", null).order("name")
+      .then(({ data }) => setServices(data ?? []));
 
     // "Unpaid" lookback is per-member: since membership_start_date (the
     // start of their CURRENT billing cycle), falling back to the 30-day
@@ -341,7 +360,11 @@ export default function FeesPage() {
     if (!feeAmount || originalAmount <= 0) { toast.error("Enter a valid amount"); return; }
     const splitError = validatePaymentSplit(finalAmount, feeLines, feePartial);
     if (splitError) { toast.error(splitError); return; }
-    const isRecurring = (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
+    // A service payment is never a recurring membership cycle, whatever
+    // category it files under — it must not move the member's expiry date.
+    const isRecurring =
+      !isServiceValue(feeType) &&
+      (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
     if (isRecurring && periodMode === "custom" && (!customStart || !customEnd)) {
       toast.error("Enter both a Coverage Start and End date"); return;
     }
@@ -399,10 +422,19 @@ export default function FeesPage() {
       // summing any of them per member never double-counts a split
       // transaction. month_covered (legacy) kept in sync for backward
       // compatibility with anything still reading it.
+      // feeType holds either a payment_type value or "svc:<package id>".
+      // A service is filed under its accounting category and records the
+      // service separately — see categoryForService().
+      const resolved = resolvePaymentType(feeType, servicesById);
+
       const rows = feeLines.map((line, i) => ({
         member_id: selectedMember.id,
         amount: Number(line.amount),
-        payment_type: feeType as any,
+        payment_type: resolved.payment_type as any,
+        // Only the first row of a split payment carries it, matching how
+        // coverage and balance are handled, so summing never double-counts.
+        service_package_id: i === 0 ? resolved.service_package_id : null,
+        service_name: i === 0 ? resolved.service_name : null,
         payment_method: line.method as any,
         payment_date: today,
         month_covered: i === 0 ? coverageStart : null,
@@ -571,6 +603,11 @@ export default function FeesPage() {
 
   const txSource: PaymentRow[] = [...payments, ...walkInRows];
 
+  const servicesById = useMemo(
+    () => Object.fromEntries(services.map((x) => [x.id, x])),
+    [services]
+  );
+
   const txFiltered = txSource.filter((p) => {
     // "Day Pass" is offered in the Method dropdown because that is the
     // column it shows up in, but it selects a KIND of record, not a
@@ -583,7 +620,13 @@ export default function FeesPage() {
     // Payment type, balance and receipt are fee_payment concepts; a walk-in
     // has none of them, so those filters exclude walk-ins rather than
     // silently matching on empty values.
-    if (txTypeFilter !== "all" && p.payment_type !== txTypeFilter) return false;
+    if (txTypeFilter !== "all") {
+      if (isServiceValue(txTypeFilter)) {
+        if (p.service_package_id !== servicePackageId(txTypeFilter)) return false;
+      } else if (p.payment_type !== txTypeFilter) {
+        return false;
+      }
+    }
     if (txCollectorFilter !== "all" && p.collector?.full_name !== txCollectorFilter) return false;
     if (txBalanceFilter === "partial" && p.is_walk_in) return false;
     if (txBalanceFilter === "paid" && (p.balance_due ?? 0) > 0) return false;
@@ -663,6 +706,7 @@ export default function FeesPage() {
           dateField={txDateField} setDateField={setTxDateField}
           dateRange={txDateRange} setDateRange={setTxDateRange} customFrom={txCustomFrom} setCustomFrom={setTxCustomFrom} customTo={txCustomTo} setCustomTo={setTxCustomTo}
           search={txSearch} setSearch={setTxSearch} typeFilter={txTypeFilter} setTypeFilter={setTxTypeFilter} methodFilter={txMethodFilter} setMethodFilter={setTxMethodFilter}
+          services={services}
           collectorFilter={txCollectorFilter} setCollectorFilter={setTxCollectorFilter} collectorNames={collectorNames}
           balanceFilter={txBalanceFilter} setBalanceFilter={setTxBalanceFilter}
           amountMin={txAmountMin} setAmountMin={setTxAmountMin} amountMax={txAmountMax} setAmountMax={setTxAmountMax}
@@ -767,7 +811,7 @@ export default function FeesPage() {
               )}
 
               {/* Already paid ahead warning */}
-              {alreadyPaidWarning && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+              {alreadyPaidWarning && !isServiceValue(feeType) && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
                 <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5 mb-1">
                   <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
                   <div>
@@ -788,17 +832,37 @@ export default function FeesPage() {
                 </div>
               </div>
               <div className="mb-4">
-                <Select label="Payment Type" value={feeType} onChange={(e) => setFeeType(e.target.value)}>
+                <Select label="Payment Type" value={feeType} onChange={(e) => {
+                  setFeeType(e.target.value);
+                  // Prefill the service's own price. Still editable — a
+                  // discounted or part session is normal.
+                  const picked = isServiceValue(e.target.value)
+                    ? servicesById[e.target.value.slice(SERVICE_PREFIX.length)]
+                    : null;
+                  // PT tiers have no catalog price; fall back to this
+                  // member's agreed rate so the field is not left blank.
+                  const price = picked?.monthly_fee ?? (picked ? selectedMember?.training_fee : null);
+                  if (price) setFeeAmount(String(price));
+                }}>
                   <option value="membership">Monthly Membership</option>
                   <option value="admission">Admission Fee</option>
                   <option value="trainer">Trainer Fee</option>
                   <option value="other">Other</option>
+                  {services.length > 0 && (
+                    <optgroup label="Services">
+                      {services.map((sv) => (
+                        <option key={sv.id} value={`${SERVICE_PREFIX}${sv.id}`}>
+                          {sv.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </Select>
               </div>
 
               {/* Payment For / Coverage Period — completely independent of
                   when the money is being collected (always "today" below) */}
-              {(RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+              {!isServiceValue(feeType) && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
                 <div className="rounded-xl border border-[#E4E4DE] bg-white p-3 space-y-2.5 mb-3">
                   <p className="text-xs font-semibold text-[#1A1A16]">Payment For</p>
                   <div className="flex gap-2">
@@ -1003,9 +1067,15 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
                       </div>
                       <div>
                         <p className="text-sm font-semibold text-[#1A1A16]">{m?.full_name ?? "—"}</p>
-                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
-                          {TYPE_LABELS[p.payment_type ?? "other"]}
-                        </span>
+                        {p.service_name ? (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full border bg-teal-50 text-teal-700 border-teal-200">
+                            {p.service_name}
+                          </span>
+                        ) : (
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${TYPE_COLORS[p.payment_type ?? "other"]}`}>
+                            {TYPE_LABELS[p.payment_type ?? "other"]}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
@@ -1106,7 +1176,7 @@ function OverviewTab({ payments, todayPayments, expired, unpaidActive, loading, 
 // ── Tab 2: Transactions ──────────────────────────────────────────────
 function TransactionsTab({ payments, totalRevenue, loading,
   dateField, setDateField, dateRange, setDateRange, customFrom, setCustomFrom, customTo, setCustomTo,
-  search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter,
+  search, setSearch, typeFilter, setTypeFilter, methodFilter, setMethodFilter, services,
   collectorFilter, setCollectorFilter, collectorNames, balanceFilter, setBalanceFilter,
   amountMin, setAmountMin, amountMax, setAmountMax,
   onRefresh, hideRevenue, onOpenDetail }: {
@@ -1117,6 +1187,7 @@ function TransactionsTab({ payments, totalRevenue, loading,
   customTo: string; setCustomTo: (v: string) => void;
   search: string; setSearch: (v: string) => void;
   typeFilter: string; setTypeFilter: (v: string) => void;
+  services: SvcOption[];
   methodFilter: string; setMethodFilter: (v: string) => void;
   collectorFilter: string; setCollectorFilter: (v: string) => void; collectorNames: string[];
   balanceFilter: "all" | "paid" | "partial"; setBalanceFilter: (v: "all" | "paid" | "partial") => void;
@@ -1202,7 +1273,16 @@ function TransactionsTab({ payments, totalRevenue, loading,
       : DATE_LABELS[dateRange];
     chips.push({ key: "date", label: `${dateTypeLabel}: ${rangeLabel}`, onRemove: () => { setDateField("collection"); setDateRange("month"); } });
   }
-  if (typeFilter !== "all") chips.push({ key: "type", label: `Type: ${TYPE_LABELS[typeFilter] ?? typeFilter}`, onRemove: () => setTypeFilter("all") });
+  if (typeFilter !== "all") {
+    const svcName = isServiceValue(typeFilter)
+      ? services.find((x) => x.id === servicePackageId(typeFilter))?.name
+      : null;
+    chips.push({
+      key: "type",
+      label: svcName ? `Service: ${svcName}` : `Type: ${TYPE_LABELS[typeFilter] ?? typeFilter}`,
+      onRemove: () => setTypeFilter("all"),
+    });
+  }
   if (methodFilter !== "all") chips.push({
     key: "method",
     label: methodFilter === DAY_PASS ? "Walk-in / Day Passes only" : `Method: ${methodFilter}`,
@@ -1308,6 +1388,13 @@ function TransactionsTab({ payments, totalRevenue, loading,
                   <Select label="Payment Type" value={draftType} onChange={(e) => setDraftType(e.target.value)}>
                     <option value="all">All Payment Types</option>
                     {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                    {services.length > 0 && (
+                      <optgroup label="Services">
+                        {services.map((sv) => (
+                          <option key={sv.id} value={`${SERVICE_PREFIX}${sv.id}`}>{sv.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
                   </Select>
                   <Select label="Payment Method" value={draftMethod} onChange={(e) => setDraftMethod(e.target.value)}>
                     <option value="all">All Methods</option>
@@ -1449,6 +1536,10 @@ function TransactionsTab({ payments, totalRevenue, loading,
                         {walkIn ? (
                           <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-teal-700 bg-teal-50 border-teal-200">
                             {formatDate(p.payment_date)}
+                          </span>
+                        ) : p.service_name ? (
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-purple-700 bg-purple-50 border-purple-200">
+                            {p.service_name}
                           </span>
                         ) : coverageLabel ? (
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
@@ -1747,9 +1838,27 @@ function AnalyticsTab({ payments }: { payments: PaymentRow[] }) {
   const maxMonthly = Math.max(...monthlyData.map((m) => m.total), 1);
 
   // Type breakdown
-  const byType = Object.entries(TYPE_LABELS).map(([key, label]) => ({
-    key, label, total: payments.filter((p) => p.payment_type === key).reduce((s, p) => s + (p.amount ?? 0), 0),
-  })).filter((t) => t.total > 0).sort((a, b) => b.total - a.total);
+  // Grouped by SERVICE where one was recorded, otherwise by accounting
+  // category. Sauna, jacuzzi and the like are sold daily and each needs its
+  // own line — rolled into "Other" they are invisible, which is the whole
+  // reason the service field exists.
+  const byType = (() => {
+    const acc = new Map<string, { total: number; count: number; isService: boolean }>();
+    for (const p of payments) {
+      const svc = p.service_name?.trim();
+      const label = svc || TYPE_LABELS[p.payment_type ?? "other"] || "Other";
+      const prev = acc.get(label) ?? { total: 0, count: 0, isService: !!svc };
+      acc.set(label, {
+        total: prev.total + (p.amount ?? 0),
+        count: prev.count + 1,
+        isService: prev.isService || !!svc,
+      });
+    }
+    return [...acc.entries()]
+      .map(([label, v]) => ({ key: label, label, ...v }))
+      .filter((t) => t.total > 0)
+      .sort((a, b) => b.total - a.total);
+  })();
   const totalByType = byType.reduce((s, t) => s + t.total, 0) || 1;
 
   // Method breakdown
@@ -1791,14 +1900,20 @@ function AnalyticsTab({ payments }: { payments: PaymentRow[] }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
         {/* By type */}
         <Card>
-          <h3 className="text-sm font-semibold text-[#1A1A16] mb-4">Revenue by Type</h3>
+          <h3 className="text-sm font-semibold text-[#1A1A16] mb-4">Revenue by Type &amp; Service</h3>
           {byType.length === 0 ? <p className="text-sm text-[#7A7A72]">No data</p> : (
             <div className="space-y-3">
               {byType.map((t) => (
                 <div key={t.key}>
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-[#4A4A44] font-medium">{t.label}</span>
-                    <span className="text-[#1A1A16] font-bold">{formatPKR(t.total)}</span>
+                  <div className="flex justify-between text-xs mb-1 gap-2">
+                    <span className="text-[#4A4A44] font-medium truncate">
+                      {t.label}
+                      {t.isService && (
+                        <span className="ml-1.5 text-[9px] font-bold uppercase tracking-wide text-purple-600">service</span>
+                      )}
+                      <span className="ml-1.5 text-[#7A7A72] font-normal">×{t.count}</span>
+                    </span>
+                    <span className="text-[#1A1A16] font-bold whitespace-nowrap">{formatPKR(t.total)}</span>
                   </div>
                   <div className="h-2 bg-[#F8F8F6] rounded-full overflow-hidden">
                     <div className="h-full bg-[#F06418] rounded-full transition-all duration-500" style={{ width: `${(t.total / totalByType) * 100}%` }} />

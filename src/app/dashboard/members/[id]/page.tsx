@@ -11,6 +11,10 @@ import {
   Send, Clock, Lock, ShieldCheck, ShoppingBag,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
+import {
+  SERVICE_PREFIX, resolvePaymentType, isServiceValue,
+  type ServiceOption,
+} from "@/lib/paymentServices";
 import { useCurrentUser } from "@/contexts/CurrentUserContext";
 import { DashboardHeader } from "@/components/layout/DashboardHeader";
 import { Badge } from "@/components/ui/Badge";
@@ -365,6 +369,14 @@ export default function MemberDetailPage() {
   const [expiryDate, setExpiryDate] = useState("");
   const [feeAmount, setFeeAmount] = useState("");
   const [feeType, setFeeType] = useState("membership");
+  // Every active package, so a fee can be taken against a specific
+  // service here exactly as it can on the Fees page.
+  // Derived from the packages this page already loads — a second fetch would
+  // be a second source of truth for the same list.
+  const feeServices: ServiceOption[] = packages
+    .map((pk) => ({ id: pk.id, name: pk.name, monthly_fee: pk.monthly_fee ?? null }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const feeServicesById = Object.fromEntries(feeServices.map((x) => [x.id, x]));
   const [feeLines, setFeeLines] = useState<PaymentLine[]>([{ method: "Cash", amount: "" }]);
   const [feePartial, setFeePartial] = useState<PartialPaymentState>(emptyPartialState);
   const [feeNote, setFeeNote] = useState("");
@@ -731,7 +743,11 @@ export default function MemberDetailPage() {
       toast.error(splitError);
       return;
     }
-    const isRecurring = (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
+    // A service payment must not move the member's expiry date, whatever
+    // accounting category it files under.
+    const isRecurring =
+      !isServiceValue(feeType) &&
+      (RECURRING_FEE_TYPES as readonly string[]).includes(feeType);
     if (isRecurring && periodMode === "custom" && (!customStart || !customEnd)) {
       toast.error("Enter both a Coverage Start and End date");
       return;
@@ -792,10 +808,17 @@ export default function MemberDetailPage() {
     // every other row gets them null/0 so summing any of them across a
     // member's payments never double-counts a single split transaction.
     // month_covered (legacy) kept in sync for backward compatibility.
+    // feeType holds either a payment_type value or "svc:<package id>".
+    const resolved = resolvePaymentType(feeType, feeServicesById);
+
     const rows = feeLines.map((line, i) => ({
       member_id: id,
       amount: Number(line.amount),
-      payment_type: feeType as any,
+      payment_type: resolved.payment_type as any,
+      // Only the first row of a split payment carries these, matching how
+      // coverage and balance are handled, so summing never double-counts.
+      service_package_id: i === 0 ? resolved.service_package_id : null,
+      service_name: i === 0 ? resolved.service_name : null,
       payment_method: line.method as any,
       payment_date: paymentDate,
       month_covered: i === 0 ? coverageStart : null,
@@ -2221,7 +2244,7 @@ export default function MemberDetailPage() {
           </div>
 
           {/* Already paid ahead warning */}
-          {alreadyPaidWarning && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+          {alreadyPaidWarning && !isServiceValue(feeType) && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
             <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2.5">
               <span className="text-amber-500 text-base leading-none mt-0.5">⚠</span>
               <div>
@@ -2248,18 +2271,39 @@ export default function MemberDetailPage() {
                 className="w-full px-3 py-2 text-sm rounded-lg border border-[#E4E4DE] bg-white focus:outline-none focus:ring-2 focus:ring-[#F06418]" />
             </div>
           </div>
-          <Select label="Payment Type" value={feeType} onChange={(e) => { setFeeType(e.target.value); setCommissionRate(""); }}>
+          <Select label="Payment Type" value={feeType} onChange={(e) => {
+            setFeeType(e.target.value);
+            setCommissionRate("");
+            // Prefill the service's own price; still editable, since a
+            // discounted or part session is ordinary.
+            const picked = isServiceValue(e.target.value)
+              ? feeServicesById[e.target.value.slice(SERVICE_PREFIX.length)]
+              : null;
+            // PT tiers have no catalog price; fall back to this member's
+            // agreed rate so the field is not left blank.
+            const price = picked?.monthly_fee ?? (picked ? member?.training_fee : null);
+            if (price) setFeeAmount(String(price));
+          }}>
             <option value="membership">Monthly Membership</option>
             <option value="admission">Admission Fee</option>
             <option value="trainer">Trainer Fee</option>
             <option value="nutritionist">Nutritionist Fee</option>
             <option value="physiotherapy">Physiotherapy Fee</option>
             <option value="other">Other</option>
+            {feeServices.length > 0 && (
+              <optgroup label="Services">
+                {feeServices.map((sv) => (
+                  <option key={sv.id} value={`${SERVICE_PREFIX}${sv.id}`}>
+                    {sv.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </Select>
 
           {/* Payment For / Coverage Period — completely independent of
               when the money is being collected */}
-          {(RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
+          {!isServiceValue(feeType) && (RECURRING_FEE_TYPES as readonly string[]).includes(feeType) && (
             <div className="rounded-xl border border-[#E4E4DE] bg-white p-3 space-y-2.5">
               <p className="text-xs font-semibold text-[#1A1A16]">Payment For</p>
               <div className="flex gap-2">
