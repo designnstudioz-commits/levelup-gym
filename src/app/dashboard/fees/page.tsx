@@ -1533,14 +1533,15 @@ function TransactionsTab({ payments, totalRevenue, loading,
                       </td>
                       <td className="px-4 py-3 text-sm text-[#4A4A44] whitespace-nowrap">{formatDate(p.payment_date)}</td>
                       <td className="px-4 py-3">
-                        {walkIn ? (
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-teal-700 bg-teal-50 border-teal-200">
-                            {formatDate(p.payment_date)}
-                          </span>
-                        ) : p.service_name ? (
-                          <span className="text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border text-teal-700 bg-teal-50 border-teal-200">
-                            {formatDate(p.payment_date)}
-                          </span>
+                        {/* A day pass and a one-off service have no coverage
+                            period, and repeating the collection date here
+                            just doubled a column that is already on screen.
+                            Left blank so "For" only speaks when it has
+                            something to add — which, measured against live
+                            data, is 71% of the payments that do carry a
+                            period. */}
+                        {walkIn || p.service_name ? (
+                          <span className="text-[#7A7A72] text-xs">—</span>
                         ) : coverageLabel ? (
                           <span className={`text-xs font-semibold px-2 py-0.5 rounded-md whitespace-nowrap border ${
                             coverageInferred
