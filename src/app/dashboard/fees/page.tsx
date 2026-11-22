@@ -65,6 +65,8 @@ interface WalkInRow {
   payment_method: string | null;
   visit_date: string;
   purpose: string | null;
+  added_by: string | null;
+  collector?: { full_name: string } | null;
 }
 
 /** The Method-column value that means "this was a walk-in day pass".
@@ -247,11 +249,11 @@ export default function FeesPage() {
       // visit_date regardless of the Collection Date / Coverage Period
       // filter toggle above.
       supabase.from("daily_members")
-        .select("id, full_name, phone, fee_paid, payment_method, visit_date, purpose")
+        .select("id, full_name, phone, fee_paid, payment_method, visit_date, purpose, added_by, collector:system_users!daily_members_added_by_fkey(full_name)")
         .is("deleted_at", null).gte("visit_date", from).lte("visit_date", to)
         .order("visit_date", { ascending: false }),
     ]);
-    setWalkIns((walkIns ?? []) as WalkInRow[]);
+    setWalkIns((walkIns ?? []) as unknown as WalkInRow[]);
 
     supabase.from("packages")
       .select("id, name, monthly_fee")
@@ -598,7 +600,7 @@ export default function FeesPage() {
     payment_type: "day_pass",
     receipt_no: null,
     balance_due: 0,
-    collector: null,
+    collector: w.collector ?? null,
   } as unknown as PaymentRow));
 
   const txSource: PaymentRow[] = [...payments, ...walkInRows];
